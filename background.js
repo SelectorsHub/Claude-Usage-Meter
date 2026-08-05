@@ -380,11 +380,22 @@ async function applyUsage(data, orgId) {
       if (!/fable/i.test(field)) continue;
       const pct = pickPct(data[field]);
       if (pct == null) continue;
+      const family = familyOfField(field) === "other" ? "fable" : familyOfField(field);
       usage.fable = {
         percent: pct,
         resetsAt: pickReset(data[field]),
         apiField: field,
-        family: familyOfField(field) === "other" ? "fable" : familyOfField(field)
+        family
+      };
+      // Register the bucket in weeklyByFamily as well. That map — not
+      // usage.fable — is what maybeNotify() iterates and what
+      // applyCurrentModel() re-derives the segment from, so a bucket found
+      // only by this sweep would otherwise render in the strip while never
+      // firing a threshold notification, and would vanish on a model switch.
+      weeklyByFamily[family] = {
+        percent: pct,
+        resetsAt: usage.fable.resetsAt,
+        apiField: field
       };
       break;
     }
