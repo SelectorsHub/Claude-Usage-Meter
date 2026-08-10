@@ -1,4 +1,20 @@
-// content-script.js (isolated world, v1.25)
+// content-script.js (isolated world, v1.26)
+// - v1.2.16: the "Rate us" NUDGE. The static button in the strip is too quiet —
+//   almost nobody notices it, so almost nobody reviews. It now gets one active
+//   ask: a small card anchored to the button, portaled to <body> like the other
+//   popovers. Full timeline (nothing before 2 days changed):
+//     install         → no button, no card
+//     +2d RATE_DELAY  → button appears (unchanged behaviour)
+//     +5d NUDGE_FIRST → card pops once, button pulses while it's open
+//     dismissed       → card returns NUDGE_REPEAT (2 days) later
+//     rated           → button AND card gone permanently
+//   The shown-at stamp (rate_nudge_at) is written the instant the card appears,
+//   so a second claude.ai tab picks it up via storage.onChanged and doesn't pop
+//   its own copy, and the repeat clock starts from when it was actually seen.
+//   Upgrading users (install_at === 0) have already served the 5-day wait, same
+//   convention as rateUnlocked(). The card is held back while the tab is
+//   hidden, while another popover is open, and for 10s after mount so it never
+//   lands on top of a page that is still settling.
 // - v1.2.15 (production): RATE_DELAY restored to 2 days (the v1.2.11-1.2.14
 //   test builds set it to 0 for layout checks). Diagnostic console logging from
 //   the Fable investigation removed; console.warn/error for genuine failures
@@ -408,6 +424,15 @@
   const INSTALL_KEY = "install_at";
   const RATE_DELAY = 2 * 24 * 60 * 60 * 1000; // 2 days in milliseconds
   let installAt = null;  // ms epoch of install; null = not yet loaded, 0 = pre-gate/upgrade user
+  // v1.2.16: the nudge card. NUDGE_FIRST is measured from install (so it lands
+  // 3 days after the button itself appeared); NUDGE_REPEAT is measured from the
+  // last time the card was SHOWN, not dismissed — same thing in practice, and
+  // it means a card left open all day doesn't earn a second one tomorrow.
+  const NUDGE_KEY = "rate_nudge_at";             // ms epoch the card last appeared
+  const NUDGE_FIRST = 5 * 24 * 60 * 60 * 1000;   // first pop: 5 days after install
+  const NUDGE_REPEAT = 2 * 24 * 60 * 60 * 1000;  // then every 2 days until they rate
+  const NUDGE_MOUNT_DELAY = 10 * 1000;           // let the page settle before popping
+  let nudgeAt = null;    // ms epoch of last show; null = not loaded, 0 = never shown
   const DONATE_KEY = "donate_clicked_at";
   const DONATE_LINK = "https://buymeacoffee.com/selectorshub";
   const DONATE_COOLDOWN = 30 * 24 * 60 * 60 * 1000; // 30 days in milliseconds
@@ -751,6 +776,9 @@
     `;
     root.querySelector(".cut-close").addEventListener("click", async (e) => {
       e.preventDefault(); e.stopPropagation();
+      // v1.2.16: the nudge is anchored to a button inside the strip — it can't
+      // outlive it, or it floats over the page pointing at nothing.
+      closeNudge(root);
       await dismissForHours(12);
       const el = document.getElementById(OVERLAY_ID);
       if (el) el.remove();
@@ -759,24 +787,7 @@
     if (rateBtn) {
       rateBtn.addEventListener("click", (e) => {
         e.preventDefault(); e.stopPropagation();
-        rated = true;
-        ratedAt = Date.now();
-        applyRateVisibility(root);
-        // Rate us is gone now — the Support button takes its place.
-        applyDonateVisibility(root);
-        // Share stays hidden here: shareUnlocked() is false until SHARE_DELAY
-        // has passed. This call just keeps the wrap in a consistent state.
-        applyShareVisibility(root);
-        // Persist the flag directly so the button never returns, even if the
-        // background message below fails and we take the fallback path.
-        try { chrome.storage.local.set({ [RATE_KEY]: true, [RATE_AT_KEY]: ratedAt }); } catch (_) {}
-        // Background opens the review tab (and also persists the flag) so the
-        // button never shows again (in the strip or the popup).
-        try {
-          chrome.runtime.sendMessage({ type: "open-review" });
-        } catch (_) {
-          try { window.open(reviewUrl(), "_blank", "noopener"); } catch (_) {}
-        }
+        doRate(root);
       });
     }
     const donateLink = root.querySelector(".cut-donate");
@@ -981,6 +992,224 @@
     const display = (rateUnlocked() && !rated) ? "" : "none";
     if (rb) rb.style.display = display;
     if (rd) rd.style.display = display;
+  }
+
+  // v1.2.16: the single "user rated" path, shared by the strip button and every
+  // control inside the nudge card, so all of them mark the flag, tear the card
+  // down and open the store page identically. Flow step 5: once this runs, the
+  // button and the card are gone for good.
+  function doRate(root) {
+    rated = true;
+    ratedAt = Date.now();
+    closeNudge(root);
+    applyRateVisibility(root);
+    // Rate us is gone now — the Support button takes its place.
+    applyDonateVisibility(root);
+    // Share stays hidden here: shareUnlocked() is false until SHARE_DELAY
+    // has passed. This call just keeps the wrap in a consistent state.
+    applyShareVisibility(root);
+    // Persist the flag directly so the button never returns, even if the
+    // background message below fails and we take the fallback path.
+    try { chrome.storage.local.set({ [RATE_KEY]: true, [RATE_AT_KEY]: ratedAt }); } catch (_) {}
+    // Background opens the review tab (and also persists the flag) so the
+    // button never shows again (in the strip or the popup).
+    try {
+      chrome.runtime.sendMessage({ type: "open-review" });
+    } catch (_) {
+      try { window.open(reviewUrl(), "_blank", "noopener"); } catch (_) {}
+    }
+  }
+
+  // ===== v1.2.16: the Rate us nudge card =====
+  let nudgeOpen = false;
+  let nudgeEl = null;
+  let nudgeTimer = null;
+  let nudgeOutsideHandler = null;
+  let nudgeFollowHandler = null;
+  let nudgeKeyHandler = null;
+
+  // Whether the card is owed right now. Deliberately mirrors rateUnlocked()'s
+  // conventions: a null means "state hasn't loaded yet, stay quiet", and an
+  // installAt of 0 (upgrading user) counts the waiting period as already served
+  // — they've had the extension for weeks, re-gating them for 5 days is silly.
+  function nudgeDue() {
+    if (rated) return false;                        // step 1: reviewers never see it
+    if (installAt === null || nudgeAt === null) return false;  // not loaded yet
+    if (!rateUnlocked()) return false;              // steps 2-3: button isn't out yet
+    if (installAt && Date.now() - installAt < NUDGE_FIRST) return false;  // step 4
+    if (!nudgeAt) return true;                      // never shown → first pop
+    return Date.now() - nudgeAt >= NUDGE_REPEAT;    // step 6: 2 days since last pop
+  }
+
+  // Called from renderInto (i.e. on mount, on every usage update and on the 30s
+  // tick), so a tab left open for days still gets the card when it comes due.
+  // Idempotent: the timer handle is the guard against stacking timeouts.
+  function scheduleNudge() {
+    if (nudgeTimer || nudgeOpen || !nudgeDue()) return;
+    nudgeTimer = setTimeout(() => {
+      nudgeTimer = null;
+      maybeShowNudge();
+    }, NUDGE_MOUNT_DELAY);
+  }
+
+  function maybeShowNudge() {
+    if (nudgeOpen || !nudgeDue()) return;
+    // A card shown to a background tab is a wasted ask AND burns the 2-day
+    // slot, so wait for the tab to actually be looked at.
+    if (document.hidden) return;
+    // Never stack on top of another popover.
+    if (settingsPopOpen || sharePopOpen) return;
+    const root = document.getElementById(OVERLAY_ID);
+    if (!root) return;
+    const wrap = root.querySelector('[data-cut="rate-wrap"]');
+    const btn = root.querySelector('[data-cut="rate"]');
+    // The anchor has to be genuinely on screen — the strip can be mid-rebuild,
+    // hidden by the 12h dismiss, or the button hidden by its own gate.
+    if (!wrap || !btn || wrap.style.display === "none" || !btn.getClientRects().length) return;
+    showNudge(root, wrap);
+  }
+
+  function buildNudge() {
+    const el = document.createElement("div");
+    el.className = "cut-rate-nudge";
+    el.setAttribute("role", "dialog");
+    el.setAttribute("aria-label", "Rate Claude Usage Meter");
+    el.innerHTML = `
+      <button class="cut-nudge-x" type="button" data-cut="nudge-close" aria-label="Not now">×</button>
+      <div class="cut-nudge-title">Enjoying Claude Usage Meter?</div>
+      <div class="cut-nudge-stars" data-cut="nudge-stars" role="button" tabindex="0"
+           aria-label="Leave a 5 star review">
+        <span>★</span><span>★</span><span>★</span><span>★</span><span>★</span>
+      </div>
+      <div class="cut-nudge-body">
+        A quick review takes 10 seconds and keeps this extension going. It means a lot 🙏
+      </div>
+      <div class="cut-nudge-actions">
+        <button class="cut-nudge-cta" type="button" data-cut="nudge-rate">Write a review</button>
+        <button class="cut-nudge-later" type="button" data-cut="nudge-later">Maybe later</button>
+      </div>
+    `;
+    return el;
+  }
+
+  // Same anchoring maths as positionSettingsPop / the share popover: above the
+  // button when there's room, below otherwise, clamped to the viewport with the
+  // arrow kept pointing at the anchor.
+  function positionNudge() {
+    const root = document.getElementById(OVERLAY_ID);
+    const btn = root && root.querySelector('[data-cut="rate"]');
+    if (!nudgeEl || !nudgeEl.isConnected || !btn || !nudgeOpen) return;
+    const br = btn.getBoundingClientRect();
+    const nr = nudgeEl.getBoundingClientRect();
+    const margin = 8;
+    const vw = window.innerWidth;
+    let left = br.left + br.width / 2 - nr.width / 2;
+    left = Math.max(margin, Math.min(left, vw - nr.width - margin));
+    let top;
+    if (br.top >= nr.height + 14) {
+      top = br.top - nr.height - 10;
+      nudgeEl.classList.remove("cut-pop-below");
+    } else {
+      top = br.bottom + 10;
+      nudgeEl.classList.add("cut-pop-below");
+    }
+    const arrowX = Math.max(14, Math.min(br.left + br.width / 2 - left, nr.width - 14));
+    nudgeEl.style.setProperty("--cut-arrow-x", arrowX + "px");
+    nudgeEl.style.left = left + "px";
+    nudgeEl.style.top = top + "px";
+  }
+
+  function showNudge(root, wrap) {
+    nudgeOpen = true;
+    // Stamp the shown-at time FIRST. Other claude.ai tabs see it through
+    // storage.onChanged and cancel their own pending pop, so the user gets one
+    // card, not one per tab — and the 2-day repeat clock starts from now.
+    nudgeAt = Date.now();
+    try { chrome.storage.local.set({ [NUDGE_KEY]: nudgeAt }); } catch (_) {}
+
+    nudgeEl = buildNudge();
+    nudgeEl.classList.toggle("cut-pop-dark", root.classList.contains("cut-theme-dark"));
+    document.body.appendChild(nudgeEl);
+    nudgeEl.style.visibility = "hidden";
+    positionNudge();
+    nudgeEl.style.visibility = "";
+    // Next frame so the entry transition actually runs from its start state.
+    requestAnimationFrame(() => {
+      if (nudgeEl) nudgeEl.classList.add("cut-nudge-in");
+    });
+
+    // Pulse the button so the eye connects card → button, and suppress its
+    // hover tooltip while the card is up (cut-pop-open is the existing
+    // convention attachTooltips() already checks for).
+    wrap.classList.add("cut-rate-pulse", "cut-pop-open");
+    hidePortalTip();
+
+    nudgeEl.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      const t = ev.target.closest("[data-cut]");
+      const what = t && t.getAttribute("data-cut");
+      // Both the CTA and the star row are "yes" — the stars are a button in
+      // everything but name, and people click them expecting exactly this.
+      if (what === "nudge-rate" || what === "nudge-stars") doRate(document.getElementById(OVERLAY_ID));
+      else if (what === "nudge-later" || what === "nudge-close") closeNudge(root);
+    });
+    const stars = nudgeEl.querySelector('[data-cut="nudge-stars"]');
+    if (stars) {
+      stars.addEventListener("keydown", (ev) => {
+        if (ev.key === "Enter" || ev.key === " ") {
+          ev.preventDefault();
+          doRate(document.getElementById(OVERLAY_ID));
+        }
+      });
+    }
+
+    // Dismissal paths — all of them leave the stamp in place, so the card comes
+    // back in NUDGE_REPEAT days (flow step 6) rather than being lost.
+    nudgeOutsideHandler = (ev) => {
+      if (nudgeEl && !nudgeEl.contains(ev.target)) closeNudge(root);
+    };
+    setTimeout(() => {
+      document.addEventListener("click", nudgeOutsideHandler, true);
+    }, 0);
+    nudgeKeyHandler = (ev) => { if (ev.key === "Escape") closeNudge(root); };
+    document.addEventListener("keydown", nudgeKeyHandler, true);
+
+    let followQueued = false;
+    nudgeFollowHandler = () => {
+      if (followQueued) return;
+      followQueued = true;
+      requestAnimationFrame(() => { followQueued = false; positionNudge(); });
+    };
+    window.addEventListener("resize", nudgeFollowHandler);
+    window.addEventListener("scroll", nudgeFollowHandler, true);
+  }
+
+  function closeNudge(root) {
+    if (nudgeTimer) { clearTimeout(nudgeTimer); nudgeTimer = null; }
+    if (!nudgeOpen && !nudgeEl) return;
+    nudgeOpen = false;
+    if (nudgeOutsideHandler) {
+      document.removeEventListener("click", nudgeOutsideHandler, true);
+      nudgeOutsideHandler = null;
+    }
+    if (nudgeKeyHandler) {
+      document.removeEventListener("keydown", nudgeKeyHandler, true);
+      nudgeKeyHandler = null;
+    }
+    if (nudgeFollowHandler) {
+      window.removeEventListener("resize", nudgeFollowHandler);
+      window.removeEventListener("scroll", nudgeFollowHandler, true);
+      nudgeFollowHandler = null;
+    }
+    if (nudgeEl) {
+      const el = nudgeEl;
+      nudgeEl = null;
+      el.classList.remove("cut-nudge-in");
+      setTimeout(() => el.remove(), 180);  // let the fade-out finish
+    }
+    const r = root || document.getElementById(OVERLAY_ID);
+    const wrap = r && r.querySelector('[data-cut="rate-wrap"]');
+    if (wrap) wrap.classList.remove("cut-rate-pulse", "cut-pop-open");
   }
 
   let sharePopOpen = false;
@@ -1431,6 +1660,20 @@
     // v1.2.14: any re-render can change the strip's content width and slide the
     // gear; re-anchor the open settings popover after layout settles.
     if (settingsPopOpen) requestAnimationFrame(positionSettingsPop);
+    // v1.2.16: the nudge card is anchored to the Rate us button, which moves for
+    // the same reasons — re-anchor it too. When it isn't open, this is the
+    // heartbeat that arms it: renderInto runs on mount, on every usage update
+    // and on the 30s tick, so a long-lived tab still gets the card the day it
+    // comes due without needing a reload.
+    if (nudgeOpen) {
+      // A rebuild replaces the rate wrap, taking the pulse/tooltip-suppression
+      // classes with it — put them back on the new node.
+      const rw = root.querySelector('[data-cut="rate-wrap"]');
+      if (rw) rw.classList.add("cut-rate-pulse", "cut-pop-open");
+      requestAnimationFrame(positionNudge);
+    } else {
+      scheduleNudge();
+    }
   }
 
   function findMountTarget() {
@@ -1553,12 +1796,17 @@
         stripFields = { ...stripFields, ...resp.settings.stripFields };
       }
       try {
-        const { [RATE_KEY]: rv, [RATE_AT_KEY]: rav, [SHARE_KEY]: sv, [COLLAPSE_KEY]: cv, [INSTALL_KEY]: iv } =
-          await chrome.storage.local.get([RATE_KEY, RATE_AT_KEY, SHARE_KEY, COLLAPSE_KEY, INSTALL_KEY]);
+        const { [RATE_KEY]: rv, [RATE_AT_KEY]: rav, [SHARE_KEY]: sv, [COLLAPSE_KEY]: cv,
+                [INSTALL_KEY]: iv, [NUDGE_KEY]: nv } =
+          await chrome.storage.local.get([RATE_KEY, RATE_AT_KEY, SHARE_KEY, COLLAPSE_KEY,
+                                          INSTALL_KEY, NUDGE_KEY]);
         rated = !!rv;
         ratedAt = Number(rav) || 0;
         shared = !!sv;
         collapsed = !!cv;
+        // 0 = never nudged (the "first pop is due" case), never null past here:
+        // nudgeDue() treats null as "state still loading, stay quiet".
+        nudgeAt = Number(nv) || 0;
         // Normally background.js records install_at on install/update. If it's
         // somehow missing (storage cleared, unpacked load), start the 2-day
         // clock now rather than leaving the button hidden forever.
@@ -1612,9 +1860,17 @@
       installAt = Number(changes[INSTALL_KEY].newValue) || 0;
       applyRateVisibility(document.getElementById(OVERLAY_ID));
     }
+    // v1.2.16: another tab (or window) just showed the card — adopt its stamp
+    // and stand down, so one nudge is shown per period, not one per open tab.
+    if (changes[NUDGE_KEY]) {
+      nudgeAt = Number(changes[NUDGE_KEY].newValue) || 0;
+      if (!nudgeOpen && nudgeTimer) { clearTimeout(nudgeTimer); nudgeTimer = null; }
+    }
     if (changes[RATE_KEY]) {
       rated = !!changes[RATE_KEY].newValue;
       const root = document.getElementById(OVERLAY_ID);
+      // Rated from the popup or another tab: the card must go with the button.
+      if (rated) closeNudge(root);
       applyRateVisibility(root);
       // Donate and Share visibility depend on the rated flag too.
       if (root) {
@@ -1658,6 +1914,9 @@
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "visible") {
       try { chrome.runtime.sendMessage({ type: "force-refresh" }); } catch (_) {}
+      // v1.2.16: maybeShowNudge() refuses to fire on a hidden tab, so re-arm it
+      // the moment this one is actually being looked at.
+      scheduleNudge();
     }
   });
 

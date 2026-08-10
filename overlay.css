@@ -1236,3 +1236,185 @@
 /* The gear's tooltip text is a source node for the JS portal tip only — never
    render it in place (the portal tip positions itself and can't be clipped). */
 #claude-usage-overlay .cut-settings-tooltip { display: none; }
+
+/* ===== v1.2.16: the "Rate us" nudge card =====
+   Lives under <body> (portaled, like .cut-portal-tip and the share popover), so
+   it is NOT scoped to #claude-usage-overlay and cannot be clipped by the
+   overlay's size containment or the narrow-mode scroller. Colour conventions
+   match the other popovers: dark card by default, inverted to light when
+   claude.ai is in dark mode via .cut-pop-dark, arrow flipped by .cut-pop-below,
+   arrow x-offset driven by --cut-arrow-x. */
+.cut-rate-nudge {
+  position: fixed;
+  z-index: 2147483647;
+  box-sizing: border-box;
+  width: 272px;
+  padding: 13px 14px 12px;
+  background: #1a1a1c;
+  color: #f1f1f2;
+  border-radius: 12px;
+  box-shadow: 0 12px 38px rgba(0, 0, 0, 0.45), 0 1px 3px rgba(0, 0, 0, 0.25);
+  font: 500 12px/1.45 ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  text-align: left;
+  opacity: 0;
+  transform: translateY(6px);
+  transition: opacity 0.18s ease, transform 0.18s ease;
+}
+
+.cut-rate-nudge.cut-nudge-in {
+  opacity: 1;
+  transform: none;
+}
+
+.cut-rate-nudge::after {
+  content: '';
+  position: absolute;
+  top: 100%;
+  left: var(--cut-arrow-x, 50%);
+  transform: translateX(-50%);
+  width: 0;
+  height: 0;
+  border: 7px solid transparent;
+  border-top-color: #1a1a1c;
+}
+
+.cut-rate-nudge.cut-pop-below::after {
+  top: auto;
+  bottom: 100%;
+  border-top-color: transparent;
+  border-bottom-color: #1a1a1c;
+}
+
+/* claude.ai dark theme -> light card, same inversion as the other popovers. */
+.cut-rate-nudge.cut-pop-dark {
+  background: #f5f3ef;
+  color: #1a1a1c;
+  box-shadow: 0 12px 38px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.12);
+}
+.cut-rate-nudge.cut-pop-dark::after { border-top-color: #f5f3ef; }
+.cut-rate-nudge.cut-pop-dark.cut-pop-below::after {
+  border-top-color: transparent;
+  border-bottom-color: #f5f3ef;
+}
+
+.cut-rate-nudge .cut-nudge-x {
+  appearance: none;
+  position: absolute;
+  top: 7px;
+  right: 8px;
+  background: transparent;
+  border: none;
+  color: inherit;
+  opacity: 0.45;
+  cursor: pointer;
+  font: inherit;
+  font-size: 15px;
+  line-height: 1;
+  padding: 2px 4px;
+  border-radius: 5px;
+  transition: opacity 0.15s;
+}
+.cut-rate-nudge .cut-nudge-x:hover { opacity: 0.9; }
+
+.cut-rate-nudge .cut-nudge-title {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  padding-right: 18px;
+}
+
+/* The stars are a call to action in their own right — people click them
+   expecting to rate, so they open the store page exactly like the CTA does. */
+.cut-rate-nudge .cut-nudge-stars {
+  display: flex;
+  gap: 2px;
+  margin: 7px 0 6px;
+  font-size: 17px;
+  line-height: 1;
+  color: #f5a623;
+  cursor: pointer;
+  width: max-content;
+}
+.cut-rate-nudge .cut-nudge-stars span {
+  opacity: 0;
+  transform: scale(0.5);
+  animation: cut-nudge-star 0.32s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+}
+.cut-rate-nudge .cut-nudge-stars span:nth-child(1) { animation-delay: 0.10s; }
+.cut-rate-nudge .cut-nudge-stars span:nth-child(2) { animation-delay: 0.18s; }
+.cut-rate-nudge .cut-nudge-stars span:nth-child(3) { animation-delay: 0.26s; }
+.cut-rate-nudge .cut-nudge-stars span:nth-child(4) { animation-delay: 0.34s; }
+.cut-rate-nudge .cut-nudge-stars span:nth-child(5) { animation-delay: 0.42s; }
+.cut-rate-nudge .cut-nudge-stars:hover span { color: #ffb733; }
+
+@keyframes cut-nudge-star {
+  from { opacity: 0; transform: scale(0.5) rotate(-25deg); }
+  to   { opacity: 1; transform: none; }
+}
+
+.cut-rate-nudge .cut-nudge-body {
+  font-size: 11.5px;
+  line-height: 1.5;
+  opacity: 0.78;
+  margin-bottom: 10px;
+}
+
+.cut-rate-nudge .cut-nudge-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.cut-rate-nudge .cut-nudge-cta {
+  appearance: none;
+  border: none;
+  background: #d97757;
+  color: #fff;
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 700;
+  line-height: 1;
+  padding: 8px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.15s, transform 0.15s;
+}
+.cut-rate-nudge .cut-nudge-cta:hover {
+  background: #c96846;
+  transform: translateY(-0.5px);
+}
+
+.cut-rate-nudge .cut-nudge-later {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 11px;
+  line-height: 1;
+  opacity: 0.55;
+  padding: 8px 6px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+.cut-rate-nudge .cut-nudge-later:hover { opacity: 0.9; }
+
+/* While the card is up, the button it points at pulses — without this the eye
+   reads the card as a page element rather than as "this thing, here". */
+#claude-usage-overlay .cut-rate-wrap.cut-rate-pulse .cut-rate {
+  opacity: 1;
+  background: color-mix(in srgb, #d97757 26%, transparent);
+  animation: cut-rate-pulse 1.7s ease-in-out infinite;
+}
+
+@keyframes cut-rate-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(217, 119, 87, 0.55); }
+  50%      { box-shadow: 0 0 0 5px rgba(217, 119, 87, 0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cut-rate-nudge { transition: none; }
+  .cut-rate-nudge .cut-nudge-stars span { opacity: 1; transform: none; animation: none; }
+  #claude-usage-overlay .cut-rate-wrap.cut-rate-pulse .cut-rate { animation: none; }
+}
