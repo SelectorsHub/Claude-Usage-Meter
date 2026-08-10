@@ -1082,7 +1082,7 @@
         <span>★</span><span>★</span><span>★</span><span>★</span><span>★</span>
       </div>
       <div class="cut-nudge-body">
-        A quick review takes 10 seconds and keeps this extension going. It means a lot 🙏
+        Pls Rate us &amp; this button disappears forever after you review. 🙏🏻
       </div>
       <div class="cut-nudge-actions">
         <button class="cut-nudge-cta" type="button" data-cut="nudge-rate">Write a review</button>
