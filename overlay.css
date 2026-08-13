@@ -261,6 +261,60 @@
 
 #claude-usage-overlay .cut-meta { opacity: 0.85; font-size: 11px; }
 
+/* v1.2.17: burn-rate forecast chip ("⧗ ~1h 20m left") on the Session segment.
+   Rendered as a tinted pill rather than plain meta text because it is a
+   different KIND of number from everything else on the strip — the rest is
+   measured, this is projected — and it only ever appears when it's telling you
+   something you might want to act on. Default display:none in the markup so it
+   never flashes in before the first forecast resolves; renderForecast() clears
+   the inline style to reveal it, leaving the container tiers below in charge of
+   whether there's room. */
+#claude-usage-overlay .cut-fc {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  padding: 1px 6px;
+  border-radius: 999px;
+  line-height: 1.5;
+  background: color-mix(in srgb, currentColor 9%, transparent);
+}
+/* The disambiguating word. Two durations sitting side by side ("Reset in 3h
+   10m · ~1h 20m left") need it — but Tier 1 has already shed the reset time by
+   the time this is under pressure, so below 600px there's nothing left to
+   confuse it with and the word can go before the number does. */
+#claude-usage-overlay .cut-fc-word { opacity: 0.9; }
+
+@container cut-overlay (max-width: 600px) {
+  #claude-usage-overlay .cut-fc-word { display: none; }
+}
+
+#claude-usage-overlay .cut-fc-ic {
+  width: 10px;
+  height: 10px;
+  flex-shrink: 0;
+  opacity: 0.9;
+}
+/* Colour tracks TIME LEFT, not percentage — 60% with 20 minutes of runway is
+   the more urgent state than 85% with three hours, and this chip is the only
+   thing on the strip that can say so. */
+#claude-usage-overlay .cut-fc.cut-color-amber {
+  color: #f59e0b;
+  background: rgba(245, 158, 11, 0.12);
+}
+#claude-usage-overlay .cut-fc.cut-color-orange {
+  color: #f97316;
+  background: rgba(249, 115, 22, 0.14);
+}
+#claude-usage-overlay .cut-fc.cut-color-red {
+  color: #ef4444;
+  background: rgba(239, 68, 68, 0.16);
+  font-weight: 700;
+}
+
 #claude-usage-overlay .cut-msgs {
   color: #d97757;
   font-weight: 500;
@@ -603,9 +657,29 @@
   display: none !important;
 }
 
+/* v1.2.7a: an earlier cut of this shed the reset times at 780px whenever the
+   Fable segment and the forecast chip were both up, on the reasoning that the
+   chip was the more actionable number. That was the wrong call to make on the
+   user's behalf: reset times have their own checkboxes, and a field someone
+   ticked should not silently disappear because a different field appeared.
+   The rule is gone. When the content genuinely exceeds the composer the strip
+   now scrolls (below) instead of hiding anything — the strip can't be wider
+   than the composer it sits above, so scrolling is the only way to "widen" it
+   without pushing the page around. */
+
 /* Narrow safety band while the F chip is up: tighten the gap one notch and,
    if it still can't fit, scroll horizontally (scrollbar hidden) instead of
    clipping or wrapping — same escape hatch as the 330px tier. */
+@container cut-overlay (max-width: 820px) {
+  #claude-usage-overlay.cut-has-forecast .cut-strip {
+    gap: 8px;
+    overflow-x: auto;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+  #claude-usage-overlay.cut-has-forecast .cut-strip::-webkit-scrollbar { display: none; }
+}
+
 @container cut-overlay (max-width: 720px) {
   #claude-usage-overlay.cut-has-fable .cut-strip {
     gap: 8px;
@@ -614,6 +688,16 @@
     -ms-overflow-style: none;
   }
   #claude-usage-overlay.cut-has-fable .cut-strip::-webkit-scrollbar { display: none; }
+}
+
+/* v1.2.7a: the chip sheds in LOCKSTEP with the reset times at Tier 1, rather
+   than outliving them to 480px as it first did. Outliving them produced exactly
+   the state that got reported — a forecast on screen with no reset time beside
+   it — which reads as the reset time being broken rather than deliberately
+   dropped. Both are "when does this end?" answers; they belong together, and
+   below Tier 1 the projection is still on the segment tooltip. */
+@container cut-overlay (max-width: 640px) {
+  #claude-usage-overlay .cut-fc { display: none !important; }
 }
 
 /* Tier 2 (< 480px): tighten spacing and shrink "Rate us" and "Support" to just icons. */
@@ -1027,6 +1111,33 @@
 
 /* Icon + short time, e.g. ⟳ 4h 3m. Kept deliberately small and muted so the
    percentage still reads first; the gap is 3px, not the 5px used elsewhere. */
+/* v1.2.7a: collapsed-mode forecast chip. Mirrors .cut-creset's geometry so the
+   two "when does this end?" numbers sit as a matched pair — measured reset on
+   the left, projection on the right — rather than looking like two unrelated
+   widgets. Colour comes from the same time-based bands as the expanded chip. */
+#claude-usage-overlay .cut-cfc {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: 5px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+#claude-usage-overlay .cut-cfc-ic {
+  width: 9px;
+  height: 9px;
+  flex-shrink: 0;
+  opacity: 0.75;
+}
+#claude-usage-overlay .cut-cfc-txt {
+  font-size: 10.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+#claude-usage-overlay .cut-cfc-txt.cut-color-amber  { color: #f59e0b; }
+#claude-usage-overlay .cut-cfc-txt.cut-color-orange { color: #f97316; }
+#claude-usage-overlay .cut-cfc-txt.cut-color-red    { color: #ef4444; font-weight: 700; }
+
 #claude-usage-overlay .cut-creset {
   display: inline-flex;
   align-items: center;
@@ -1065,7 +1176,8 @@
 /* Below the ultra-compact tier the pill has to stay tiny — the reset time
    drops out and lives in the tooltip instead. */
 @container cut-overlay (max-width: 330px) {
-  #claude-usage-overlay .cut-creset { display: none; }
+  #claude-usage-overlay .cut-creset,
+  #claude-usage-overlay .cut-cfc { display: none; }
 }
 
 /* ---------------------------------------------------------------------------

@@ -237,6 +237,19 @@ main { padding: 12px; }
   font-variant-numeric: tabular-nums;
 }
 
+/* v1.2.17: the projected-pace line under each meter. Sits below .sub (which
+   states the measured reset time) and stays quiet by default — it only takes
+   on colour when the projection says the quota runs out before it resets. */
+.fc {
+  margin-top: 3px;
+  font-size: 11px;
+  color: var(--text-mute);
+  font-variant-numeric: tabular-nums;
+}
+.fc:empty { display: none; }
+.fc.warn   { color: #f59e0b; font-weight: 600; }
+.fc.danger { color: #ef4444; font-weight: 600; }
+
 /* ---- Share panel ---- */
 .share-panel {
   background: var(--bg-elev);

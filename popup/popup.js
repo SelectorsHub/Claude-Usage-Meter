@@ -1,4 +1,11 @@
-// popup.js (v1.5)
+// popup.js (v1.6)
+// - v1.2.17: projected-pace line under each meter. The popup has room the strip
+//   doesn\'t, so unlike the strip chip (which only appears when you\'re on track
+//   to run out) this states the case either way, including "resets before you\'d
+//   run out". It also surfaces the two not-yet states explicitly — a fresh
+//   window has no slope to measure, a quiet stretch has no signal above the
+//   1-point quantisation of an integer percentage — because saying so beats
+//   both a blank line and a confidently invented number.
 // - v1.2.7: "Show in strip" field picker. Writes settings.stripFields; the strip
 //   applies it live via storage.onChanged. The last enabled meter is locked so
 //   the strip can't be emptied, and an unreported Fable bucket doesn't count as
@@ -86,6 +93,58 @@ function renderCard(scope, data) {
   return true;
 }
 
+/* v1.2.17 — projected-pace line under each meter.
+
+   The popup has room the strip doesn't, so unlike the strip chip (which only
+   shows when you're on track to run out) this states the case either way,
+   including "you're fine". It also surfaces the two not-yet states explicitly:
+   a fresh window has no slope to measure, and a quiet stretch has no signal
+   above the 1-point quantisation of an integer percentage. Saying so beats
+   both an empty line and a confidently invented number. */
+function fmtEtaShort(mins) {
+  if (mins == null || !isFinite(mins)) return "—";
+  if (mins < 1) return "under a minute";
+  if (mins < 20) return `${Math.round(mins)}m`;
+  const r = Math.round(mins / 5) * 5;
+  if (r < 60) return `${r}m`;
+  const h = Math.floor(r / 60), m = r % 60;
+  if (h >= 24) return `${Math.round(h / 24)}d`;
+  if (h >= 10) return `${h}h`;
+  return m ? `${h}h ${m}m` : `${h}h`;
+}
+
+function renderForecast(scope, usage) {
+  const el = document.getElementById(`${scope}-fc`);
+  if (!el) return;
+  el.className = "fc";
+  const f = usage && usage.forecast && usage.forecast[scope];
+  if (!f) { el.textContent = ""; return; }
+
+  if (!f.available) {
+    if (f.reason === "warming") {
+      // v1.2.7a: show the warm-up as PROGRESS, not a static string. The first
+      // build just said "Measuring your pace…" forever, which gave no way to
+      // tell a normal 12-minute warm-up from a ring that was being wiped on
+      // every poll — the bug that shipped in the first cut. A counter that
+      // isn't climbing is now visibly a counter that isn't climbing.
+      const have = f.spanMinutes != null ? f.spanMinutes : 0;
+      const need = f.needMinutes != null ? f.needMinutes : 12;
+      el.textContent = `Measuring your pace… (${have} of ${need} min)`;
+    }
+    else if (f.reason === "idle") el.textContent = "No recent usage to project from";
+    else el.textContent = "";
+    return;
+  }
+
+  const pace = `~${f.ratePerHour}%/h`;
+  if (f.beforeReset) {
+    el.textContent = `${pace} · on track to hit 100% in ${fmtEtaShort(f.minutesLeft)}`;
+    el.className = "fc " + (f.minutesLeft <= 30 ? "danger" : "warn");
+  } else {
+    el.textContent = `${pace} · resets before you'd run out`;
+  }
+}
+
 function renderMessagesLeft(usage) {
   const wrap = document.getElementById("msgs-left");
   const val = document.getElementById("msgs-left-val");
@@ -150,6 +209,8 @@ async function render(state) {
   const hasWeekly  = renderCard("weekly",  usage && usage.weekly);
   document.getElementById("weekly-lbl").textContent =
     weeklyLabelFor(usage && usage.weekly, currentModel);
+  renderForecast("session", usage);
+  renderForecast("weekly", usage);
   renderMessagesLeft(usage);
   renderFields(state && state.settings, usage);
   document.getElementById("updated").textContent = fmtUpdated(usage && usage.updatedAt);
@@ -179,7 +240,9 @@ async function refresh({ forceFetch = false } = {}) {
 const METER_FIELDS = ["session", "weekly", "fable"];
 // v1.2.13: reset time split per scope; the "Messages left" toggle is retired
 // (the counter auto-appears on the rare occasions the API reports it).
-const ALL_FIELDS = [...METER_FIELDS, "resetTimeSession", "resetTimeWeekly"];
+// v1.2.17: `forecast` joins the trimmings — it can be switched off entirely
+// without leaving the strip empty, so it's outside METER_FIELDS.
+const ALL_FIELDS = [...METER_FIELDS, "resetTimeSession", "resetTimeWeekly", "forecast"];
 
 // Whether the usage API is actually reporting a Fable bucket for this account.
 // A checked-but-unreported Fable can't satisfy the "keep one meter on" rule —

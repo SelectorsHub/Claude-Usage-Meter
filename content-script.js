@@ -1,4 +1,40 @@
-// content-script.js (isolated world, v1.26)
+// content-script.js (isolated world, v1.27)
+// - v1.2.17: SESSION FORECASTING. The strip could tell you where you were, not
+//   where you were heading — "62%" reads the same whether it took ten minutes
+//   or four hours. background.js now derives a burn rate from the poll history
+//   (see the block comment above its FC_SCOPES table for the estimator and the
+//   four traps it avoids); everything on this side is presentation:
+//   (a) The CHIP — a tinted pill on the Session segment, "⧗ ~1h 20m left".
+//       Deliberately conditional: it renders ONLY when the projection lands
+//       inside the current window (forecast.atRisk). When you'd reset before
+//       running out, the honest answer is "this doesn't matter today", and on
+//       a strip this width the honest way to say that is to say nothing — so
+//       the feature costs zero pixels on a normal day and appears exactly when
+//       it earns them. atRisk carries hysteresis from background.js so a
+//       projection sitting on the reset boundary can't flip it every poll.
+//   (b) Colour tracks TIME LEFT, not percentage — 60% with 20 minutes of
+//       runway is the more urgent state than 85% with three hours, and this is
+//       the only element on the strip that can say so. Red <= 20m, orange
+//       <= 60m, amber beyond.
+//   (c) Durations quantise to 5 minutes above 20 (exact below, where a couple
+//       of minutes genuinely matters). Without it the chip visibly twitches —
+//       "1h 22m", "1h 19m", "1h 24m" — on every poll, which reads as
+//       unreliable even when the underlying rate is perfectly steady.
+//   (d) The TOOLTIP carries the working ("At ~14%/h you\'d reach 100% in
+//       1h 20m (~4:35 PM), before this quota resets") on BOTH meters, and
+//       unlike the reset-time line it is NOT suppressed when the chip is
+//       visible — the chip is a headline that should never be unexplained.
+//       It is also the only surface for the reassuring case and for the
+//       collapsed pill, which has no room for a chip.
+//   (e) Two new width tiers, both narrowly scoped. The trailing "left" drops
+//       at 600px (by then Tier 1 has shed the reset times, so there\'s no
+//       second duration to disambiguate from). And Fable + chip + reset times
+//       measured ~744px of content in a 700px composer — squarely the common
+//       case — so that one combination sheds reset times at 780px instead of
+//       640px. The chip otherwise OUTLIVES the reset times, surviving to the
+//       480px tier: when it shows at all, it is the more useful number.
+//   New stripFields.forecast toggle in the gear popover and the popup panel;
+//   outside METER_FIELDS, since switching it off can\'t empty the strip.
 // - v1.2.16: the "Rate us" NUDGE. The static button in the strip is too quiet —
 //   almost nobody notices it, so almost nobody reviews. It now gets one active
 //   ask: a small card anchored to the button, portaled to <body> like the other
@@ -465,7 +501,8 @@
     weekly: true,
     fable: true,
     resetTimeSession: true,
-    resetTimeWeekly: true
+    resetTimeWeekly: true,
+    forecast: true
   };
   function fieldOn(name) {
     return stripFields[name] !== false;
@@ -557,6 +594,93 @@
     if (hrs < 48) return `${hrs}h ${rem}m`;
     return `${Math.floor(hrs / 24)}d`;
   }
+  /* -------------------------------------------------------------------------
+     v1.2.17 — burn-rate forecast display.
+
+     background.js does the estimating (see the block comment above its
+     FC_SCOPES table); everything here is presentation. Two surfaces:
+
+       • The CHIP — "~1h 20m left" pinned to the Session segment. Deliberately
+         conditional: it renders only when the projection lands INSIDE the
+         current window (forecast.atRisk). When you're going to reset before
+         you run out, the honest answer is "this doesn't matter today", and the
+         honest way to say that on a strip this width is to say nothing. It
+         also means the feature costs zero pixels on a normal day and appears
+         exactly when it earns them.
+
+       • The TOOLTIP — always present once there's a rate, on both meters,
+         including the reassuring case. The chip is the headline; the tooltip
+         is the working ("at ~14%/h, around 4:35 PM"), so the number on the
+         strip is never unexplained.
+     ------------------------------------------------------------------------- */
+
+  function forecastFor(scope) {
+    if (!fieldOn("forecast")) return null;
+    const f = latestUsage && latestUsage.forecast && latestUsage.forecast[scope];
+    return f || null;
+  }
+
+  // Durations quantised to reduce jitter: exact under 20 minutes (where a
+  // couple of minutes genuinely matters), nearest 5 above it. Without this the
+  // chip visibly twitches — "1h 22m", "1h 19m", "1h 24m" — on every poll, which
+  // reads as unreliable even when the underlying rate is perfectly steady.
+  function fmtEta(mins) {
+    if (mins == null || !isFinite(mins)) return "—";
+    if (mins < 1) return "<1m";
+    if (mins < 20) return `${Math.round(mins)}m`;
+    const r = Math.round(mins / 5) * 5;
+    if (r < 60) return `${r}m`;
+    const h = Math.floor(r / 60), m = r % 60;
+    if (h >= 10) return `${h}h`;
+    return m ? `${h}h ${m}m` : `${h}h`;
+  }
+
+  // Clock time for the tooltip. Same day → time only; further out (a weekly
+  // projection can be days away) → weekday first, so "Thu 09:15" isn't read as
+  // this morning.
+  function fmtClock(ts) {
+    if (!ts) return "";
+    const d = new Date(ts);
+    const sameDay = d.toDateString() === new Date().toDateString();
+    const time = d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+    return sameDay ? time : `${d.toLocaleDateString([], { weekday: "short" })} ${time}`;
+  }
+
+  // Urgency colour for the chip. Keyed on time remaining, NOT on percentage —
+  // the whole point of the forecast is that 60% with 20 minutes of runway is
+  // the more urgent situation than 85% with three hours.
+  function forecastColorClass(mins) {
+    if (mins <= 20) return "cut-color-red";
+    if (mins <= 60) return "cut-color-orange";
+    return "cut-color-amber";
+  }
+
+  function forecastTipText(scope) {
+    const f = forecastFor(scope);
+    if (!f) return "";
+    if (!f.available) {
+      // "warming" and "maxed" say nothing useful: right after a reset the strip
+      // is already showing a low number, and at 100% there is nothing left to
+      // project. Only the idle case is worth stating, because that's the one
+      // where a user who saw the chip earlier might wonder where it went.
+      return f.reason === "idle" ? "No recent usage to project from" : "";
+    }
+    const pace = `At ~${f.ratePerHour}%/h`;
+    const eta = `${fmtEta(f.minutesLeft)} (~${fmtClock(f.etaAt)})`;
+    // v1.2.7a: three cases, not two. atRisk carries hysteresis, so it stays on
+    // slightly past the point where beforeReset flips — which meant the chip
+    // could read "~1h 20m left" while this tooltip said "you have room", i.e.
+    // the headline and its own explanation contradicting each other. The
+    // boundary now gets its own wording instead of being forced into one side.
+    if (f.atRisk && !f.beforeReset) {
+      return `${pace} you'd reach 100% in ${eta} — right around when this quota resets.`;
+    }
+    if (!f.beforeReset) {
+      return `${pace} you'd reach 100% in ${eta} — after this quota resets, so you have room.`;
+    }
+    return `${pace} you'd reach 100% in ${eta}, before this quota resets.`;
+  }
+
   function colorClass(p) {
     if (p == null) return "neutral";
     if (p >= 90) return "red";
@@ -690,6 +814,10 @@
           <span class="cut-pct" data-cut-pct>—</span>
           <span class="cut-sep">·</span>
           <span class="cut-meta" data-cut-meta>waiting…</span>
+          <span class="cut-fc" data-cut="session-fc" style="display:none">
+            <svg class="cut-fc-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 2h12M6 22h12M6 2v5l6 5 6-5V2M6 22v-5l6-5 6 5v5"></path></svg>
+            <span class="cut-fc-txt" data-cut="session-fc-txt"></span><span class="cut-fc-word">left</span>
+          </span>
         </div>
         <div class="cut-divider" data-cut="weekly-divider"></div>
         <div class="cut-seg" data-cut="weekly">
@@ -707,7 +835,7 @@
         </div>
         <div class="cut-compact" data-cut="compact">
           <span class="cut-cwrap" data-cut="c-session-wrap">
-            <span class="cut-cval" tabindex="0"><span class="cut-cring"><svg class="cut-cring-svg" viewBox="0 0 24 24" aria-hidden="true"><circle class="cut-cring-track" cx="12" cy="12" r="10"></circle><circle class="cut-cring-fill" data-cut="ring-session" cx="12" cy="12" r="10"></circle></svg><span class="cut-clabel">S</span></span> <span class="cut-cpct" data-cut="c-session">—</span><span class="cut-creset" data-cut="c-session-reset"><svg class="cut-creset-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20.5 13.5a8.5 8.5 0 1 1-2.2-6.4"></path><polyline points="20.5 3 20.5 8 15.5 8"></polyline></svg><span class="cut-creset-txt" data-cut="c-session-rt">—</span></span></span>
+            <span class="cut-cval" tabindex="0"><span class="cut-cring"><svg class="cut-cring-svg" viewBox="0 0 24 24" aria-hidden="true"><circle class="cut-cring-track" cx="12" cy="12" r="10"></circle><circle class="cut-cring-fill" data-cut="ring-session" cx="12" cy="12" r="10"></circle></svg><span class="cut-clabel">S</span></span> <span class="cut-cpct" data-cut="c-session">—</span><span class="cut-creset" data-cut="c-session-reset"><svg class="cut-creset-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20.5 13.5a8.5 8.5 0 1 1-2.2-6.4"></path><polyline points="20.5 3 20.5 8 15.5 8"></polyline></svg><span class="cut-creset-txt" data-cut="c-session-rt">—</span></span><span class="cut-cfc" data-cut="c-session-fc" style="display:none"><svg class="cut-cfc-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 2h12M6 22h12M6 2v5l6 5 6-5V2M6 22v-5l6-5 6 5v5"></path></svg><span class="cut-cfc-txt" data-cut="c-session-fct">—</span></span></span>
             <span class="cut-ctip" data-cut="c-session-tip" aria-hidden="true">Waiting for data</span>
           </span>
           <span class="cut-cdivider" data-cut="c-weekly-divider" aria-hidden="true"></span>
@@ -759,6 +887,7 @@
             <div class="cut-sp-sep"></div>
             <label class="cut-sp-row"><input type="checkbox" data-sp="resetTimeSession" /><span>Session reset time</span></label>
             <label class="cut-sp-row"><input type="checkbox" data-sp="resetTimeWeekly" /><span>Weekly reset time</span></label>
+            <label class="cut-sp-row"><input type="checkbox" data-sp="forecast" /><span>Limit forecast</span></label>
             <div class="cut-sp-foot" data-cut="sp-foot">Keep at least one meter on.</div>
           </div>
         </span>
@@ -955,12 +1084,19 @@
         // is the ONLY place its full name and reset live — always allow it. (The
         // tip text itself already omits the reset when that toggle is off.)
         if (key === "fable") return seg.dataset.cutTip || "";
-        // v1.2.7/v1.2.13: if THIS meter's reset time is switched off, don't
-        // smuggle it back in via the hover tooltip.
-        if (!resetOnFor(key)) return "";
+        const parts = [];
+        // Reset time: v1.2.7/v1.2.13 rules unchanged — suppressed when its
+        // toggle is off, and skipped when the inline "Reset in …" is already
+        // on screen (no point in a tooltip repeating visible text).
         const meta = seg.querySelector("[data-cut-meta]");
-        if (meta && getComputedStyle(meta).display !== "none") return "";
-        return seg.dataset.cutTip || "";
+        const metaShown = !!(meta && getComputedStyle(meta).display !== "none");
+        if (resetOnFor(key) && !metaShown && seg.dataset.cutTip) parts.push(seg.dataset.cutTip);
+        // v1.2.17: the forecast line is NOT suppressed when the chip is
+        // visible — the chip shows "~1h 20m left" and this is where the pace
+        // behind it is spelled out. It's also the only surface for the
+        // reassuring case, where there's deliberately no chip.
+        if (seg.dataset.cutForecast) parts.push(seg.dataset.cutForecast);
+        return parts.join("<br>");
       });
     });
     // Any click inside the strip may change state/text — drop the tip.
@@ -1553,6 +1689,44 @@
     }
   }
 
+  // v1.2.17: the chip + the tooltip working, for both meters. Called from
+  // renderInto() after the segments so it can read their final state.
+  function renderForecast(root) {
+    // Tooltip text for BOTH meters, whether or not a chip is showing. Stored on
+    // the segment (not rendered here) so attachTooltips can compose it with the
+    // reset-time line at hover time.
+    for (const scope of ["session", "weekly"]) {
+      const seg = root.querySelector(`[data-cut="${scope}"]`);
+      if (seg) seg.dataset.cutForecast = forecastTipText(scope);
+    }
+
+    const el  = root.querySelector('[data-cut="session-fc"]');
+    const txt = root.querySelector('[data-cut="session-fc-txt"]');
+    if (!el || !txt) return;
+
+    const f = forecastFor("session");
+    // atRisk carries the hysteresis from background.js, so a projection sitting
+    // right on the reset boundary can't flip the chip in and out every poll.
+    const show = !!(f && f.available && f.atRisk && f.minutesLeft != null);
+    // Lets overlay.css widen the reset-time shedding tier, the same way
+    // cut-has-fable does — three segments AND the chip is the one combination
+    // that can't fit a typical composer with reset times still on.
+    root.classList.toggle("cut-has-forecast", show);
+    if (!show) { el.style.display = "none"; return; }
+
+    // The trailing "left" lives in its own span so the narrow tiers can drop it
+    // (see .cut-fc-word in overlay.css) without losing the number itself.
+    txt.textContent = `~${fmtEta(f.minutesLeft)}`;
+    // Rebuild the class list rather than toggling: the urgency band changes as
+    // the clock runs down and stale colour classes would stack up.
+    el.className = "cut-fc " + forecastColorClass(f.minutesLeft);
+    // "" (not a display value) so the narrow-width container tiers keep the
+    // final say on whether there's actually room for it.
+    el.style.display = "";
+    el.setAttribute("aria-label",
+      `At about ${f.ratePerHour}% per hour, projected to reach the session limit in ${fmtEta(f.minutesLeft)}`);
+  }
+
   function renderCompact(root) {
     const items = [
       { key: "session", valSel: '[data-cut="c-session"]', tipSel: '[data-cut="c-session-tip"]', ringSel: '[data-cut="ring-session"]', letter: "S", name: "Session", data: latestUsage && latestUsage.session },
@@ -1596,15 +1770,43 @@
             resetEl.style.display = "none";
           }
         }
-        tipEl.textContent = !rtOn
+        // v1.2.7a: the projection now renders IN the collapsed pill, not just in
+        // its hover tip. Collapsed mode is where people leave the strip parked,
+        // so "you'll run out before this resets" was hidden exactly where it was
+        // most useful. Session only, matching the expanded strip; the weekly
+        // projection stays on the tooltip and in the popup.
+        const cfcEl  = root.querySelector(`[data-cut="c-${it.key}-fc"]`);
+        const cfcTxt = root.querySelector(`[data-cut="c-${it.key}-fct"]`);
+        if (cfcEl && cfcTxt) {
+          const cf = forecastFor(it.key);
+          if (cf && cf.available && cf.atRisk && cf.minutesLeft != null) {
+            cfcTxt.textContent = fmtEta(cf.minutesLeft);
+            cfcTxt.className = "cut-cfc-txt " + forecastColorClass(cf.minutesLeft);
+            cfcEl.style.display = "";
+          } else {
+            cfcEl.style.display = "none";
+          }
+        }
+
+        let tip = !rtOn
           ? `${it.name} ${p}%`
           : (it.data.resetsAt
               ? `${it.name} ${p}% · Reset in ${fmtReset(it.data.resetsAt)}`
               : `${it.name} ${p}% · no reset info`);
+        // v1.2.17: the collapsed pill has no room for a forecast chip, so the
+        // projection lives entirely in the hover tip here. Fable rides on the
+        // weekly bucket and has no forecast of its own.
+        if (it.key !== "fable") {
+          const fcTip = forecastTipText(it.key);
+          if (fcTip) tip += ` · ${fcTip}`;
+        }
+        tipEl.textContent = tip;
       } else {
         el.textContent = "—";
         el.className = "cut-cpct";
         if (resetEl) resetEl.style.display = "none";
+        const cfcOff = root.querySelector(`[data-cut="c-${it.key}-fc"]`);
+        if (cfcOff) cfcOff.style.display = "none";
         if (ringEl) {
           ringEl.style.strokeDasharray = RING_C.toFixed(2);
           ringEl.style.strokeDashoffset = RING_C.toFixed(2);
@@ -1638,6 +1840,7 @@
         segF.setAttribute("aria-label", segF.dataset.cutTip);
       }
     }
+    renderForecast(root);
     renderCompact(root);
     applyRateVisibility(root);
     applyDonateVisibility(root);

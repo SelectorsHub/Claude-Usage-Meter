@@ -1,4 +1,7 @@
-// options.js (v1.4)
+// options.js (v1.5)
+// - v1.2.17: `forecastAlerts` toggle. Separate from the threshold notifications
+//   because it answers a different question ("will I run out early?" vs "have I
+//   crossed 75%?"), and some people want the milestones without the projection.
 
 const SCOPES = ["session", "weekly"];
 
@@ -6,6 +9,11 @@ let state = {
   sessionThresholds: [],
   weeklyThresholds:  [],
   notificationsEnabled: true,
+  // v1.2.17: the one-shot "on pace to hit your session limit in ~N minutes"
+  // heads-up. Separate from the threshold notifications because it answers a
+  // different question, and some people want the milestones without the
+  // projection (or the other way round).
+  forecastAlerts: true,
   pollMinutes: 1
 };
 
@@ -14,8 +22,10 @@ async function load() {
   state.sessionThresholds = settings.sessionThresholds || [];
   state.weeklyThresholds  = settings.weeklyThresholds  || [];
   state.notificationsEnabled = settings.notificationsEnabled !== false;
+  state.forecastAlerts = settings.forecastAlerts !== false;
   state.pollMinutes = settings.pollMinutes || 1;
   document.getElementById("notifications-enabled").checked = state.notificationsEnabled;
+  document.getElementById("forecast-alerts").checked = state.forecastAlerts;
   document.getElementById("poll-minutes").value = state.pollMinutes;
   renderAll();
 }
@@ -58,6 +68,7 @@ function addThreshold(scope) {
 
 async function save() {
   state.notificationsEnabled = document.getElementById("notifications-enabled").checked;
+  state.forecastAlerts = document.getElementById("forecast-alerts").checked;
   const pm = parseInt(document.getElementById("poll-minutes").value, 10);
   state.pollMinutes = isNaN(pm) ? 1 : Math.max(1, Math.min(60, pm));
   document.getElementById("poll-minutes").value = state.pollMinutes;
@@ -67,6 +78,7 @@ async function save() {
       sessionThresholds: state.sessionThresholds,
       weeklyThresholds:  state.weeklyThresholds,
       notificationsEnabled: state.notificationsEnabled,
+      forecastAlerts: state.forecastAlerts,
       pollMinutes: state.pollMinutes
     }
   });

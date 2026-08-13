@@ -37,6 +37,7 @@
       </div>
       <div class="bar"><div class="bar-fill" id="session-fill"></div></div>
       <div class="sub" id="session-sub">Fetching…</div>
+      <div class="fc" id="session-fc"></div>
     </section>
 
     <section class="card" id="weekly-card">
@@ -46,6 +47,7 @@
       </div>
       <div class="bar"><div class="bar-fill" id="weekly-fill"></div></div>
       <div class="sub" id="weekly-sub">Fetching…</div>
+      <div class="fc" id="weekly-fc"></div>
     </section>
 
     <div id="msgs-left" class="msgs-left hidden">
@@ -86,6 +88,10 @@
       <label class="field-row">
         <input type="checkbox" id="field-resetTimeWeekly" data-field="resetTimeWeekly" />
         <span class="field-txt">Weekly reset time</span>
+      </label>
+      <label class="field-row">
+        <input type="checkbox" id="field-forecast" data-field="forecast" />
+        <span class="field-txt">Limit forecast</span>
       </label>
       <div class="fields-foot" id="fields-foot">Keep at least one meter on.</div>
     </div>

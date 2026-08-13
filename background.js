@@ -1,3 +1,15 @@
+// background.js (service worker, v1.18)
+// - v1.2.17: burn-rate forecasting. Every poll now feeds a per-scope sample
+//   ring; updateForecast() turns it into a rate and an ETA, published as
+//   usage.forecast for the strip and popup. The estimator, and the four ways
+//   it can be got wrong, are documented in full at the FC_SCOPES table below.
+//   Also here: maybeNotifyForecast(), a one-shot desktop heads-up per session
+//   window when the projection drops under 30 minutes (keyed on the window\'s
+//   own reset timestamp, so it can\'t repeat and re-arms itself for the next
+//   one), gated behind the new `forecastAlerts` setting on top of the existing
+//   notificationsEnabled. The sample history is cleared alongside every other
+//   cross-account side channel on an org switch — another account\'s pace is
+//   not this account\'s pace, and its window boundaries differ too.
 const POLL_ALARM = "claude-usage-poll";
 const DEFAULT_POLL_MINUTES = 1;
 const ORG_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
@@ -60,8 +72,15 @@ const DEFAULT_SETTINGS = {
     weekly: true,
     fable: true,
     resetTimeSession: true,
-    resetTimeWeekly: true
-  }
+    resetTimeWeekly: true,
+    // v1.2.17: the burn-rate projection chip ("~1h 20m left") on the Session
+    // segment. On by default — it costs no width until it has something urgent
+    // to say (see the atRisk gate in the forecaster below).
+    forecast: true
+  },
+  // v1.2.17: one-shot desktop heads-up when the projection says the session
+  // quota runs out well before it resets. Rides on notificationsEnabled.
+  forecastAlerts: true
 };
 
 // Merge helper for stripFields: a partial or legacy-missing object must still
@@ -90,7 +109,9 @@ const STORAGE_KEYS = {
   currentModel: "current_model",
   lastNotifyError: "last_notify_error",
   sessionLock: "session_lock",   // {until} — pins session to 100% while a hard lockout is active
-  usageRaw: "usage_raw"          // last raw /usage response, for diagnosing field shapes
+  usageRaw: "usage_raw",         // last raw /usage response, for diagnosing field shapes
+  history: "usage_history",      // v1.2.17: downsampled % samples backing the burn-rate forecast
+  forecastNotified: "forecast_notified"  // v1.2.17: window key of the last forecast alert (dedupe)
 };
 
 // ---------- storage helpers ----------
@@ -111,7 +132,8 @@ async function getUsage() {
     messagesRemaining: null,
     messagesResetAt: null,
     updatedAt: null,
-    orgId: null
+    orgId: null,
+    forecast: null
   };
 }
 async function saveUsage(u) {
@@ -310,6 +332,331 @@ function familyOfField(field) {
   return "other";
 }
 
+/* ===========================================================================
+   v1.2.17 — burn-rate forecasting.
+
+   The /usage endpoint answers "how much have you used?". It says nothing about
+   how fast, so "62%" reads the same whether you got there in ten minutes or
+   four hours. Everything below turns the sequence of polls into a rate, and the
+   rate into an answer to the question people actually have: will I run out
+   before this resets?
+
+   How it works, and the traps it avoids:
+
+   (a) HISTORY. Every poll appends {t, percent} to a per-scope ring, downsampled
+       (see minGapMs) so a flat hour is a handful of samples rather than sixty.
+       Pruned by both age and count, so storage stays bounded.
+
+   (b) WINDOW ROLLOVER. Samples from an expired quota window describe a quota
+       that no longer exists — extrapolating across a reset would report a wild
+       rate the moment the counter drops back to 0. A change in `resets_at`, or
+       any fall of >= 5 points, clears the ring. (5, not 1: `percent` is an
+       integer and the API occasionally shaves a point off as old activity ages
+       out of the rolling window.)
+
+   (c) THE RATE. Two estimates, blended. `recent` is a least-squares slope over
+       the last hour — responsive, and regression rather than first-vs-last so a
+       single odd reading can't dominate. `overall` is the plain average since
+       the window opened — stable, and the better long-run predictor. Neither
+       alone is right: recent-only swings between "20 minutes!" and "4 hours"
+       as you send a burst then read the reply; overall-only barely reacts when
+       you genuinely change pace. 65/35 in favour of recent, then a light EMA on
+       top, because the failure mode users actually notice is an ETA that won't
+       sit still.
+
+   (d) WHEN NOT TO GUESS. `percent` is a 0-100 integer, so under one full point
+       of rise there is nothing but quantisation to measure — projecting from it
+       would invent a confident-looking number out of noise. Below a point of
+       rise, or below 0.5%/h, the forecast reports `reason: "idle"` and the UI
+       shows nothing rather than a fiction.
+
+   (e) HYSTERESIS. Whether the projection lands before or after the reset is the
+       one bit that decides if the strip shows a chip at all, and near the
+       boundary it would flip every poll. Turning `atRisk` on needs the ETA
+       comfortably inside the window; turning it off needs it comfortably
+       outside. Costs one stored boolean, removes all the flicker.
+   =========================================================================== */
+
+const FC_SCOPES = ["session", "weekly"];
+const FC_CFG = {
+  // 5-hour rolling quota: keep 6h so a full window always fits, sample finely.
+  session: { maxAgeMs: 6 * 3600e3,      minGapMs: 5 * 60e3,  windowMs: 60 * 60e3, minSpanMs: 12 * 60e3, maxSamples: 400, jumpMs: 30 * 60e3 },
+  // 7-day quota: a slope measured over minutes says nothing about a week, so
+  // the recent window is a full day and the warm-up is two hours.
+  weekly:  { maxAgeMs: 8 * 24 * 3600e3, minGapMs: 15 * 60e3, windowMs: 24 * 3600e3, minSpanMs: 2 * 3600e3, maxSamples: 400, jumpMs: 12 * 3600e3 }
+};
+const FC_RECENT_WEIGHT = 0.65;  // recent-slope share of the blend (rest is the since-reset average)
+const FC_EMA_ALPHA = 0.4;       // smoothing on the blended rate
+const FC_MIN_RATE = 0.5;        // %/h below which we call it idle rather than project
+const FC_NOTIFY_MINUTES = 30;   // fire the heads-up when the projection drops under this
+
+function fcBlankEntry() {
+  return { samples: [], windowAt: 0, srcKey: "", rate: null, atRisk: false, rolls: 0 };
+}
+function fcBlankHistory() {
+  return { orgId: null, session: fcBlankEntry(), weekly: fcBlankEntry() };
+}
+
+async function getHistory() {
+  const { [STORAGE_KEYS.history]: h } = await chrome.storage.local.get(STORAGE_KEYS.history);
+  if (!h || typeof h !== "object") return fcBlankHistory();
+  const out = fcBlankHistory();
+  out.orgId = h.orgId || null;
+  for (const scope of FC_SCOPES) {
+    const e = h[scope];
+    if (!e || !Array.isArray(e.samples)) continue;
+    out[scope] = {
+      samples: e.samples.filter((s) => Array.isArray(s) && s.length === 2),
+      windowAt: Number(e.windowAt) || 0,
+      srcKey: String(e.srcKey || ""),
+      rate: typeof e.rate === "number" ? e.rate : null,
+      atRisk: !!e.atRisk,
+      rolls: Number(e.rolls) || 0
+    };
+  }
+  return out;
+}
+async function saveHistory(h) {
+  await chrome.storage.local.set({ [STORAGE_KEYS.history]: h });
+}
+
+// Append one reading, clearing first if the quota window rolled over (see (b)).
+function fcRecord(entry, info, cfg, now) {
+  const p = Number(info.percent);
+  // A NaN would slip straight through every guard below — NaN comparisons are
+  // all false, so `rate < FC_MIN_RATE` and `rise < 1` would both fail to catch
+  // it and the strip would happily render a confident "~—".
+  if (!Number.isFinite(p)) return;
+  const windowAt = info.resetsAt || 0;
+  // Which API bucket this reading came from. "Weekly" repoints at a different
+  // per-model quota when the active model changes (pickWeeklyForActiveFamily),
+  // and two unrelated quotas in one ring would produce a nonsense slope — a
+  // switch is a rollover, same as a reset.
+  // v1.2.7a: `family` FIRST. apiField is a transport detail — the same weekly
+  // quota surfaces as `seven_day_fable_5` from the legacy top-level fields and
+  // as `limits[weekly_scoped:fable_5]` from limits[], depending on which parse
+  // path won that poll. Keying on it meant a response-shape flap read as a
+  // bucket switch and wiped the ring — the same failure that made the session
+  // forecast hang, but on the weekly meter, where the 2-hour warm-up would
+  // have made it far slower to notice. family is the quota's identity and is
+  // stable across both paths.
+  const srcKey = String(info.family || info.apiField || "");
+  const last = entry.samples.length ? entry.samples[entry.samples.length - 1] : null;
+
+  /* v1.2.7a — ROLLOVER DETECTION, corrected.
+
+     The first cut of this compared `resets_at` for ANY change and cleared the
+     ring when it moved. That was wrong, and badly so: the 5-hour session is a
+     ROLLING window, and its reported reset time creeps forward as usage ages
+     out of it. A creep of a few seconds per poll read as "new window" every
+     single time, so the ring was wiped on nearly every poll, the span never
+     reached minSpanMs, and the forecast sat on "Measuring your pace…"
+     indefinitely no matter how long the browser stayed open.
+
+     Same mistake in the other direction on the percent test: a rolling window
+     means the number genuinely FALLS as old activity expires, so a routine
+     62 -> 55 is decay, not a reset, and `p <= last - 5` was clearing on it.
+
+     Both signals now look for a discontinuity rather than a change:
+       • the reset time must jump FORWARD by more than cfg.jumpMs (half an hour
+         for the session, twelve for the weekly) — creep can never reach that,
+         a real reset clears it by hours;
+       • the percentage must collapse — down to 40% or less of a non-trivial
+         previous reading — which decay cannot do in one poll interval.
+     A source-bucket switch stays an immediate rollover: that's a different
+     quota entirely, not the same one moving. */
+  const jumped = entry.windowAt && windowAt && (windowAt - entry.windowAt) >= cfg.jumpMs;
+  // Two collapse shapes. The proportional one misses a reset from a low
+  // starting point (15 -> 0 is not <= 40% of a >= 20 baseline), so a fall to
+  // literal zero from anything non-trivial is treated as a reset outright —
+  // a live quota does not decay to exactly 0 in one poll interval.
+  const collapsed = last && ((last[1] >= 20 && p <= last[1] * 0.4) || (last[1] >= 5 && p === 0));
+  const switchedBucket = entry.srcKey && srcKey && srcKey !== entry.srcKey;
+  if (jumped || collapsed || switchedBucket) {
+    entry.samples = [];
+    entry.rate = null;
+    entry.atRisk = false;
+    entry.rolls = (entry.rolls || 0) + 1;   // diagnostic only; see fcCompute
+  }
+  entry.windowAt = windowAt;
+  entry.srcKey = srcKey;
+
+  // Append on any real movement, or once per minGapMs so a flat stretch still
+  // accumulates as evidence of a low rate rather than being invisible.
+  if (!entry.samples.length) {
+    entry.samples.push([now, p]);
+    return;
+  }
+  const tip = entry.samples[entry.samples.length - 1];
+  if (p !== tip[1] || (now - tip[0]) >= cfg.minGapMs) entry.samples.push([now, p]);
+}
+
+function fcPrune(entry, cfg, now) {
+  const cutoff = now - cfg.maxAgeMs;
+  let i = 0;
+  while (i < entry.samples.length && entry.samples[i][0] < cutoff) i++;
+  if (i > 0) entry.samples = entry.samples.slice(i);
+  if (entry.samples.length > cfg.maxSamples) {
+    entry.samples = entry.samples.slice(entry.samples.length - cfg.maxSamples);
+  }
+}
+
+// Least-squares slope of percent over time, returned as % per hour. Regression
+// rather than endpoint-to-endpoint so one anomalous reading can't set the pace.
+function fcSlopePerHour(samples) {
+  const n = samples.length;
+  if (n < 2) return null;
+  let st = 0, sp = 0;
+  for (const [t, p] of samples) { st += t; sp += p; }
+  const mt = st / n, mp = sp / n;
+  let num = 0, den = 0;
+  for (const [t, p] of samples) {
+    const dt = t - mt;
+    num += dt * (p - mp);
+    den += dt * dt;
+  }
+  if (den <= 0) return null;
+  return (num / den) * 3600e3;
+}
+
+function fcRound1(v) {
+  return Math.round(v * 10) / 10;
+}
+
+function fcCompute(entry, cfg, info, now) {
+  const p = Number(info.percent);
+  const resetsAt = info.resetsAt || null;
+  const samples = entry.samples;
+  if (!Number.isFinite(p)) return { available: false, reason: "no-data", resetsAt };
+
+  if (p >= 100) { entry.atRisk = false; return { available: false, reason: "maxed", resetsAt }; }
+  if (samples.length < 2) {
+    return {
+      available: false, reason: "warming", resetsAt,
+      samples: samples.length, rolls: entry.rolls || 0,
+      spanMinutes: 0, needMinutes: Math.round(cfg.minSpanMs / 60000)
+    };
+  }
+
+  const first = samples[0];
+  const last = samples[samples.length - 1];
+  const totalSpan = last[0] - first[0];
+  if (totalSpan < cfg.minSpanMs) {
+    return {
+      available: false,
+      reason: "warming",
+      resetsAt,
+      samples: samples.length,
+      rolls: entry.rolls || 0,
+      spanMinutes: Math.round(totalSpan / 60000),
+      needMinutes: Math.round(cfg.minSpanMs / 60000)
+    };
+  }
+
+  const recent = samples.filter(([t]) => now - t <= cfg.windowMs);
+  const recentSpan = recent.length >= 2 ? recent[recent.length - 1][0] - recent[0][0] : 0;
+  const recentRate = (recent.length >= 3 && recentSpan >= cfg.minSpanMs) ? fcSlopePerHour(recent) : null;
+  const overallRate = ((last[1] - first[1]) / totalSpan) * 3600e3;
+
+  let raw;
+  if (recentRate != null) raw = FC_RECENT_WEIGHT * recentRate + (1 - FC_RECENT_WEIGHT) * overallRate;
+  else raw = overallRate;
+  raw = Math.max(0, raw);
+
+  const rate = entry.rate == null ? raw : entry.rate + FC_EMA_ALPHA * (raw - entry.rate);
+  entry.rate = rate;
+
+  // Rise over the measured window. Under one integer point there's no signal —
+  // see (d). Reported anyway so the UI can say "no recent usage" honestly.
+  const base = recent.length >= 2 ? recent[0][1] : first[1];
+  const rise = last[1] - base;
+  if (rate < FC_MIN_RATE || rise < 1) {
+    entry.atRisk = false;
+    return { available: false, reason: "idle", ratePerHour: fcRound1(rate), resetsAt };
+  }
+
+  const minutesLeft = Math.max(0, Math.round(((100 - p) / rate) * 60));
+  const etaAt = now + minutesLeft * 60000;
+  const minutesToReset = resetsAt ? Math.max(0, Math.round((resetsAt - now) / 60000)) : null;
+
+  // Hysteresis — see (e). Wider band to leave the at-risk state than to enter it.
+  if (resetsAt) {
+    const margin = entry.atRisk ? 1.15 : 0.95;
+    entry.atRisk = (etaAt - now) < (resetsAt - now) * margin;
+  } else {
+    entry.atRisk = true;   // no reset time reported: the ETA is all we have
+  }
+
+  return {
+    available: true,
+    ratePerHour: fcRound1(rate),
+    minutesLeft,
+    etaAt,
+    resetsAt,
+    minutesToReset,
+    beforeReset: resetsAt ? etaAt < resetsAt : true,
+    atRisk: entry.atRisk,
+    samples: samples.length,
+    spanMinutes: Math.round(totalSpan / 60000)
+  };
+}
+
+async function updateForecast(usage) {
+  const now = Date.now();
+  let hist = await getHistory();
+  // Same org-isolation rule as applyUsage: another account's pace is not this
+  // account's pace, and its window boundaries are different too.
+  if (usage.orgId && hist.orgId && hist.orgId !== usage.orgId) hist = fcBlankHistory();
+  hist.orgId = usage.orgId || hist.orgId || null;
+
+  const out = { updatedAt: now };
+  for (const scope of FC_SCOPES) {
+    const info = usage[scope];
+    const cfg = FC_CFG[scope];
+    if (!hist[scope]) hist[scope] = fcBlankEntry();
+    if (!info || info.percent == null) {
+      out[scope] = { available: false, reason: "no-data" };
+      continue;
+    }
+    fcRecord(hist[scope], info, cfg, now);
+    fcPrune(hist[scope], cfg, now);
+    out[scope] = fcCompute(hist[scope], cfg, info, now);
+  }
+  await saveHistory(hist);
+  return out;
+}
+
+// One desktop heads-up per session window, when the projection says the quota
+// runs out inside FC_NOTIFY_MINUTES and before its reset. Keyed on the window's
+// own reset timestamp so it can't repeat within a window, and re-arms by itself
+// for the next one.
+async function maybeNotifyForecast(usage) {
+  const f = usage.forecast && usage.forecast.session;
+  if (!f || !f.available || !f.atRisk) return;
+  if (f.minutesLeft > FC_NOTIFY_MINUTES) return;
+  const settings = await getSettings();
+  if (!settings.notificationsEnabled || settings.forecastAlerts === false) return;
+
+  const key = `fc:${f.resetsAt || 0}`;
+  const { [STORAGE_KEYS.forecastNotified]: prev } =
+    await chrome.storage.local.get(STORAGE_KEYS.forecastNotified);
+  if (prev === key) return;
+  await chrome.storage.local.set({ [STORAGE_KEYS.forecastNotified]: key });
+
+  const mins = f.minutesLeft;
+  const when = mins <= 1 ? "any moment now" : `in about ${mins} minutes`;
+  const resetStr = f.resetsAt
+    ? ` It resets at ${new Date(f.resetsAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}.`
+    : "";
+  await createNotification(`claude-usage-forecast-${key}`, {
+    type: "basic",
+    iconUrl: chrome.runtime.getURL("icons/icon128.png"),
+    title: "Claude Usage Meter · pace warning",
+    message: `At about ${f.ratePerHour}% an hour you're on track to hit your session limit ${when}.${resetStr}`,
+    priority: 2
+  });
+}
+
 async function applyUsage(data, orgId) {
   let usage = await getUsage();
 
@@ -328,10 +675,17 @@ async function applyUsage(data, orgId) {
       weeklyByFamily: {},
       messagesRemaining: null,
       messagesResetAt: null,
-      updatedAt: null
+      updatedAt: null,
+      forecast: null
     };
     await setSessionLock(null);   // the old account's lockout must not pin the new one to 100%
     await saveLastFired({});      // notification thresholds re-arm for the new account
+    // v1.2.17: and the pace history — updateForecast() also stamps the org, but
+    // clearing here keeps every cross-account side channel in one place.
+    await chrome.storage.local.set({
+      [STORAGE_KEYS.history]: null,
+      [STORAGE_KEYS.forecastNotified]: null
+    });
   }
   if (orgId) usage.orgId = orgId;
 
@@ -411,8 +765,13 @@ async function applyUsage(data, orgId) {
   }
 
   usage.updatedAt = Date.now();
+  // v1.2.17: must run AFTER session/weekly are final (including the lockout pin
+  // above) — the forecaster records exactly what the strip will display, so a
+  // pinned 100% correctly reads as "maxed" rather than feeding the rate.
+  usage.forecast = await updateForecast(usage);
   await saveUsage(usage);
   await maybeNotify(usage);
+  await maybeNotifyForecast(usage);
   await broadcastUsage(usage);
 }
 
@@ -569,6 +928,11 @@ async function applyMessageLimit(payload) {
     await setSessionLock({ until });
     usage.session = { percent: 100, resetsAt: resetTs || (usage.session && usage.session.resetsAt) || until };
   }
+
+  // v1.2.17: the pin above changes the number the forecaster is meant to be
+  // tracking, so recompute here rather than leaving a stale "~40m left" chip on
+  // screen for up to a poll interval after the limit has actually been hit.
+  if (reached) usage.forecast = await updateForecast(usage);
 
   await saveUsage(usage);
   await maybeNotify(usage);
@@ -857,9 +1221,12 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     (async () => {
       await chrome.storage.local.set({
         [STORAGE_KEYS.usage]: {
-          session: null, weekly: null, weeklyByFamily: {},
-          messagesRemaining: null, messagesResetAt: null, updatedAt: null
+          session: null, weekly: null, fable: null, weeklyByFamily: {},
+          messagesRemaining: null, messagesResetAt: null, updatedAt: null,
+          forecast: null
         },
+        [STORAGE_KEYS.history]: null,
+        [STORAGE_KEYS.forecastNotified]: null,
         [STORAGE_KEYS.lastFiredThresholds]: {},
         [STORAGE_KEYS.orgCache]: null,
         [STORAGE_KEYS.lastError]: null,
