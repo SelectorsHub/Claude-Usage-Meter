@@ -128,10 +128,9 @@
   width: 16px;
   height: 16px;
   display: block;
-  object-fit: contain;
-  border-radius: 4px;
+  overflow: visible;
   opacity: 0.95;
-  transition: opacity 0.15s, transform 0.15s;
+  transition: opacity 0.15s, transform 0.15s, filter 0.3s;
 }
 
 #claude-usage-overlay .cut-logo-wrap:hover .cut-logo,
@@ -139,6 +138,99 @@
   opacity: 1;
   transform: scale(1.08);
 }
+
+/* ===== v1.2.8: LIVE-UPDATE NEEDLE SWEEP =================================
+   The mark is now inline SVG (see buildOverlay() in content-script.js) so its
+   needle is a rotatable node. On each arriving reading the needle drops to the
+   bottom-left end of the gauge and sweeps back up to rest — a tachometer blip.
+
+   Event-driven, never continuous: the meter polls, it does not stream, so
+   permanent motion would claim activity that isn't happening. It also keeps
+   the strip still while you type, which a perpetual animation 40px above the
+   composer would not, and which WCAG 2.2.2 asks for. Costs zero horizontal
+   space and works collapsed for free — the logo is one of the few things the
+   collapsed view keeps. */
+#claude-usage-overlay .cut-needle {
+  /* The gauge pivot, which is also the hub circle's centre. Rotating about
+     anything else makes the needle detach from the hub mid-sweep. */
+  transform-origin: 19.78px 18.19px;
+  transform-box: view-box;
+}
+
+/* Dashboard self-test: drop to the empty end of the scale, sweep full-scale to
+   the top, hold, then fall back and settle at 0deg — the pose the needle is
+   drawn in, where it lines up with the arc's fixed coral/grey split.
+
+   -53.3deg and 51.7deg are the arc's two termini expressed relative to that
+   drawn angle: the needle sits ~51.7 degrees round from twelve o'clock inside
+   an arc spanning 105 degrees, so the empty end is 105 - 51.7 below it and the
+   full end is 51.7 above. Negative is anticlockwise, because SVG's positive
+   rotation is clockwise. Keep these in step with the SVG geometry in
+   buildOverlay() if the mark is ever redrawn.
+
+   The 62% step is there purely to shape the fall, which is otherwise one long
+   linear slide. The last three steps overshoot and decay, which is what sells
+   it as a physical needle rather than a sliding graphic. */
+@keyframes cut-needle-sweep {
+  0%   { transform: rotate(-53.3deg); }
+  6%   { transform: rotate(-46deg); }
+  16%  { transform: rotate(-25deg); }
+  28%  { transform: rotate(12deg); }
+  36%  { transform: rotate(42deg); }
+  40%  { transform: rotate(51.7deg); }
+  50%  { transform: rotate(51.7deg); }
+  62%  { transform: rotate(28.4deg); }
+  76%  { transform: rotate(-5deg); }
+  86%  { transform: rotate(2deg); }
+  94%  { transform: rotate(-0.7deg); }
+  100% { transform: rotate(0deg); }
+}
+
+/* linear, because the motion curve is already carved into the keyframe spacing
+   above. Layering an easing function on top dumps the whole swing into the
+   first third and leaves the rest of it visibly dead. */
+#claude-usage-overlay .cut-logo.cut-logo-sweep .cut-needle {
+  animation: cut-needle-sweep 1250ms linear;
+}
+
+/* Nothing heard back in ~2.5 poll intervals: the numbers on screen are
+   history. The mark desaturates and dims, and the logo tooltip says so in
+   words. Deliberately confined to the logo — greying a percentage would read
+   as "0%", and the percentage colours are the only things on this strip that
+   should be raising an alarm. */
+#claude-usage-overlay .cut-logo.cut-logo-stale {
+  filter: grayscale(0.9);
+  opacity: 0.45;
+}
+#claude-usage-overlay .cut-logo.cut-logo-stale .cut-needle {
+  animation: none;
+}
+
+/* WCAG 2.2.2 / vestibular safety. The sweep IS the signal, so it degrades to a
+   brightness blink in place rather than vanishing: the message survives, the
+   movement doesn't. */
+@media (prefers-reduced-motion: reduce) {
+  /* No sweep at all. The needle holds its pose and a brightness dip carries the
+     "it refreshed" signal instead. */
+  #claude-usage-overlay .cut-logo.cut-logo-sweep .cut-needle {
+    animation: cut-needle-fade 900ms ease-out;
+  }
+  @keyframes cut-needle-fade {
+    0%, 100% { opacity: 1; }
+    25%, 45% { opacity: 0.3; }
+  }
+}
+
+/* "Live - updated 12s ago." appended to the logo tooltip, so the sweep is
+   self-explaining on hover instead of being an unexplained twitch. */
+#claude-usage-overlay .cut-tip-live {
+  display: block;
+  margin-top: 7px;
+  padding-top: 7px;
+  border-top: 1px solid rgba(128, 128, 128, 0.28);
+  opacity: 0.9;
+}
+#claude-usage-overlay .cut-tip-live:empty { display: none; }
 
 #claude-usage-overlay .cut-tooltip {
   position: absolute;
@@ -1530,3 +1622,55 @@
   .cut-rate-nudge .cut-nudge-stars span { opacity: 1; transform: none; animation: none; }
   #claude-usage-overlay .cut-rate-wrap.cut-rate-pulse .cut-rate { animation: none; }
 }
+
+/* ===== v1.2.8: FIT-TO-WIDTH ==============================================
+   Escalating shed levels driven by MEASUREMENT, not by fixed breakpoints —
+   fitStrip() in content-script.js adds cut-fit-1 .. cut-fit-6 one at a time
+   until the last child sits inside the pill. The container-query tiers above
+   still handle genuinely narrow windows; this layer exists because the strip's
+   natural width depends on which optional pieces are switched on, so no fixed
+   threshold can be right for every combination.
+
+   Order matches the tiers' own priority, cheapest loss first. !important
+   throughout because most of these carry inline display values written by
+   renderForecast() / renderCompact() / applyFieldVisibility(), and this layer
+   has to be able to override them. */
+
+/* 1. The trailing "left" after the forecast time. Costs nothing to lose. */
+#claude-usage-overlay.cut-fit-1 .cut-fc-word { display: none !important; }
+
+/* 2. Inline reset times, both views. Still on the segment tooltips and in the
+      popup, so this is a relocation rather than a loss. Biggest single saving
+      on the row — roughly 220px with two meters showing. */
+#claude-usage-overlay.cut-fit-2 .cut-meta,
+#claude-usage-overlay.cut-fit-2 .cut-sep,
+#claude-usage-overlay.cut-fit-2 .cut-creset { display: none !important; }
+
+/* 3. The forecast chip. Also still on the tooltip. */
+#claude-usage-overlay.cut-fit-3 .cut-fc,
+#claude-usage-overlay.cut-fit-3 .cut-cfc { display: none !important; }
+
+/* 4. "Rate us" and "Support" shrink to their icons. The star still reads. */
+#claude-usage-overlay.cut-fit-4 .cut-rate .cut-rate-txt,
+#claude-usage-overlay.cut-fit-4 .cut-donate .cut-donate-txt { display: none !important; }
+#claude-usage-overlay.cut-fit-4 .cut-rate,
+#claude-usage-overlay.cut-fit-4 .cut-donate { padding: 2px 3px; }
+
+/* 5. The messages counter. */
+#claude-usage-overlay.cut-fit-5 .cut-msgs,
+#claude-usage-overlay.cut-fit-5 .cut-msgs-divider { display: none !important; }
+
+/* 6. Share. Last promotional element standing, dropped before anything
+      functional — the gear, collapse and close all outrank it. */
+#claude-usage-overlay.cut-fit-6 .cut-share-wrap,
+#claude-usage-overlay.cut-fit-6 .cut-share-divider { display: none !important; }
+
+/* Final fallback, set only when all six levels weren't enough. Scrolling clips
+   the tooltips that hang above the strip, which is why it isn't used earlier —
+   but an unreachable close button is worse. */
+#claude-usage-overlay.cut-fit-scroll .cut-strip {
+  overflow-x: auto;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+#claude-usage-overlay.cut-fit-scroll .cut-strip::-webkit-scrollbar { display: none; }

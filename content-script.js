@@ -1,4 +1,39 @@
-// content-script.js (isolated world, v1.27)
+// content-script.js (isolated world, v1.28)
+// - v1.2.8: LIVE-UPDATE NEEDLE SWEEP. The strip mark is now inline SVG instead
+//   of icons/icon-strip.png, so its gauge needle is a rotatable node. On each
+//   arriving reading it runs a dashboard self-test: drop to the empty end of
+//   the arc, sweep full-scale to the top, hold, then fall back and settle in
+//   the pose the logo is drawn in. When readings stop (roughly 2.5 missed poll
+//   intervals, derived from the user's own pollMinutes setting rather than
+//   hardcoded) the whole mark desaturates and dims.
+//   The needle settles at the ARTWORK's angle, not at the current percentage.
+//   Parking it at the reading was tried and reverted: the arc's coral/grey
+//   split is fixed brand artwork, so a needle at 85% against a fill that stops
+//   at half-scale reads as a broken gauge, and making the fill track the needle
+//   would leave the mark almost entirely grey at low usage — where most users
+//   sit. The mark stays a logo; the numbers beside it are the readout.
+//   Not a perpetual animation: the meter polls, it does not stream, so constant
+//   motion would be claiming activity that isn't happening — and would keep
+//   claiming it while the API returned 401s. Gating the sweep on a CHANGED
+//   usage.updatedAt gives "a round-trip succeeded" for free, because every
+//   failure path in pollUsage() returns before that stamp is written. The stale
+//   state is the first stale-data warning the strip has ever had. Costs zero
+//   horizontal space and works collapsed, since the logo is one of the few
+//   things the collapsed view keeps. Geometry notes live next to the SVG in
+//   buildOverlay(); motion and the reduced-motion fallback are in overlay.css
+//   under ".cut-needle".
+// - v1.2.8: FIT-TO-WIDTH. Fixes the strip losing its controls when claude.ai
+//   opens a preview panel. The container-query tiers shed at FIXED widths, but
+//   the strip's natural width isn't fixed — it swings from ~470px to ~755px
+//   depending on which optional pieces are on (forecast chip, Fable, messages
+//   counter, Rate us, Share). At the ~656px composer a preview panel leaves,
+//   a loaded strip overflows by 99px, yet 656 is above every shedding
+//   threshold AND below the has-fable rule at 720px that turns .cut-strip into
+//   a scroll container — so the overflow became invisible and ate Share, the
+//   gear, collapse and close. fitStrip() measures instead: it escalates through
+//   the same shed priority the tiers use until the last child sits inside the
+//   pill, driven by a ResizeObserver so a panel opening is enough to retrigger
+//   it with no DOM mutation to hang off. See ".cut-fit-" in overlay.css.
 // - v1.2.17: SESSION FORECASTING. The strip could tell you where you were, not
 //   where you were heading — "62%" reads the same whether it took ten minutes
 //   or four hours. background.js now derives a burn rate from the poll history
@@ -536,6 +571,9 @@
     if (tip) tip.textContent = collapsed
       ? "Expand the strip back to the full view."
       : collapseHintText();
+    // v1.2.8: the two views have completely different natural widths, and
+    // expanding is the direction that can overflow.
+    scheduleFit(root);
   }
   const SHARE_KEY = "share_clicked";
 
@@ -574,6 +612,88 @@
   }
   let latestUsage = null;
   let latestMsgsRemaining = null;
+
+  // ===== v1.2.8: LIVE-UPDATE NEEDLE SWEEP ==================================
+  // On each arriving reading the needle runs a dashboard self-test: drops to
+  // the empty end of the arc, sweeps full-scale to the top, holds for a beat,
+  // then falls back and settles in the pose the logo is drawn in.
+  //
+  // It settles at the ARTWORK's angle rather than at the current percentage,
+  // and that's deliberate. The arc's coral/grey split is fixed brand artwork,
+  // so a needle parked at 85% while the fill stops at half-scale reads as a
+  // broken gauge. The alternative — making the fill track the needle — would
+  // leave the mark almost entirely grey at low usage, which is where most users
+  // sit most of the time. The mark stays a logo; the numbers next to it are
+  // where usage is actually read.
+  //
+  // Event-driven, never continuous. The meter polls /usage on a timer; it does
+  // not stream. Something permanently in motion would be claiming activity that
+  // isn't happening, and would keep claiming it just as confidently while the
+  // API returned 401s. Tying the sweep to the event makes the signal truthful
+  // both ways: a sweep means "a reading just arrived", and a logo that has gone
+  // quiet and grey is the only stale-data warning the strip has ever had.
+  //
+  // pollUsage() returns early on every failure path without touching
+  // usage.updatedAt, and the model-switch / message_limit rebroadcasts reuse the
+  // previous poll's stamp — so gating the sweep on a CHANGED updatedAt gives us
+  // "a network round-trip succeeded" for free, with no extra plumbing.
+  let lastUsageStamp = 0;
+  let liveBeatTimer = null;
+  // Derived from the user's poll interval (options page, 1–60 min) rather than
+  // fixed: a hardcoded 3 minutes would pin anyone on a 5-minute poll to a
+  // permanently grey logo. Allow ~2.5 missed polls before calling it stale.
+  let pollMinutes = 1;
+  // Keep in step with the cut-needle-sweep keyframes in overlay.css.
+  const SWEEP_MS = 1250;
+  function liveStaleMs() {
+    return Math.max(3 * 60 * 1000, pollMinutes * 60 * 1000 * 2.5 + 30 * 1000);
+  }
+  function liveAgeText(ms) {
+    if (ms < 20000) return "just now";
+    if (ms < 90000) return `${Math.max(1, Math.round(ms / 1000))}s ago`;
+    const m = Math.round(ms / 60000);
+    if (m < 60) return `${m}m ago`;
+    return `${Math.round(m / 60)}h ago`;
+  }
+  function pulseLive(root) {
+    root = root || document.getElementById(OVERLAY_ID);
+    if (!root) return;
+    const svg = root.querySelector(".cut-logo");
+    if (!svg) return;
+    svg.classList.remove("cut-logo-stale");
+    // Re-adding a class that's already present does not restart a CSS
+    // animation; a forced reflow between the remove and the add does. Without
+    // this, two readings landing close together would show only one sweep.
+    svg.classList.remove("cut-logo-sweep");
+    void svg.getBoundingClientRect().width;
+    svg.classList.add("cut-logo-sweep");
+    if (liveBeatTimer) clearTimeout(liveBeatTimer);
+    liveBeatTimer = setTimeout(() => {
+      svg.classList.remove("cut-logo-sweep");
+      liveBeatTimer = null;
+    }, SWEEP_MS + 60);
+    refreshLiveState(root);
+  }
+  function refreshLiveState(root) {
+    root = root || document.getElementById(OVERLAY_ID);
+    if (!root) return;
+    const svg = root.querySelector(".cut-logo");
+    const tip = root.querySelector('[data-cut="tip-live"]');
+    const stamp = Number(latestUsage && latestUsage.updatedAt) || lastUsageStamp || 0;
+    const age = stamp ? Date.now() - stamp : Infinity;
+    const stale = !(age < liveStaleMs());
+    // Stale = the mark desaturates and dims. Kept off the numbers on purpose:
+    // greying a percentage would read as "0%", and the percentage colours are
+    // the only things on this strip that should be raising an alarm.
+    if (svg) svg.classList.toggle("cut-logo-stale", stale);
+    if (tip) {
+      tip.textContent = !stamp
+        ? "Waiting for the first reading…"
+        : stale
+          ? `Updates have stopped — last reading ${liveAgeText(age)}. Check you're still signed in to claude.ai.`
+          : `Live — updated ${liveAgeText(age)}.`;
+    }
+  }
 
   async function isDismissed() {
     const { [DISMISS_KEY]: until } = await chrome.storage.local.get(DISMISS_KEY);
@@ -797,16 +917,39 @@
   function buildOverlay() {
     const root = document.createElement("div");
     root.id = OVERLAY_ID;
-    const logoUrl = chrome.runtime.getURL("icons/icon-strip.png");
     const tooltipText =
       "Claude Usage Meter — shows your Claude.ai session and weekly usage. " +
+      "The gauge sweeps each time fresh numbers arrive. " +
       "Click the extension icon in the toolbar for full details and settings.";
+    // v1.2.8: the mark is inline SVG rather than icons/icon-strip.png so the
+    // needle can be its own rotatable node. Geometry is traced from the 256px
+    // PNG: gauge pivot (19.78, 18.19) doubles as the needle hub, band runs
+    // from 12 o'clock counter-clockwise to ~105°, grey handing over to coral at
+    // ~58°, which is exactly where the needle rests. Draw order matters — the
+    // hub is painted AFTER the needle so the needle's wide base is hidden
+    // underneath it and the pivot stays clean through the whole sweep.
+    const logoSvg = `
+      <svg class="cut-logo" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false">
+        <g class="cut-logo-art" fill="none">
+          <path class="cut-gauge-rest" d="M19.78 4.08A14.11 14.11 0 0 0 7.82 10.71"
+                stroke="#a8a8ad" stroke-width="3.66"></path>
+          <path class="cut-gauge-used" d="M7.82 10.71A14.11 14.11 0 0 0 6.15 21.84"
+                stroke="#d97757" stroke-width="3.66"></path>
+          <g class="cut-needle" data-cut="needle">
+            <path d="M21.21 16.38 L10.52 10.34 L10.00 11.00 L18.36 19.99 Z" fill="#d97757"></path>
+          </g>
+          <circle cx="19.78" cy="18.19" r="3.84" fill="#d97757"></circle>
+          <path d="M19.97 18.21L22.83 18.56M19.93 18.31L22.23 20.04M19.86 18.37L20.98 21.02M19.76 18.38L19.41 21.24M19.66 18.34L17.93 20.64M19.60 18.27L16.95 19.39M19.59 18.17L16.73 17.82M19.63 18.07L17.33 16.34M19.70 18.01L18.58 15.36M19.80 18.00L20.15 15.14M19.90 18.04L21.63 15.74M19.96 18.11L22.61 16.99"
+                stroke="#ffffff" stroke-width="0.66" stroke-linecap="round"></path>
+          <circle cx="19.78" cy="18.19" r="0.72" fill="#ffffff"></circle>
+        </g>
+      </svg>`;
     root.innerHTML = `
       <div class="cut-strip" role="status">
         <span class="cut-logo-wrap" tabindex="0" role="img"
               aria-label="${tooltipText.replace(/"/g, '&quot;')}">
-          <img class="cut-logo" src="${logoUrl}" alt="" />
-          <span class="cut-tooltip" aria-hidden="true">${tooltipText}</span>
+          ${logoSvg}
+          <span class="cut-tooltip" aria-hidden="true">${tooltipText}<span class="cut-tip-live" data-cut="tip-live"></span></span>
         </span>
         <div class="cut-divider" data-cut="session-divider"></div>
         <div class="cut-seg" data-cut="session">
@@ -1817,6 +1960,87 @@
     }
   }
 
+  // ===== v1.2.8: FIT-TO-WIDTH ==============================================
+  // The container-query tiers in overlay.css shed content at FIXED widths
+  // (640px, 480px, 400px...). That only works if the strip's natural width is
+  // fixed too — and it isn't. Every optional piece is independently toggleable:
+  // the forecast chip, the Fable segment, the messages counter, Rate us, Share.
+  // Fully loaded the row needs ~755px; stripped back, ~470px.
+  //
+  // So there's a dead zone. At ~656px — which is exactly the composer width
+  // when claude.ai opens a preview panel on the right — a fully loaded strip
+  // needs 99px more than it has, but 656 is above every shedding threshold, so
+  // nothing sheds. Worse, 656 IS below the has-fable rule at 720px, which turns
+  // .cut-strip into a scroll container: the overflow stops being visible and
+  // silently eats whatever is last in the row. Last in the row is Share, the
+  // gear, collapse and close — the controls, i.e. the things you most need.
+  //
+  // The thresholds can't be fixed, because the correct threshold depends on
+  // which pieces are switched on. So measure instead: shed in the same priority
+  // order the CSS tiers use, one level at a time, until the last child sits
+  // inside the pill. The tiers stay — they still handle genuinely narrow
+  // windows, and this layer composes with them.
+  const FIT_LEVELS = 6;
+  // .cut-strip's right padding: the close button should land inside it.
+  const STRIP_PAD_RIGHT = 4;
+  let fitRaf = 0;
+  let fitObserver = null;
+
+  function setFitLevel(root, n) {
+    for (let i = 1; i <= FIT_LEVELS; i++) {
+      root.classList.toggle("cut-fit-" + i, i <= n);
+    }
+  }
+  // Measures the LAST child's right edge rather than reading scrollWidth.
+  // scrollWidth only reports overflow on a scroll container, and giving
+  // .cut-strip an overflow value would clip the tooltips that hang above it
+  // (they're children, not portaled — only the popovers are).
+  function stripOverflowPx(root) {
+    const strip = root.querySelector(".cut-strip");
+    const last = strip && strip.lastElementChild;
+    if (!strip || !last) return 0;
+    const s = strip.getBoundingClientRect();
+    // Zero width = not laid out yet (background tab, mid-teardown). Measuring
+    // then would report a huge overflow and shed everything for no reason.
+    if (!s.width) return 0;
+    return last.getBoundingClientRect().right + STRIP_PAD_RIGHT - s.right;
+  }
+  function fitStrip(root) {
+    root = root || document.getElementById(OVERLAY_ID);
+    if (!root || !root.isConnected) return;
+    // Always start from the top: space can be given back as well as taken away
+    // (preview panel closed, window widened), and the strip should recover.
+    root.classList.remove("cut-fit-scroll");
+    setFitLevel(root, 0);
+    if (stripOverflowPx(root) <= 0.5) return;
+    for (let n = 1; n <= FIT_LEVELS; n++) {
+      setFitLevel(root, n);
+      if (stripOverflowPx(root) <= 0.5) return;
+    }
+    // Everything optional is gone and it still doesn't fit. Scroll is the least
+    // bad ending: it clips the tooltips, but it beats silently swallowing the
+    // close button with no way to reach it.
+    root.classList.add("cut-fit-scroll");
+  }
+  function scheduleFit(root) {
+    if (fitRaf) return;
+    fitRaf = requestAnimationFrame(() => {
+      fitRaf = 0;
+      fitStrip(root);
+    });
+  }
+  // The composer resizing is the whole point of this — a preview panel opening
+  // changes the strip's available width without any DOM mutation or usage
+  // update to hang a re-render off. Safe from feedback loops: the fit classes
+  // only ever change the strip's CHILDREN, never the observed element's own
+  // width, so a fit pass can't retrigger the observer.
+  function observeFit(root) {
+    if (!root || typeof ResizeObserver === "undefined") return;
+    if (fitObserver) fitObserver.disconnect();
+    fitObserver = new ResizeObserver(() => scheduleFit());
+    fitObserver.observe(root);
+  }
+
   function renderInto(root) {
     if (!root) return;
     renderSegment(root.querySelector('[data-cut="session"]'), latestUsage && latestUsage.session, "Session");
@@ -1842,6 +2066,10 @@
     }
     renderForecast(root);
     renderCompact(root);
+    // v1.2.8: the 30s repaint is what ages the mark into its stale state and
+    // keeps the "updated 40s ago" line honest. It never sweeps — only a new
+    // reading does that, from the usage-updated handler.
+    refreshLiveState(root);
     applyRateVisibility(root);
     applyDonateVisibility(root);
     if (!sharePopOpen) applyShareVisibility(root);
@@ -1877,6 +2105,11 @@
     } else {
       scheduleNudge();
     }
+
+    // v1.2.8: content just changed, so the natural width did too — a Fable
+    // segment appearing or the forecast chip earning its place can push the
+    // controls off the end. Re-fit after layout settles.
+    scheduleFit(root);
   }
 
   function findMountTarget() {
@@ -1917,6 +2150,9 @@
     // Already correctly placed (sibling immediately before composer)?
     if (existing && existing.nextElementSibling === composer) {
       applyTheme(existing);
+      // v1.2.8: re-arm in case claude.ai swapped the composer subtree out from
+      // under us — disconnect/observe is idempotent, so this is safe to repeat.
+      observeFit(existing);
       renderInto(existing);
       return;
     }
@@ -1925,6 +2161,7 @@
     const pill = buildOverlay();
     applyTheme(pill);
     parent.insertBefore(pill, composer);
+    observeFit(pill);
     renderInto(pill);
   }
 
@@ -1985,6 +2222,14 @@
     }
     const root = document.getElementById(OVERLAY_ID);
     if (root) renderInto(root);
+    // v1.2.8: beat ONLY on a genuinely new reading. applyCurrentModel() and
+    // applyMessageLimit() also broadcast, but carry the previous poll's
+    // updatedAt — flashing "live data!" for a model switch would be a lie.
+    const stamp = Number(msg.usage && msg.usage.updatedAt) || 0;
+    if (stamp && stamp !== lastUsageStamp) {
+      lastUsageStamp = stamp;
+      pulseLive(root);
+    }
   });
 
   (async () => {
@@ -1993,10 +2238,19 @@
       if (resp && resp.usage) {
         latestUsage = resp.usage;
         latestMsgsRemaining = resp.usage.messagesRemaining;
+        // v1.2.8: adopt the stored reading's stamp WITHOUT beating. This is
+        // last poll's data replayed from storage, not a live arrival — and on
+        // a stale tab it may be hours old, in which case the dot should come
+        // up grey. The force-refresh fired just below produces the first real
+        // beat a second or two later.
+        lastUsageStamp = Number(resp.usage.updatedAt) || 0;
       }
       // v1.2.7: the popup's "Show in strip" selection.
       if (resp && resp.settings && resp.settings.stripFields) {
         stripFields = { ...stripFields, ...resp.settings.stripFields };
+      }
+      if (resp && resp.settings && resp.settings.pollMinutes) {
+        pollMinutes = Number(resp.settings.pollMinutes) || 1;
       }
       try {
         const { [RATE_KEY]: rv, [RATE_AT_KEY]: rav, [SHARE_KEY]: sv, [COLLAPSE_KEY]: cv,
@@ -2048,11 +2302,15 @@
     // v1.2.7: the popup writes stripFields into `settings`; apply it immediately
     // so toggling a checkbox updates the strip without reloading claude.ai.
     if (changes.settings) {
-      const sf = changes.settings.newValue && changes.settings.newValue.stripFields;
+      const nv = changes.settings.newValue || {};
+      const sf = nv.stripFields;
+      // v1.2.8: the stale threshold is derived from the poll interval, so an
+      // options-page change to it has to reach the strip without a reload.
+      if (nv.pollMinutes) pollMinutes = Number(nv.pollMinutes) || 1;
       if (sf) {
         stripFields = { ...stripFields, ...sf };
-        renderInto(document.getElementById(OVERLAY_ID));
       }
+      if (sf || nv.pollMinutes) renderInto(document.getElementById(OVERLAY_ID));
     }
     if (changes[RATE_AT_KEY]) {
       ratedAt = Number(changes[RATE_AT_KEY].newValue) || 0;
