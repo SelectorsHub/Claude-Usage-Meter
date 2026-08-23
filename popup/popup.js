@@ -160,7 +160,10 @@ function renderError(state) {
   const el = document.getElementById("error-banner");
   const { lastError, notificationPermission, lastNotifyError } = state;
   const lines = [];
-  if (lastError && lastError.msg) {
+  // v1.2.9: the unmetered notice already explains this case in full; a red
+  // error banner alongside it would contradict it.
+  const unmetered = !!(state.usage && state.usage.unmetered);
+  if (lastError && lastError.msg && !unmetered) {
     if (lastError.msg.toLowerCase().includes("not signed in")) {
       lines.push(`Not signed in to <a href="https://claude.ai" target="_blank">claude.ai</a>. Sign in, then click refresh.`);
     } else {
@@ -214,7 +217,15 @@ async function render(state) {
   renderMessagesLeft(usage);
   renderFields(state && state.settings, usage);
   document.getElementById("updated").textContent = fmtUpdated(usage && usage.updatedAt);
-  document.getElementById("empty-hint").classList.toggle("hidden", hasSession || hasWeekly);
+  // v1.2.9: an account Claude reports no usage for is NOT a signed-out account.
+  // Showing the sign-in hint there sends the user chasing a problem that doesn't
+  // exist and makes the extension look broken.
+  const unmetered = !!(usage && usage.unmetered);
+  const nothingToShow = !(hasSession || hasWeekly);
+  document.getElementById("empty-hint")
+    .classList.toggle("hidden", unmetered || !nothingToShow);
+  document.getElementById("unmetered-hint")
+    .classList.toggle("hidden", !unmetered);
   renderError(state);
 }
 

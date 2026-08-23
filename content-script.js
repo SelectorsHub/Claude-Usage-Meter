@@ -852,6 +852,25 @@
   // v1.2.7: apply the popup's "Show in strip" selection. Runs on every render so
   // a toggle takes effect live (storage.onChanged → renderInto), and so a
   // segment that gains data mid-session still appears on its own.
+  // v1.2.9: does this account report a weekly quota at all? Not every plan
+  // does. Without this the Weekly meter sat on a permanent "— waiting…" for
+  // those accounts, which reads exactly like the extension is broken — and it
+  // burns strip width, which is the scarcest thing we have.
+  //
+  // Deliberately conservative: only hide once a poll has actually SUCCEEDED and
+  // come back with a session but no weekly. Before the first reading, or when
+  // nothing parsed at all, "waiting…" is still the honest thing to show.
+  function isUnmetered() {
+    return !!(latestUsage && latestUsage.unmetered);
+  }
+
+  function weeklyAvailable() {
+    if (isUnmetered()) return false;
+    if (!latestUsage || !latestUsage.updatedAt) return true;
+    if (latestUsage.weekly) return true;
+    return !latestUsage.session;
+  }
+
   function applyFieldVisibility(root, fable) {
     if (!root) return;
     fableVisible = !!fable;
@@ -869,7 +888,8 @@
     const meters = [
       { on: fieldOn("session"), seg: '[data-cut="session"]', div: '[data-cut="session-divider"]',
         chip: '[data-cut="c-session-wrap"]', chipDiv: null },
-      { on: fieldOn("weekly"),  seg: '[data-cut="weekly"]',  div: '[data-cut="weekly-divider"]',
+      { on: fieldOn("weekly") && weeklyAvailable(),
+        seg: '[data-cut="weekly"]',  div: '[data-cut="weekly-divider"]',
         chip: '[data-cut="c-weekly-wrap"]',  chipDiv: '[data-cut="c-weekly-divider"]' },
       { on: fableVisible,       seg: '[data-cut="fable"]',   div: '[data-cut="fable-divider"]',
         chip: '[data-cut="c-fable-wrap"]',   chipDiv: '[data-cut="c-fable-divider"]' }
@@ -1227,6 +1247,12 @@
         // is the ONLY place its full name and reset live — always allow it. (The
         // tip text itself already omits the reset when that toggle is off.)
         if (key === "fable") return seg.dataset.cutTip || "";
+        // v1.2.9: the unmetered notice must ALWAYS surface. The rule below
+        // suppresses a segment's tip whenever its inline meta is on screen —
+        // right for "Reset in 2h" (don't repeat visible text), but fatal here,
+        // because the meta is always visible in this state and the tip is the
+        // only place the explanation lives.
+        if (isUnmetered() && seg.dataset.cutTip) return seg.dataset.cutTip;
         const parts = [];
         // Reset time: v1.2.7/v1.2.13 rules unchanged — suppressed when its
         // toggle is off, and skipped when the inline "Reset in …" is already
@@ -2043,7 +2069,52 @@
 
   function renderInto(root) {
     if (!root) return;
-    renderSegment(root.querySelector('[data-cut="session"]'), latestUsage && latestUsage.session, "Session");
+    // v1.2.9: this plan reports no usage at all (confirmed: /usage returns 200
+    // with every bucket null on Free). A row of "—" reads as a broken
+    // extension, so say what's actually going on. One line, no alarm colour —
+    // nothing is wrong, there is just nothing to show.
+    if (isUnmetered()) {
+      // Four short lines, most important first. A dense paragraph in a hover tip
+      // goes unread — the one thing that must land is line 1. Declared here, not
+      // inside the block below, because the collapsed pill's tip needs it too.
+      const TIP_HTML =
+        "<b>This changed on Claude\u2019s side, not here.</b><br>" +
+        "Check <b>Account \u203A Settings</b> on claude.ai \u2014 the <b>Usage</b> tab is " +
+        "gone for Free accounts, so there\u2019s no data left to read.<br>" +
+        "We\u2019re working on a workaround and hope to have it soon.";
+      const TIP_TEXT =
+        "This changed on Claude\u2019s side, not here. Check Account \u203A Settings on " +
+        "claude.ai \u2014 the Usage tab is gone for Free accounts, so there\u2019s no data " +
+        "left to read. We\u2019re working on a workaround and hope to have it soon.";
+      const seg = root.querySelector('[data-cut="session"]');
+      if (seg) {
+        const labelEl = seg.querySelector('[data-cut-label]');
+        const pctEl   = seg.querySelector('[data-cut-pct]');
+        const metaEl  = seg.querySelector('[data-cut-meta]');
+        if (labelEl) labelEl.textContent = "Usage";
+        if (pctEl) { pctEl.textContent = "n/a"; pctEl.className = "cut-pct"; }
+        // v1.2.9 copy: "Claude" is deliberately the SUBJECT of this sentence.
+        // Passive wording ("not available", "no data") reads as the extension
+        // failing, and that lands as a one-star review for something we don't
+        // control. Naming who removed it, and saying it changed, puts the fact
+        // where it belongs.
+        if (metaEl) metaEl.textContent = "Claude no longer shares usage data for Free accounts";
+        seg.dataset.cutTip = TIP_HTML;
+        seg.setAttribute("aria-label", TIP_TEXT);   // screen readers get plain text
+        seg.classList.remove("cut-alert", "cut-alert-max");
+      }
+      const cs = root.querySelector('[data-cut="c-session"]');
+      if (cs) cs.textContent = "n/a";
+      const csr = root.querySelector('[data-cut="c-session-reset"]');
+      if (csr) csr.style.display = "none";
+      // The collapsed pill has its own tip element and it still read "Waiting
+      // for data" — which flatly contradicts the message and implies we're
+      // stuck loading. Give it the same explanation.
+      const cst = root.querySelector('[data-cut="c-session-tip"]');
+      if (cst) cst.innerHTML = TIP_HTML;
+    } else {
+      renderSegment(root.querySelector('[data-cut="session"]'), latestUsage && latestUsage.session, "Session");
+    }
     renderSegment(root.querySelector('[data-cut="weekly"]'),  latestUsage && latestUsage.weekly,  weeklyLabel(latestUsage && latestUsage.weekly));
     // v1.2.6/v1.2.7: Fable segment — rendered when the usage API reports a Fable
     // bucket AND the user hasn't switched it off in the popup.
@@ -2064,8 +2135,10 @@
         segF.setAttribute("aria-label", segF.dataset.cutTip);
       }
     }
-    renderForecast(root);
-    renderCompact(root);
+    if (!isUnmetered()) {
+      renderForecast(root);
+      renderCompact(root);
+    }
     // v1.2.8: the 30s repaint is what ages the mark into its stale state and
     // keeps the "updated 40s ago" line honest. It never sweeps — only a new
     // reading does that, from the usage-updated handler.

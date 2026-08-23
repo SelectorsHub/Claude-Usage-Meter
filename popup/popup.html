@@ -59,6 +59,21 @@
       Sign in to <strong>claude.ai</strong> in this browser. Click the refresh icon to retry.
     </div>
 
+    <!-- v1.2.9: shown INSTEAD of the sign-in hint when Claude reports no usage
+         for this account. Telling a Free user to "sign in" when they already are
+         blames them for a change Anthropic made. -->
+    <div id="unmetered-hint" class="empty-hint hidden">
+      <strong>Claude no longer shares usage data for Free accounts.</strong><br>
+      This changed on Claude&rsquo;s side. Check <strong>Account &rsaquo; Settings</strong>
+      on claude.ai &mdash; the <strong>Usage</strong> tab is gone for Free accounts, so
+      there is no data left for any tracker to read. Nothing is wrong with Claude
+      Usage Meter, and no setting here will bring the numbers back.<br><br>
+      We&rsquo;re working on a workaround and hope to have it soon. If we find one
+      that works reliably it will ship in an update &mdash; no action needed from you.<br><br>
+      Session, weekly and Fable meters work on <strong>Pro, Max and Team</strong>,
+      and will appear here automatically.
+    </div>
+
     <button id="fields-toggle" class="fields-toggle" aria-expanded="false" aria-controls="fields-panel">
       <svg class="fields-toggle-ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="21" x2="4" y2="14"></line><line x1="4" y1="10" x2="4" y2="3"></line><line x1="12" y1="21" x2="12" y2="12"></line><line x1="12" y1="8" x2="12" y2="3"></line><line x1="20" y1="21" x2="20" y2="16"></line><line x1="20" y1="12" x2="20" y2="3"></line><line x1="1" y1="14" x2="7" y2="14"></line><line x1="9" y1="8" x2="15" y2="8"></line><line x1="17" y1="16" x2="23" y2="16"></line></svg>
       <span class="fields-toggle-txt">Show in strip</span>

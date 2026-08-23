@@ -1,4 +1,19 @@
-// background.js (service worker, v1.18)
+// background.js (service worker, v1.20)
+// - v1.2.9: Free accounts showed no data. Two separate problems.
+//   (a) Real bugs in org resolution and parsing: getOrgId() ignored its own
+//       forceRefresh flag (the 404 retry re-requested the identical URL), only
+//       one org was ever tried, parseLimitsArray() read an entry's percentage
+//       before classifying it and dropped the entry when that came back null,
+//       and pickPct() didn't understand `remaining` + cap.
+//   (b) The actual cause for Free: /usage returns 200 — the account IS entitled
+//       to the endpoint — but every bucket is null, `limits` is [], and
+//       `member_dashboard_available` is false. Confirmed by probing a live free
+//       account. Anthropic populates this for Pro/Max/Team/seat Enterprise only,
+//       and has removed the Usage tab from Settings for Free. No alternative
+//       source exists: /limits and /settings 404, /rate_limits carries
+//       concurrency caps rather than consumption. Not fixable by parsing.
+//   looksUnmetered() recognises that exact shape and applyUnmetered() puts the
+//   strip into an honest, self-explaining state instead of a permanent "—".
 // - v1.2.17: burn-rate forecasting. Every poll now feeds a per-scope sample
 //   ring; updateForecast() turns it into a rate and an ETA, published as
 //   usage.forecast for the strip and popup. The estimator, and the four ways
@@ -193,21 +208,13 @@ async function getActiveOrgFromCookie() {
   }
 }
 
-async function getOrgId(forceRefresh = false) {
-  // Prefer the live active-org cookie. It is read fresh every time (cheap,
-  // local) so switching between a personal and a managed org is reflected
-  // immediately, and it matches the org the page itself is calling.
-  const activeOrg = await getActiveOrgFromCookie();
-  if (activeOrg) return activeOrg;
-
-  // Fallback (cookie unavailable): derive from the organizations list. This
-  // is the legacy heuristic and is unreliable for multi-org/managed accounts,
-  // so it is only used when the cookie can't be read.
-  if (!forceRefresh) {
-    const { [STORAGE_KEYS.orgCache]: cached } =
-      await chrome.storage.local.get(STORAGE_KEYS.orgCache);
-    if (cached && cached.id && cached.expires > Date.now()) return cached.id;
-  }
+// v1.2.9: return EVERY org the account can see, best candidate first, instead
+// of committing to one guess. The old code picked the first org advertising a
+// "chat" capability and that was the end of it — if that guess was wrong there
+// was no second chance, and the strip stayed empty forever. Ordering is a hint
+// now, not a decision: pollUsage() walks the list and keeps whichever org
+// actually returns readable usage.
+async function listOrgIds() {
   const resp = await fetch("https://claude.ai/api/organizations", {
     credentials: "include",
     headers: { accept: "application/json" }
@@ -216,10 +223,46 @@ async function getOrgId(forceRefresh = false) {
   if (!resp.ok) throw new Error(`orgs_http_${resp.status}`);
   const orgs = await resp.json();
   if (!Array.isArray(orgs) || orgs.length === 0) throw new Error("no_orgs");
-  const candidate =
-    orgs.find(o => Array.isArray(o.capabilities) && o.capabilities.includes("chat")) ||
-    orgs[0];
-  const id = candidate.uuid || candidate.id;
+  const score = (o) => {
+    const caps = Array.isArray(o.capabilities) ? o.capabilities : null;
+    if (caps && caps.includes("chat")) return 0;
+    // No capability list at all is NOT evidence against an org — some accounts
+    // simply don't get the field. Rank it above an org that lists capabilities
+    // and chat isn't among them (an api/console-only org).
+    if (!caps || caps.length === 0) return 1;
+    return 2;
+  };
+  return orgs
+    .slice()
+    .sort((a, b) => score(a) - score(b))
+    .map((o) => (o && (o.uuid || o.id)) || null)
+    .filter(Boolean);
+}
+
+async function getOrgId(forceRefresh = false, skipCookie = false) {
+  // Prefer the live active-org cookie. It is read fresh every time (cheap,
+  // local) so switching between a personal and a managed org is reflected
+  // immediately, and it matches the org the page itself is calling.
+  //
+  // v1.2.9 FIX: this used to return the cookie value unconditionally, which
+  // silently defeated `forceRefresh`. pollUsage()'s 404 retry called
+  // getOrgId(true) expecting a re-derived org, got the same cookie value back,
+  // re-requested the identical URL and 404'd again — so a stale or wrong
+  // `lastActiveOrg` cookie was permanently unrecoverable and the poll threw
+  // `usage_http_404` on every tick. `skipCookie` gives callers a real way out.
+  if (!skipCookie) {
+    const activeOrg = await getActiveOrgFromCookie();
+    if (activeOrg) return activeOrg;
+  }
+
+  // Fallback: derive from the organizations list.
+  if (!forceRefresh) {
+    const { [STORAGE_KEYS.orgCache]: cached } =
+      await chrome.storage.local.get(STORAGE_KEYS.orgCache);
+    if (cached && cached.id && cached.expires > Date.now()) return cached.id;
+  }
+  const ids = await listOrgIds();
+  const id = ids[0];
   if (!id) throw new Error("no_org_id_field");
   await chrome.storage.local.set({
     [STORAGE_KEYS.orgCache]: { id, expires: Date.now() + ORG_CACHE_TTL_MS }
@@ -229,46 +272,121 @@ async function getOrgId(forceRefresh = false) {
 
 // ---------- main poll ----------
 
+async function fetchUsageFor(orgId) {
+  return fetch(`https://claude.ai/api/organizations/${orgId}/usage`, {
+    credentials: "include",
+    headers: { accept: "application/json", "X-Organization-UUID": orgId }
+  });
+}
+
+/* v1.2.9 — pollUsage(), rewritten around a candidate list.
+
+   The old flow committed to a single org id and had exactly one fallback, and
+   that fallback didn't work (see getOrgId). Any account where the first guess
+   was wrong — or where the right org simply isn't the one in the cookie — got a
+   permanently blank strip with no way to recover short of reinstalling.
+
+   Now: try the cookie org first (still the fast path, and right for the large
+   majority), and only if that fails to yield READABLE usage widen to every org
+   the account can see. "Readable" is the important part — a 200 response whose
+   body we can't find a single quota in is a failure, not a success, and the old
+   code treated it as success and stored an empty state. */
 async function pollUsage() {
   try {
-    let orgId = await getOrgId();
-    let resp = await fetch(`https://claude.ai/api/organizations/${orgId}/usage`, {
-      credentials: "include",
-      headers: { accept: "application/json", "X-Organization-UUID": orgId }
-    });
-    if (resp.status === 401 || resp.status === 403) {
+    const tried = new Set();
+    const candidates = [];
+    const cookieOrg = await getActiveOrgFromCookie();
+    if (cookieOrg) candidates.push(cookieOrg);
+
+    let widened = false;
+    let sawAuthFailure = false;
+    let lastStatus = null;
+    let apiErrorMsg = null;
+    let fallback = null;   // a 200 body we couldn't parse — kept for diagnostics
+
+    const widen = async () => {
+      if (widened) return;
+      widened = true;
+      try {
+        for (const id of await listOrgIds()) {
+          if (!tried.has(id)) candidates.push(id);
+        }
+      } catch (err) {
+        if (err && err.message === "not_signed_in") sawAuthFailure = true;
+      }
+    };
+    if (candidates.length === 0) await widen();
+
+    for (let i = 0; i < candidates.length; i++) {
+      const orgId = candidates[i];
+      if (!orgId || tried.has(orgId)) continue;
+      tried.add(orgId);
+
+      let resp;
+      try {
+        resp = await fetchUsageFor(orgId);
+      } catch (_) {
+        if (i === candidates.length - 1) await widen();
+        continue;
+      }
+      lastStatus = resp.status;
+
+      if (resp.status === 401 || resp.status === 403) {
+        sawAuthFailure = true;
+      } else if (resp.ok) {
+        let data = null;
+        try { data = await resp.json(); } catch (_) {}
+        // Some auth/validation failures come back with a 200-ish status but an
+        // error-shaped body (e.g. {"type":"error","error":{...}}).
+        if (data && data.type === "error") {
+          apiErrorMsg = (data.error && data.error.message) || "usage_api_error";
+          console.warn("[ClaudeUsage] /usage returned an error body:", data);
+        } else if (data && typeof data === "object") {
+          // Diagnostic: keep the raw response so the exact field shape at any
+          // usage level can be inspected from the service worker console
+          // (chrome://extensions → Claude Usage Meter → service worker) or via
+          // chrome.storage.local.get("usage_raw").
+          try {
+            await chrome.storage.local.set({
+              [STORAGE_KEYS.usageRaw]: { data, orgId, ts: Date.now() }
+            });
+          } catch (_) {}
+          const probe = parseBuckets(data);
+          if (probe.any) {
+            await applyUsage(data, orgId);
+            await setLastError(null);
+            return;                                  // done — this org has our data
+          }
+          if (!fallback) fallback = { data, orgId };
+        }
+      }
+
+      if (i === candidates.length - 1) await widen();
+    }
+
+    // Nothing parsed. Report the most specific reason we have rather than
+    // leaving the strip on a silent "—".
+    if (apiErrorMsg) {
+      await setLastError(apiErrorMsg);
+    } else if (fallback && looksUnmetered(fallback.data)) {
+      // v1.2.9: the endpoint answered correctly and there is genuinely nothing
+      // in it — this plan isn't metered. Not an error; don't report one.
+      await applyUnmetered(fallback.orgId);
+      await setLastError(null);
+    } else if (fallback) {
+      // The endpoint answered with content we couldn't find a quota in. This is
+      // the case worth knowing about, so name it and log the shape.
+      const keys = Object.keys(fallback.data || {}).slice(0, 25).join(", ");
+      await setLastError("Usage data in an unrecognised format");
+      console.warn(
+        "[ClaudeUsage] /usage parsed to no buckets. Top-level keys:", keys,
+        "\nFull body:", fallback.data
+      );
+    } else if (sawAuthFailure) {
       await setLastError("Not signed in to claude.ai");
-      return;
+    } else {
+      await setLastError(lastStatus ? `usage_http_${lastStatus}` : "no_usage_response");
     }
-    if (resp.status === 404) {
-      const fresh = await getOrgId(true);
-      orgId = fresh;
-      resp = await fetch(`https://claude.ai/api/organizations/${fresh}/usage`, {
-        credentials: "include",
-        headers: { accept: "application/json", "X-Organization-UUID": fresh }
-      });
-    }
-    if (!resp.ok) throw new Error(`usage_http_${resp.status}`);
-    const data = await resp.json();
-    // Some auth/validation failures come back with a 200-ish status but an
-    // error-shaped body (e.g. {"type":"error","error":{...}}). Surface those
-    // instead of parsing them as empty usage (which silently leaves the strip
-    // blank or showing a stale value).
-    if (data && data.type === "error") {
-      const m = (data.error && data.error.message) || "usage_api_error";
-      await setLastError(m);
-      console.warn("[ClaudeUsage] /usage returned an error body:", data);
-      return;
-    }
-    // Diagnostic: keep the raw response so the exact field shape at any usage
-    // level (including 100% / limit-reached) can be inspected from the service
-    // worker console (chrome://extensions → Claude Usage Meter → service worker)
-    // or via chrome.storage.local.get("usage_raw").
-    try {
-      await chrome.storage.local.set({ [STORAGE_KEYS.usageRaw]: { data, ts: Date.now() } });
-    } catch (_) {}
-    await applyUsage(data, orgId);
-    await setLastError(null);
   } catch (err) {
     const msg = (err && err.message) || String(err);
     await setLastError(msg === "not_signed_in" ? "Not signed in to claude.ai" : msg);
@@ -289,6 +407,22 @@ function pickPct(node) {
     if (node.limit === 0) return node.used > 0 ? 100 : 0;
     const pct = (node.used / node.limit) * 100;
     return Math.max(0, Math.min(100, Math.round(pct * 10) / 10));
+  }
+
+  // v1.2.9: the same quota counted from the other end. Several buckets report
+  // what's LEFT (`remaining`) rather than what's been spent, with the cap under
+  // any of `limit`/`total`/`max`/`quota`. Neither field is `used` and neither is
+  // `utilization`, so every branch below missed it and the bucket parsed as
+  // null — which is the difference between a working strip and a permanent "—".
+  const capField = [node.limit, node.total, node.max, node.quota]
+    .find((v) => typeof v === "number" && !isNaN(v) && v > 0);
+  if (typeof node.remaining === "number" && !isNaN(node.remaining)) {
+    if (capField != null) {
+      const pct = ((capField - node.remaining) / capField) * 100;
+      return Math.max(0, Math.min(100, Math.round(pct * 10) / 10));
+    }
+    // A cap we can't see, but "nothing left" is unambiguous.
+    if (node.remaining === 0) return 100;
   }
 
   // Otherwise trust the field name. Empirically the Claude API returns
@@ -313,10 +447,76 @@ function pickPct(node) {
 }
 function pickReset(node) {
   if (!node || typeof node !== "object") return null;
-  const r = node.resets_at || node.reset_at || node.reset;
+  const r = node.resets_at || node.reset_at || node.reset ||
+            node.resetsAt || node.resets || node.expires_at;
   if (!r) return null;
   const t = Date.parse(r);
   return isNaN(t) ? null : t;
+}
+
+/* v1.2.9 — depth-limited scanners.
+
+   Everything above assumes a quota is a flat object sitting at a key we already
+   know the name of. That assumption is why this build reads some accounts and
+   not others: it was written against one response shape, and any account whose
+   payload nests its buckets one level deeper, or names them differently, parsed
+   to nothing at all. page-injector.js already solved the same problem for SSE
+   payloads by scanning rather than guessing (findRemaining/findResetAt); these
+   are the equivalent for /usage, used only as a fallback after the structured
+   parse has had its turn, so a well-formed response costs nothing extra. */
+function pickPctDeep(node, depth = 0) {
+  if (!node || typeof node !== "object" || depth > 4) return null;
+  const direct = pickPct(node);
+  if (direct != null) return direct;
+  for (const k of Object.keys(node)) {
+    const v = node[k];
+    if (v && typeof v === "object" && !Array.isArray(v)) {
+      const r = pickPctDeep(v, depth + 1);
+      if (r != null) return r;
+    }
+  }
+  return null;
+}
+function pickResetDeep(node, depth = 0) {
+  if (!node || typeof node !== "object" || depth > 4) return null;
+  const direct = pickReset(node);
+  if (direct != null) return direct;
+  for (const k of Object.keys(node)) {
+    const v = node[k];
+    if (v && typeof v === "object" && !Array.isArray(v)) {
+      const r = pickResetDeep(v, depth + 1);
+      if (r != null) return r;
+    }
+  }
+  return null;
+}
+
+// Find a quota bucket anywhere in the payload whose KEY matches `keyRe` (or, for
+// array members, whose kind/group does). Last-resort only — see applyUsage.
+function findBucketDeep(root, keyRe, depth = 0) {
+  if (!root || typeof root !== "object" || depth > 4) return null;
+  if (Array.isArray(root)) {
+    for (const item of root) {
+      if (!item || typeof item !== "object") continue;
+      const tag = `${item.kind || ""} ${item.group || ""} ${item.name || ""} ${item.type || ""}`;
+      if (keyRe.test(tag)) {
+        const pct = pickPctDeep(item);
+        if (pct != null) return { percent: pct, resetsAt: pickResetDeep(item) };
+      }
+    }
+    return null;
+  }
+  for (const k of Object.keys(root)) {
+    const v = root[k];
+    if (!v || typeof v !== "object") continue;
+    if (keyRe.test(k) && !Array.isArray(v)) {
+      const pct = pickPctDeep(v);
+      if (pct != null) return { percent: pct, resetsAt: pickResetDeep(v) };
+    }
+    const nested = findBucketDeep(v, keyRe, depth + 1);
+    if (nested) return nested;
+  }
+  return null;
 }
 function familyOfField(field) {
   if (!field) return "generic";
@@ -657,6 +857,144 @@ async function maybeNotifyForecast(usage) {
   });
 }
 
+/* v1.2.9 — the whole read of a /usage body, in one pure function.
+
+   Pulled out of applyUsage() so pollUsage() can ask "did this response actually
+   contain anything?" before committing to an org, and so the fallbacks below
+   apply on every path rather than only the one that happened to run.
+
+   Returns { session, weeklyByFamily, fable, any } — `any` being the signal that
+   separates a real response from one we simply can't read. */
+function parseBuckets(data) {
+  const out = { session: null, weeklyByFamily: {}, fable: null, any: false };
+  if (!data || typeof data !== "object") return out;
+
+  // v1.2.9: limits[] is the canonical source; the legacy top-level fields are
+  // kept as a fallback for older/partial responses.
+  const fromLimits = parseLimitsArray(data.limits);
+
+  const session = data.five_hour || data.session;
+  const sPct = pickPct(session);
+  if (sPct != null) {
+    // Legacy five_hour stays the primary session source — it's what the
+    // message_limit lockout pinning is built around.
+    out.session = { percent: sPct, resetsAt: pickReset(session) };
+  } else if (fromLimits.session) {
+    out.session = fromLimits.session;
+  }
+
+  const weeklyByFamily = {};
+  for (const field of Object.keys(data)) {
+    if (!/^(seven_day|weekly)/.test(field)) continue;
+    const pct = pickPct(data[field]);
+    if (pct == null) continue;
+    weeklyByFamily[familyOfField(field)] = {
+      percent: pct,
+      resetsAt: pickReset(data[field]),
+      apiField: field
+    };
+  }
+  // limits[] wins on conflict: it names its own model instead of relying on a
+  // field-name convention, and it's the only source of per-model quotas.
+  Object.assign(weeklyByFamily, fromLimits.weeklyByFamily);
+
+  // v1.2.9: last-resort sweeps. Everything above depends on the response using
+  // the field names and nesting this build was written against. When it doesn't,
+  // the old code produced an empty state and reported success — the strip sat on
+  // "—" with no error and nothing to debug from. Scanning is strictly a fallback:
+  // it only runs when the structured parse found nothing for that slot.
+  if (!out.session) {
+    const found = findBucketDeep(data, /session|five[_\s-]?hour|5h|rolling/i);
+    if (found) out.session = found;
+  }
+  if (Object.keys(weeklyByFamily).length === 0) {
+    const found = findBucketDeep(data, /weekly|seven[_\s-]?day|7[_\s-]?day/i);
+    if (found) {
+      weeklyByFamily.generic = { ...found, apiField: "deep-scan[weekly]" };
+    }
+  }
+
+  out.weeklyByFamily = weeklyByFamily;
+  // v1.2.6: Fable has its own strip segment, so pull its bucket out explicitly
+  // and keep the generic "Weekly" slot off it (see pickWeeklyForActiveFamily).
+  out.fable = pickFableBucket(weeklyByFamily);
+
+  // v1.2.8 fallback: the loop above only considers keys starting with
+  // `seven_day` / `weekly`, which is an assumption about a naming convention
+  // Anthropic has never documented. If nothing matched, sweep EVERY top-level
+  // key for one mentioning Fable (`fable_5`, `fable_weekly`, `weekly_limit_fable`
+  // — any shape), accepting the first that parses as a percentage.
+  if (!out.fable) {
+    for (const field of Object.keys(data)) {
+      if (!/fable/i.test(field)) continue;
+      const pct = pickPct(data[field]);
+      if (pct == null) continue;
+      out.fable = {
+        percent: pct,
+        resetsAt: pickReset(data[field]),
+        apiField: field,
+        family: familyOfField(field) === "other" ? "fable" : familyOfField(field)
+      };
+      break;
+    }
+  }
+
+  out.any = !!(out.session || Object.keys(weeklyByFamily).length > 0);
+  return out;
+}
+
+/* v1.2.9 — accounts that are served no usage data at all.
+
+   Confirmed against a real free account: /usage returns 200 (so the account IS
+   entitled to the endpoint — this is not a permissions failure) with every
+   bucket null, `limits` an empty array, and `member_dashboard_available: false`.
+   Anthropic populates this endpoint for Pro/Max/Team/seat-based Enterprise; on
+   Free there is simply nothing behind it.
+
+   This is a distinct state from "we couldn't parse the response", and must not
+   be reported as an error — there is no fault to fix and no amount of parsing
+   will produce a number. The strip says so plainly instead. */
+function looksUnmetered(data) {
+  if (!data || typeof data !== "object") return false;
+  // Must actually be the /usage envelope, not some unrelated 200.
+  const hasEnvelope = "limits" in data || "five_hour" in data || "seven_day" in data;
+  if (!hasEnvelope) return false;
+  if (Array.isArray(data.limits) && data.limits.length > 0) return false;
+  // Every value empty. Booleans (member_dashboard_available) don't count as
+  // content, and neither does an empty object or array.
+  for (const k of Object.keys(data)) {
+    const v = data[k];
+    if (v === null || v === undefined) continue;
+    if (typeof v === "boolean" || typeof v === "string") continue;
+    if (Array.isArray(v) && v.length === 0) continue;
+    if (typeof v === "object" && Object.keys(v).length === 0) continue;
+    return false;   // something substantive is present — not an empty account
+  }
+  return true;
+}
+
+async function applyUnmetered(orgId) {
+  let usage = await getUsage();
+  if (orgId && usage.orgId && usage.orgId !== orgId) {
+    await setSessionLock(null);
+    await saveLastFired({});
+    await chrome.storage.local.set({
+      [STORAGE_KEYS.history]: null,
+      [STORAGE_KEYS.forecastNotified]: null
+    });
+  }
+  usage.orgId = orgId || usage.orgId || null;
+  usage.session = null;
+  usage.weekly = null;
+  usage.fable = null;
+  usage.weeklyByFamily = {};
+  usage.forecast = null;
+  usage.unmetered = true;      // the strip's cue to explain rather than show "—"
+  usage.updatedAt = Date.now();
+  await saveUsage(usage);
+  await broadcastUsage(usage);
+}
+
 async function applyUsage(data, orgId) {
   let usage = await getUsage();
 
@@ -689,65 +1027,16 @@ async function applyUsage(data, orgId) {
   }
   if (orgId) usage.orgId = orgId;
 
-  // v1.2.9: limits[] is the canonical source; the legacy top-level fields are
-  // kept as a fallback for older/partial responses.
-  const fromLimits = parseLimitsArray(data && data.limits);
-
-  const session = data.five_hour || data.session;
-  const sPct = pickPct(session);
-  if (sPct != null) {
-    // Legacy five_hour stays the primary session source — it's what the
-    // message_limit lockout pinning below is built around.
-    usage.session = { percent: sPct, resetsAt: pickReset(session) };
-  } else if (fromLimits.session) {
-    usage.session = fromLimits.session;
-  }
-
-  const weeklyByFamily = {};
-  for (const field of Object.keys(data || {})) {
-    if (!/^(seven_day|weekly)/.test(field)) continue;
-    const pct = pickPct(data[field]);
-    if (pct == null) continue;
-    weeklyByFamily[familyOfField(field)] = {
-      percent: pct,
-      resetsAt: pickReset(data[field]),
-      apiField: field
-    };
-  }
-  // limits[] wins on conflict: it names its own model instead of relying on a
-  // field-name convention, and it's the only source of per-model quotas.
-  Object.assign(weeklyByFamily, fromLimits.weeklyByFamily);
-
-  usage.weeklyByFamily = weeklyByFamily;
-  // v1.2.6: Fable has its own strip segment, so pull its bucket out explicitly
-  // and keep the generic "Weekly" slot off it (see pickWeeklyForActiveFamily).
-  usage.fable = pickFableBucket(weeklyByFamily);
-
-  // v1.2.8 fallback: the loop above only considers keys starting with
-  // `seven_day` / `weekly`, which is an assumption about a naming convention
-  // Anthropic has never documented. If nothing matched, sweep EVERY top-level
-  // key for one mentioning Fable (`fable_5`, `fable_weekly`, `weekly_limit_fable`
-  // — any shape), accepting the first that parses as a percentage. pickPct()
-  // returning null is the filter that keeps non-bucket keys out.
-  if (!usage.fable) {
-    for (const field of Object.keys(data || {})) {
-      if (!/fable/i.test(field)) continue;
-      const pct = pickPct(data[field]);
-      if (pct == null) continue;
-      usage.fable = {
-        percent: pct,
-        resetsAt: pickReset(data[field]),
-        apiField: field,
-        family: familyOfField(field) === "other" ? "fable" : familyOfField(field)
-      };
-      break;
-    }
-  }
+  const parsed = parseBuckets(data);
+  usage.unmetered = false;   // real data arrived — leave the unmetered state
+  usage.weeklyByFamily = parsed.weeklyByFamily;
+  usage.fable = parsed.fable;
+  if (parsed.session) usage.session = parsed.session;
 
   usage.weekly = pickWeeklyForActiveFamily(
-    weeklyByFamily,
+    parsed.weeklyByFamily,
     await getCurrentModel(),
-    usage.fable ? usage.fable.family : null
+    parsed.fable ? parsed.fable.family : null
   );
 
   // Honour an active session lockout. When the limit is hit, the /usage poll
@@ -815,26 +1104,48 @@ function normalizeFamilyName(name) {
   return String(name || "").trim().toLowerCase().replace(/\s+/g, "_");
 }
 
+// v1.2.9: classify an entry from kind/group without demanding an exact string.
+// The old code tested `kind === "session"` and `kind === "weekly_all"` literally,
+// so a bucket labelled `five_hour`, `rolling_session`, `seven_day_all` — or one
+// carrying its label in `group` while `kind` held something else — fell through
+// every branch and was dropped.
+function limitEntryKind(entry) {
+  const hay = `${entry.kind || ""} ${entry.group || ""}`.toLowerCase();
+  if (!hay.trim()) return null;
+  if (/session|five_hour|5_hour|5h|rolling|hourly/.test(hay)) return "session";
+  if (/weekly_all|weekly_total|seven_day_all/.test(hay)) return "weekly_all";
+  if (/weekly|seven_day|7_day/.test(hay)) return "weekly_scoped";
+  return null;
+}
+
 function parseLimitsArray(limits) {
   const out = { session: null, weeklyByFamily: {} };
   if (!Array.isArray(limits)) return out;
   for (const entry of limits) {
     if (!entry || typeof entry !== "object") continue;
-    const pct = pickPct(entry);              // reads `percent` (already 0..100)
-    if (pct == null) continue;               // 0 is valid and must survive this
-    const resetsAt = pickReset(entry);       // reads `resets_at`
-    const kind = String(entry.kind || "");
-    const group = String(entry.group || "");
 
-    if (kind === "session" || (group === "session" && !kind)) {
-      out.session = { percent: pct, resetsAt };
+    // v1.2.9 ORDER FIX: classify FIRST, read the number SECOND. This loop used
+    // to call pickPct() up front and `continue` when it came back null, which
+    // meant an entry whose quota was expressed in any shape pickPct didn't yet
+    // recognise was discarded before anything even looked at its `kind`. One
+    // unrecognised session entry was enough to leave the strip blank.
+    const type = limitEntryKind(entry);
+    if (!type) continue;
+    let pct = pickPct(entry);                // reads `percent` (already 0..100)
+    if (pct == null) pct = pickPctDeep(entry);
+    if (pct == null) continue;               // 0 is valid and must survive this
+    const resetsAt = pickReset(entry) || pickResetDeep(entry);
+
+    if (type === "session") {
+      // Prefer an active session bucket if several are reported.
+      if (!out.session || entry.is_active) out.session = { percent: pct, resetsAt };
       continue;
     }
-    if (kind === "weekly_all") {
+    if (type === "weekly_all") {
       out.weeklyByFamily.generic = { percent: pct, resetsAt, apiField: "limits[weekly_all]" };
       continue;
     }
-    if (kind === "weekly_scoped" || group === "weekly") {
+    if (type === "weekly_scoped") {
       const model = (entry.scope && entry.scope.model) || null;
       const display = model && model.display_name;
       const fam = normalizeFamilyName(display);
