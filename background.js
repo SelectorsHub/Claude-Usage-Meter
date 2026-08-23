@@ -1,19 +1,31 @@
 // background.js (service worker, v1.20)
-// - v1.2.9: Free accounts showed no data. Two separate problems.
-//   (a) Real bugs in org resolution and parsing: getOrgId() ignored its own
-//       forceRefresh flag (the 404 retry re-requested the identical URL), only
-//       one org was ever tried, parseLimitsArray() read an entry's percentage
-//       before classifying it and dropped the entry when that came back null,
-//       and pickPct() didn't understand `remaining` + cap.
-//   (b) The actual cause for Free: /usage returns 200 — the account IS entitled
-//       to the endpoint — but every bucket is null, `limits` is [], and
-//       `member_dashboard_available` is false. Confirmed by probing a live free
-//       account. Anthropic populates this for Pro/Max/Team/seat Enterprise only,
-//       and has removed the Usage tab from Settings for Free. No alternative
-//       source exists: /limits and /settings 404, /rate_limits carries
-//       concurrency caps rather than consumption. Not fixable by parsing.
-//   looksUnmetered() recognises that exact shape and applyUnmetered() puts the
-//   strip into an honest, self-explaining state instead of a permanent "—".
+// - v1.2.9: Free accounts get real usage again, plus the bugs found on the way.
+//   * /usage is empty on Free by design: it returns 200 (the account IS
+//     entitled) with every bucket null, `limits` [], member_dashboard_available
+//     false. Confirmed against a live free account. No alternative endpoint
+//     exists — /limits and /settings 404, /rate_limits is concurrency, not
+//     consumption. Not fixable by parsing, so looksUnmetered() detects that
+//     exact shape and the strip explains itself instead of showing "—".
+//   * The real source on Free is the completion stream's `message_limit` event
+//     (`windows` map), which claude.ai still emits there. parseSseWindow() is
+//     deliberately SEPARATE from pickPct(): the stream's `utilization` is a 0-1
+//     fraction while /usage's is a 0-100 integer, so a shared parser would
+//     render a maxed session as 1%. status "exceeded_limit" beats the number (a
+//     bound window still reads 0.98); resets_at is unix seconds;
+//     mergeSseWindow() stops the value ticking backwards within a window.
+//   * page-injector's isCompletionUrl() required the literal "claude.ai/api/",
+//     but claude.ai calls fetch() with a RELATIVE path — so the interceptor had
+//     never fired at all. This also left v1.2.6 lockout pinning mostly dead.
+//   * Org/parse bugs fixed on the way: getOrgId() ignored its own forceRefresh
+//     (the 404 retry re-requested the identical URL), only one org was ever
+//     tried, parseLimitsArray() read an entry's percentage before classifying
+//     it and dropped the entry when null, and pickPct() didn't understand
+//     `remaining` + cap.
+//   * Paid isolation: the URL fix made the interceptor fire for every tier for
+//     the first time, so each newly-live path was audited. `remaining` sits
+//     BELOW utilization/percent in pickPct, the SSE snapshot is never written
+//     on paid tiers, and Weekly is only hidden on unmetered accounts. Verified
+//     by t/paid.js — within-limit streams do not trigger lockout pinning.
 // - v1.2.17: burn-rate forecasting. Every poll now feeds a per-scope sample
 //   ring; updateForecast() turns it into a rate and an ETA, published as
 //   usage.forecast for the strip and popup. The estimator, and the four ways
@@ -409,22 +421,6 @@ function pickPct(node) {
     return Math.max(0, Math.min(100, Math.round(pct * 10) / 10));
   }
 
-  // v1.2.9: the same quota counted from the other end. Several buckets report
-  // what's LEFT (`remaining`) rather than what's been spent, with the cap under
-  // any of `limit`/`total`/`max`/`quota`. Neither field is `used` and neither is
-  // `utilization`, so every branch below missed it and the bucket parsed as
-  // null — which is the difference between a working strip and a permanent "—".
-  const capField = [node.limit, node.total, node.max, node.quota]
-    .find((v) => typeof v === "number" && !isNaN(v) && v > 0);
-  if (typeof node.remaining === "number" && !isNaN(node.remaining)) {
-    if (capField != null) {
-      const pct = ((capField - node.remaining) / capField) * 100;
-      return Math.max(0, Math.min(100, Math.round(pct * 10) / 10));
-    }
-    // A cap we can't see, but "nothing left" is unambiguous.
-    if (node.remaining === 0) return 100;
-  }
-
   // Otherwise trust the field name. Empirically the Claude API returns
   // `utilization` already as a percentage in the 0..100 range — NOT a 0..1
   // fraction, despite the field name. The previous heuristic
@@ -440,6 +436,20 @@ function pickPct(node) {
   } else if (typeof node.percentage === "number" && !isNaN(node.percentage)) {
     pct = node.percentage;
   } else {
+    // v1.2.9: `remaining` is a LAST RESORT, deliberately below every branch
+    // above. It was briefly placed before them in v1.2.9, which meant any bucket
+    // carrying both `remaining` and `utilization`/`percent` would silently
+    // change value on a paid account. Only buckets that report nothing else
+    // reach here, so no existing path can be diverted through it.
+    const capField = [node.limit, node.total, node.max, node.quota]
+      .find((v) => typeof v === "number" && !isNaN(v) && v > 0);
+    if (typeof node.remaining === "number" && !isNaN(node.remaining)) {
+      if (capField != null) {
+        const p = ((capField - node.remaining) / capField) * 100;
+        return Math.max(0, Math.min(100, Math.round(p * 10) / 10));
+      }
+      if (node.remaining === 0) return 100;   // no visible cap, but unambiguous
+    }
     return null;
   }
 
@@ -984,10 +994,15 @@ async function applyUnmetered(orgId) {
     });
   }
   usage.orgId = orgId || usage.orgId || null;
-  usage.session = null;
-  usage.weekly = null;
+  // v1.2.9: /usage has nothing, but the completion stream may already have told
+  // us the real figures. Re-poll runs every minute; wiping them here would blank
+  // the meters between messages, which is the whole window this fallback exists
+  // to cover.
+  const sse = usage.sse || {};
+  usage.session = sse.session ? { ...sse.session } : null;
+  usage.weekly = sse.weekly ? { ...sse.weekly, family: "generic", apiField: "sse[7d]" } : null;
   usage.fable = null;
-  usage.weeklyByFamily = {};
+  usage.weeklyByFamily = usage.weekly ? { generic: usage.weekly } : {};
   usage.forecast = null;
   usage.unmetered = true;      // the strip's cue to explain rather than show "—"
   usage.updatedAt = Date.now();
@@ -1213,10 +1228,92 @@ async function applyCurrentModel(modelInfo) {
   await broadcastUsage(usage);
 }
 
+// ---------- SSE stream usage (the only source on Free) ----------
+
+/* v1.2.9 — a SEPARATE parser from pickPct(), and it must stay separate.
+
+   The completion stream's `windows` map and /usage's `limits[]` use OPPOSITE
+   conventions for the same idea:
+
+       /usage   percent: 98        -> 98%   (0-100 integer)
+       stream   utilization: 0.98  -> 98%   (0-1 fraction)
+
+   pickPct() is deliberately built to never scale a value (utilization: 1 on
+   /usage means 1%, not 100%). Run a stream value through it and a maxed-out
+   session renders as "1%". Hence the duplication: these two must never share a
+   code path, however similar they look.
+
+   Also: resets_at is unix SECONDS here, not an ISO string. */
+function parseSseWindow(win) {
+  if (!win || typeof win.utilization !== "number" || isNaN(win.utilization)) return null;
+  if (!win.resets_at || isNaN(Number(win.resets_at))) return null;
+  // A bound window still reports a fraction below one — 0.98 was observed
+  // alongside status "exceeded_limit". So the number can't be trusted to reach
+  // the cap on its own, and "98%" next to a composer that refuses to send reads
+  // as the extension being wrong. Status wins.
+  const exceeded = win.status === "exceeded_limit";
+  const pct = exceeded ? 100 : Math.round(win.utilization * 100);
+  return {
+    percent: Math.max(0, Math.min(100, pct)),
+    resetsAt: Number(win.resets_at) * 1000
+  };
+}
+
+/* Session usage only rises within a window, so a lower reading is noise: both
+   sides round independently and the stream is read a moment before the
+   accounting settles (37% -> 36% -> 37% observed by others). On Free nothing
+   polls afterwards to correct it, so a regressed value would simply stand until
+   the next message. A genuine reset also drops the number — but brings a new
+   reset timestamp with it, which is what distinguishes the two. */
+const SSE_SAME_WINDOW_TOLERANCE_MS = 5 * 60 * 1000;
+
+function mergeSseWindow(previous, incoming) {
+  if (!incoming) return previous || null;
+  if (!previous) return incoming;
+  const sameWindow =
+    Math.abs((previous.resetsAt || 0) - (incoming.resetsAt || 0)) < SSE_SAME_WINDOW_TOLERANCE_MS;
+  return sameWindow && incoming.percent < previous.percent ? previous : incoming;
+}
+
 // ---------- SSE message_limit handler ----------
 
 async function applyMessageLimit(payload) {
   const usage = await getUsage();
+  // Always logged: this is the only usage source on Free, so when it goes wrong
+  // the service worker console must say so without needing a debug build.
+  console.info("[ClaudeUsage] message_limit:", {
+    windows: payload.windows, reached: payload.reached,
+    remaining: payload.remaining, unmetered: !!usage.unmetered
+  });
+
+  // v1.2.9: real percentages off the stream. Stored for every tier (cheap, and
+  // it makes the data visible for debugging) but only PROMOTED into the meters
+  // on an account /usage reports nothing for — see below. On a paid tier the
+  // poll is authoritative and arrives with everything else the stream lacks.
+  // v1.2.9: gated to unmetered accounts. On a paid tier /usage is authoritative
+  // and arrives with everything the stream lacks (Fable, per-model weeklies,
+  // extra usage), so a stream snapshot there is at best unused and at worst a
+  // second source of truth someone later wires up by mistake. Not written at all.
+  if (payload.windows && usage.unmetered) {
+    const session = parseSseWindow(payload.windows["5h"]);
+    const weekly = parseSseWindow(payload.windows["7d"]);
+    const prev = usage.sse || {};
+    usage.sse = {
+      session: mergeSseWindow(prev.session, session),
+      weekly: mergeSseWindow(prev.weekly, weekly),
+      at: Date.now()
+    };
+    {
+      if (usage.sse.session) usage.session = { ...usage.sse.session };
+      if (usage.sse.weekly) {
+        usage.weekly = { ...usage.sse.weekly, family: "generic", apiField: "sse[7d]" };
+        usage.weeklyByFamily = { generic: usage.weekly };
+      }
+      usage.updatedAt = Date.now();
+      usage.forecast = await updateForecast(usage);
+    }
+  }
+
   if (payload.remaining != null) {
     usage.messagesRemaining = payload.remaining;
     usage.messagesRemainingAt = Date.now();

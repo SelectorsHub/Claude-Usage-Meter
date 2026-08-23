@@ -25,9 +25,39 @@
     );
   }
 
+  // v1.2.9 FIX: claude.ai is a same-origin SPA and calls fetch() with a
+  // RELATIVE path ("/api/organizations/<org>/chat_conversations/<id>/completion").
+  // The old test required the literal "claude.ai/api/" in the string, so a
+  // relative URL never matched and this injector never fired at all — no usage
+  // from the stream, and only intermittent lockout detection. Normalise first,
+  // and accept Request/URL objects as well as strings.
+  function normalizeUrl(input) {
+    try {
+      let url =
+        typeof input === "string" ? input :
+        (typeof URL !== "undefined" && input instanceof URL) ? input.href :
+        (input && typeof input.url === "string") ? input.url : "";
+      if (!url) return "";
+      if (url.startsWith("//")) return window.location.protocol + url;
+      if (url.startsWith("/")) return window.location.origin + url;
+      if (!/^https?:/i.test(url)) return new URL(url, window.location.href).href;
+      return url;
+    } catch (_) { return ""; }
+  }
+
   function isCompletionUrl(url) {
     if (!url || typeof url !== "string") return false;
     return /claude\.ai\/api\/.*\/(completion|retry_completion)(\?|$)/.test(url);
+  }
+
+  // Opt-in tracing: run  localStorage.cum_debug = "1"  on claude.ai and reload.
+  // Silent otherwise, so this can ship.
+  const DEBUG = (() => {
+    try { return localStorage.getItem("cum_debug") === "1"; } catch (_) { return false; }
+  })();
+  function dlog() {
+    if (!DEBUG) return;
+    try { console.log("[CUM inject]", ...arguments); } catch (_) {}
   }
 
   // Recursively look through any parsed JSON object for fields that look like
@@ -110,22 +140,71 @@
     return false;
   }
 
+  // v1.2.9: the actual usage percentages. The message_limit event carries a
+  // `windows` map that claude.ai keeps emitting on Free accounts even though
+  // /usage reports nothing for them — so on Free this is the ONLY place usage
+  // is ever reported.
+  //
+  //   windows: { "5h": { status, resets_at, utilization },
+  //              "7d": { ... }, "7d_oi": { ... }, "overage": { ... } }
+  //
+  // Passed through RAW and converted in background.js. Two conventions differ
+  // from /usage and getting either wrong is silently catastrophic:
+  //   * utilization is a 0-1 FRACTION here (0.98 = 98%), not /usage's 0-100
+  //     integer percent.
+  //   * resets_at is unix SECONDS, not an ISO string.
+  // `7d_oi` and `overage` are deliberately not forwarded: the former is scoped
+  // to whichever model served the request and the stream never says which, and
+  // the latter is extra-usage spend, which a Free account cannot have.
+  function findWindows(obj, depth = 0) {
+    if (!obj || typeof obj !== "object" || depth > 6) return null;
+    const w = obj.windows;
+    if (w && typeof w === "object" && (w["5h"] || w["7d"])) {
+      const out = {};
+      for (const key of ["5h", "7d"]) {
+        const win = w[key];
+        if (!win || typeof win !== "object") continue;
+        if (typeof win.utilization !== "number") continue;
+        out[key] = {
+          utilization: win.utilization,
+          resets_at: win.resets_at,
+          status: typeof win.status === "string" ? win.status : null
+        };
+      }
+      if (Object.keys(out).length) return out;
+    }
+    for (const k of Object.keys(obj)) {
+      const v = obj[k];
+      if (v && typeof v === "object") {
+        const r = findWindows(v, depth + 1);
+        if (r) return r;
+      }
+    }
+    return null;
+  }
+
   function inspectJsonChunk(jsonStr) {
     try {
       const obj = JSON.parse(jsonStr);
+      if (DEBUG && obj && obj.type) {
+        if (String(obj.type).includes("limit")) dlog("SSE event:", obj.type, obj);
+      }
       // Two cases worth emitting:
       // (a) The object explicitly references message_limit
       // (b) The object has a remaining-messages-shaped number somewhere
-      if (looksLikeMessageLimit(obj) || findRemaining(obj) != null) {
+      const windows = findWindows(obj);
+      if (looksLikeMessageLimit(obj) || findRemaining(obj) != null || windows) {
         const remaining = findRemaining(obj);
         const resetsAt = findResetAt(obj);
         const reached = detectReached(obj) || remaining === 0;
-        if (remaining != null || resetsAt || reached) {
+        if (remaining != null || resetsAt || reached || windows) {
+          dlog("emitting message_limit:", { remaining, resetsAt, reached, windows });
           postToContent({
             kind: "message_limit",
             remaining,
             resetsAt: resetsAt || null,
             reached,
+            windows,
             ts: Date.now()
           });
         }
@@ -164,8 +243,10 @@
   window.fetch = async function patchedFetch(input, init) {
     const response = await ORIGINAL_FETCH(input, init);
     try {
-      const url = typeof input === "string" ? input : (input && input.url) || "";
+      const url = normalizeUrl(input);
       if (!isCompletionUrl(url)) return response;
+      dlog("completion request matched:", url, "status", response.status,
+           "content-type", response.headers && response.headers.get("content-type"));
 
       // v1.2.6: hard-lockout via HTTP status. When the session/weekly cap is
       // hit, the completion request comes back as an ERROR (429 Too Many
@@ -196,11 +277,27 @@
                 resetsAt = new Date(Date.now() + secs * 1000).toISOString();
               }
             }
+            // v1.2.9: a refused send answers with JSON rather than a stream,
+            // and buries the same message_limit payload one level deeper AND
+            // double-encoded: { error: { message: "<JSON string>" } }. On Free
+            // this is the LAST usage report of the window — claude.ai then
+            // blocks the composer and issues no further requests — so losing it
+            // means the meter sits below the cap until the window rolls over.
+            let windows = findWindows(parsed);
+            if (!windows) {
+              try {
+                const inner = parsed && parsed.error && parsed.error.message;
+                const decoded = typeof inner === "string" ? JSON.parse(inner) : inner;
+                windows = findWindows(decoded);
+                if (!resetsAt && decoded) resetsAt = findResetAt(decoded);
+              } catch (_) { /* not the nested shape — carry on */ }
+            }
             postToContent({
               kind: "message_limit",
               remaining: 0,
               resetsAt: resetsAt || null,
               reached: true,
+              windows,
               ts: Date.now()
             });
           }

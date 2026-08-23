@@ -86,7 +86,7 @@
 //   convention as rateUnlocked(). The card is held back while the tab is
 //   hidden, while another popover is open, and for 10s after mount so it never
 //   lands on top of a page that is still settling.
-// - v1.2.15 (production): RATE_DELAY restored to 2 days (the v1.2.11-1.2.14
+// - v1.2.15 (production): RATE_DELAY restored to 2 days (the v1.2.9-1.2.14
 //   test builds set it to 0 for layout checks). Diagnostic console logging from
 //   the Fable investigation removed; console.warn/error for genuine failures
 //   (poll failure, notification failure, API error bodies) are kept.
@@ -107,11 +107,11 @@
 //       WEEKLY toggle — Fable is a weekly quota; a third checkbox would be
 //       noise. Legacy stored `resetTime` seeds both new keys (migration in
 //       background.js normalizeStripFields), so an off stays off.
-// - v1.2.12: three changes from field testing:
+// - v1.2.9: three changes from field testing:
 //   (a) The Fable segment renders as "F <pct>" at every width; its full story
 //       ("Fable usage 1% · Reset in 4d") lives in the hover tooltip and the
 //       aria-label. This buys back ~150px, so "Rate us" keeps its full wording
-//       everywhere above the pre-existing 480px tier (the v1.2.11 star-only
+//       everywhere above the pre-existing 480px tier (the v1.2.9 star-only
 //       collapse is reverted) and Session/Weekly keep reset times to 640px.
 //   (b) In-strip settings gear (expanded mode ONLY — hidden when collapsed):
 //       opens a "Show in strip" popover with the same five checkboxes as the
@@ -122,14 +122,14 @@
 //       disappears).
 //   (c) The Fable row in the popover hides entirely when the API reports no
 //       Fable bucket — a checkbox that visibly does nothing reads as broken.
-// - v1.2.11 TEST: RATE_DELAY set to 0 so "Rate us" shows immediately on fresh
+// - v1.2.9 TEST: RATE_DELAY set to 0 so "Rate us" shows immediately on fresh
 //   install, for checking the three-segment + Rate-us fit. ██ REVERT to
 //   2 days before store submission ██ (marked at the constant itself).
-// - v1.2.11 (overlay.css): in the has-fable 640-780px band, Rate us collapses
+// - v1.2.9 (overlay.css): in the has-fable 640-780px band, Rate us collapses
 //   to its star (~40px) instead of the full "⭐ Rate us" (~85px), which doesn't
 //   fit alongside Session/Weekly reset times there. Above 780px the full
 //   button fits with everything on.
-// - v1.2.10 (overlay.css): progressive reset-time shedding. Showing the Fable
+// - v1.2.9 (overlay.css): progressive reset-time shedding. Showing the Fable
 //   segment used to hide ALL reset times below 740px — and Claude's composer is
 //   typically ~640-768px wide, so Fable appearing meant reset times vanishing,
 //   which read as a bug. Now only Fable's own reset is shed first (640-780px
@@ -187,7 +187,7 @@
 //   haven't rated see the button immediately on upgrade: background stamps
 //   install_at=0 for them, and a missing stamp is also read as 0 (show), so a
 //   long-time user is never re-gated for two days.
-// - v1.2.10: expanded "Session" / "Weekly" labels now match the % size (12px;
+// - v1.2.9: expanded "Session" / "Weekly" labels now match the % size (12px;
 //   11px in the compact tier) and render in title case instead of small caps.
 //   With the bar gone the 8.5px eyebrow looked undersized; at value size,
 //   title case pairs better and stays compact. The % keeps the lead via its
@@ -259,6 +259,13 @@
     if (event.source !== window) return;
     const data = event.data;
     if (!data || data.source !== "claude-usage-meter") return;
+    try {
+      // v1.2.9: same opt-in trace as the injector, so a break in the relay
+      // (page world -> content -> background) is visible rather than silent.
+      if (localStorage.getItem("cum_debug") === "1") {
+        console.log("[CUM relay] ->background", data.payload);
+      }
+    } catch (_) {}
     try {
       chrome.runtime.sendMessage({ type: "sse-message-limit", payload: data.payload });
     } catch (_) {}
@@ -562,7 +569,7 @@
   function applyCollapsed(root) {
     if (!root) return;
     root.classList.toggle("cut-collapsed", collapsed);
-    // v1.2.12: the gear is expanded-mode only (CSS hides it when collapsed), so
+    // v1.2.9: the gear is expanded-mode only (CSS hides it when collapsed), so
     // its popover must not be left floating with no visible anchor.
     if (collapsed && settingsPopOpen) closeSettingsPop(root);
     const btn = root.querySelector('[data-cut="collapse"]');
@@ -860,13 +867,22 @@
   // Deliberately conservative: only hide once a poll has actually SUCCEEDED and
   // come back with a session but no weekly. Before the first reading, or when
   // nothing parsed at all, "waiting…" is still the honest thing to show.
+  // v1.2.9: an unmetered account whose completion stream HAS reported usage is
+  // no longer blank — show the real meters. The notice is only for the gap
+  // before the first message of a session, when there is genuinely nothing yet.
   function isUnmetered() {
-    return !!(latestUsage && latestUsage.unmetered);
+    if (!latestUsage || !latestUsage.unmetered) return false;
+    return !(latestUsage.session || latestUsage.weekly);
   }
 
   function weeklyAvailable() {
-    if (isUnmetered()) return false;
-    if (!latestUsage || !latestUsage.updatedAt) return true;
+    // v1.2.9: only ever hide the Weekly meter on an account Claude reports no
+    // weekly quota for at all — i.e. an unmetered (Free) one. On a paid tier a
+    // momentarily absent weekly is a transient poll/parse gap, and hiding the
+    // meter for it would be a visible regression for users who have always had
+    // it. Paid accounts therefore always return true, exactly as before.
+    if (!latestUsage || !latestUsage.unmetered) return true;
+    if (!latestUsage.updatedAt) return true;
     if (latestUsage.weekly) return true;
     return !latestUsage.session;
   }
@@ -1092,7 +1108,7 @@
       });
     }
     const shareBtn = root.querySelector(".cut-share");
-    // v1.2.12: in-strip settings gear — toggles the "Show in strip" popover.
+    // v1.2.9: in-strip settings gear — toggles the "Show in strip" popover.
     const settingsBtn = root.querySelector('[data-cut="settings"]');
     if (settingsBtn) {
       settingsBtn.addEventListener("click", (e) => {
@@ -1219,7 +1235,7 @@
     srcHtml(".cut-rate-wrap", ".cut-rate-tooltip");
     srcHtml('[data-cut="share-wrap"]', ".cut-share-tooltip");
     srcHtml(".cut-collapse-wrap", ".cut-collapse-tooltip");
-    // v1.2.12: gear tooltip, suppressed while its own popover is open (a hover
+    // v1.2.9: gear tooltip, suppressed while its own popover is open (a hover
     // tip floating next to an open panel is noise).
     const sw = root.querySelector(".cut-settings-wrap");
     if (sw) {
@@ -1243,7 +1259,7 @@
     root.querySelectorAll(".cut-seg").forEach((seg) => {
       attachTip(seg, () => {
         const key = seg.getAttribute("data-cut");
-        // v1.2.12: the Fable segment shows only "F <pct>" inline, so its tooltip
+        // v1.2.9: the Fable segment shows only "F <pct>" inline, so its tooltip
         // is the ONLY place its full name and reset live — always allow it. (The
         // tip text itself already omits the reset when that toggle is off.)
         if (key === "fable") return seg.dataset.cutTip || "";
@@ -1619,7 +1635,7 @@
     applyShareVisibility(root);
   }
 
-  // ===== v1.2.12: in-strip "Show in strip" popover =====
+  // ===== v1.2.9: in-strip "Show in strip" popover =====
   // Same portal-to-<body> technique as the share popover: the overlay is a size
   // container (layout containment) and the narrow-mode strip scrolls, both of
   // which clip absolutely-positioned children. Fixed-position under <body>
@@ -2078,27 +2094,29 @@
       // goes unread — the one thing that must land is line 1. Declared here, not
       // inside the block below, because the collapsed pill's tip needs it too.
       const TIP_HTML =
-        "<b>This changed on Claude\u2019s side, not here.</b><br>" +
-        "Check <b>Account \u203A Settings</b> on claude.ai \u2014 the <b>Usage</b> tab is " +
-        "gone for Free accounts, so there\u2019s no data left to read.<br>" +
-        "We\u2019re working on a workaround and hope to have it soon.";
+        "<b>Send a message and your usage will appear here.</b><br>" +
+        "Claude removed the <b>Usage</b> tab from Account \u203A Settings for Free " +
+        "accounts, so we read your usage from the reply itself instead \u2014 which " +
+        "means there\u2019s nothing to show until you send one.<br>" +
+        "It updates with every message from then on.";
       const TIP_TEXT =
-        "This changed on Claude\u2019s side, not here. Check Account \u203A Settings on " +
-        "claude.ai \u2014 the Usage tab is gone for Free accounts, so there\u2019s no data " +
-        "left to read. We\u2019re working on a workaround and hope to have it soon.";
+        "Send a message and your usage will appear here. Claude removed the Usage tab " +
+        "from Account \u203A Settings for Free accounts, so we read your usage from the " +
+        "reply itself instead \u2014 which means there\u2019s nothing to show until you send " +
+        "one. It updates with every message from then on.";
       const seg = root.querySelector('[data-cut="session"]');
       if (seg) {
         const labelEl = seg.querySelector('[data-cut-label]');
         const pctEl   = seg.querySelector('[data-cut-pct]');
         const metaEl  = seg.querySelector('[data-cut-meta]');
         if (labelEl) labelEl.textContent = "Usage";
-        if (pctEl) { pctEl.textContent = "n/a"; pctEl.className = "cut-pct"; }
+        if (pctEl) { pctEl.textContent = "\u2014"; pctEl.className = "cut-pct"; }
         // v1.2.9 copy: "Claude" is deliberately the SUBJECT of this sentence.
         // Passive wording ("not available", "no data") reads as the extension
         // failing, and that lands as a one-star review for something we don't
         // control. Naming who removed it, and saying it changed, puts the fact
         // where it belongs.
-        if (metaEl) metaEl.textContent = "Claude no longer shares usage data for Free accounts";
+        if (metaEl) metaEl.textContent = "shows after your next message";
         seg.dataset.cutTip = TIP_HTML;
         seg.setAttribute("aria-label", TIP_TEXT);   // screen readers get plain text
         seg.classList.remove("cut-alert", "cut-alert-max");
@@ -2118,7 +2136,7 @@
     renderSegment(root.querySelector('[data-cut="weekly"]'),  latestUsage && latestUsage.weekly,  weeklyLabel(latestUsage && latestUsage.weekly));
     // v1.2.6/v1.2.7: Fable segment — rendered when the usage API reports a Fable
     // bucket AND the user hasn't switched it off in the popup.
-    // v1.2.12: shown as just "F <pct>" to keep the full "Rate us" wording on one
+    // v1.2.9: shown as just "F <pct>" to keep the full "Rate us" wording on one
     // line; the full story ("Fable usage 1% · Reset in 4d") moves to its hover
     // tooltip. The inline reset meta is suppressed permanently in overlay.css.
     const fable = fableData();
