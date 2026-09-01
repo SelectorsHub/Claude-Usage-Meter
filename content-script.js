@@ -481,12 +481,18 @@
     setTimeout(() => {
       themeRefreshScheduled = false;
       applyTheme(document.getElementById(OVERLAY_ID));
+      applyTheme(document.getElementById(DESKTOP_LINK_ID));
     }, 150);
   }
 
   // ===== overlay =====
   const OVERLAY_ID = "claude-usage-overlay";
   const DISMISS_KEY = "overlay_dismissed_until";
+  // v1.3.0: sidebar entry pointing at the desktop build.
+  const DESKTOP_LINK_ID = "cut-desktop-link";
+  const DESKTOP_DISMISS_KEY = "desktop_link_dismissed";
+  const DESKTOP_URL = "https://github.com/SelectorsHub/Claude-Usage-Meter-Desktop/releases/latest";
+  const PRODUCT_URL = "https://selectorshub.com/claude-usage-meter/";
   const RATE_KEY = "rate_us_clicked";
   // v1.2.3: timestamp of the Rate us click. The Share button used to appear the
   // instant someone rated, which reads as "thanks — now do one more thing for
@@ -956,7 +962,8 @@
     const tooltipText =
       "Claude Usage Meter — shows your Claude.ai session and weekly usage. " +
       "The gauge sweeps each time fresh numbers arrive. " +
-      "Click the extension icon in the toolbar for full details and settings.";
+      "Click the logo to learn more, or the extension icon in the toolbar " +
+      "for full details and settings.";
     // v1.2.8: the mark is inline SVG rather than icons/icon-strip.png so the
     // needle can be its own rotatable node. Geometry is traced from the 256px
     // PNG: gauge pivot (19.78, 18.19) doubles as the needle hub, band runs
@@ -982,11 +989,11 @@
       </svg>`;
     root.innerHTML = `
       <div class="cut-strip" role="status">
-        <span class="cut-logo-wrap" tabindex="0" role="img"
-              aria-label="${tooltipText.replace(/"/g, '&quot;')}">
+        <a class="cut-logo-wrap" href="${PRODUCT_URL}" target="_blank" rel="noopener noreferrer"
+           aria-label="${tooltipText.replace(/"/g, '&quot;')}">
           ${logoSvg}
           <span class="cut-tooltip" aria-hidden="true">${tooltipText}<span class="cut-tip-live" data-cut="tip-live"></span></span>
-        </span>
+        </a>
         <div class="cut-divider" data-cut="session-divider"></div>
         <div class="cut-seg" data-cut="session">
           <span class="cut-label" data-cut-label>Session</span>
@@ -2203,6 +2210,145 @@
     scheduleFit(root);
   }
 
+
+  // ===== sidebar link to the desktop app (v1.3.0) =====
+  //
+  // Claude's sidebar markup is unstable and its class names are generated, so
+  // anchoring to them would break on any deploy. Instead we find a nav link we
+  // know the app owns by its href ("/new", "/recents", "/projects") and mount
+  // as a sibling in that same list. If none of those exist — collapsed sidebar,
+  // logged out, a redesign — we mount nothing rather than guess at a container
+  // and end up injecting into the middle of someone's chat history.
+  // Claude's sidebar class names are generated and change between deploys, so
+  // anchoring to them would break. Two strategies, in order:
+  //
+  //   1. Match a nav row by its visible label ("Customize", "Settings"). These
+  //      live at the bottom of the sidebar, which is where this belongs — the
+  //      top of someone's navigation is for their chats, not our promo.
+  //   2. Fall back to hrefs the app owns.
+  //
+  // If neither matches — collapsed sidebar, logged out, a redesign — we mount
+  // nothing rather than guess at a container and land in the chat history.
+  const SIDEBAR_LABELS = ["customize", "settings", "help"];
+
+  function findSidebarByLabel(scope) {
+    const rows = scope.querySelectorAll(
+      'a, button, [role="button"], [role="menuitem"], [role="link"]'
+    );
+    for (const label of SIDEBAR_LABELS) {
+      for (const row of rows) {
+        if (row.offsetParent === null) continue;
+        const text = (row.textContent || "").trim().toLowerCase();
+        // Exact-ish match only: a chat titled "how do I customize X" must never
+        // be mistaken for the Customize nav row.
+        if (text === label && text.length <= 24) return row;
+      }
+    }
+    return null;
+  }
+
+  function findSidebarAnchor() {
+    const nav = document.querySelector("nav") || document.querySelector('[role="navigation"]');
+    const scope = nav || document.body;
+
+    const byLabel = findSidebarByLabel(scope);
+    if (byLabel) return byLabel;
+
+    const hrefs = ['a[href="/settings"]', 'a[href="/recents"]', 'a[href="/projects"]', 'a[href="/new"]'];
+    for (const sel of hrefs) {
+      const link = scope.querySelector(sel);
+      if (link && link.offsetParent !== null) return link;
+    }
+    return null;
+  }
+
+  let desktopLinkDismissed = false;
+  function ensureDesktopLink() {
+    if (desktopLinkDismissed) {
+      const stale = document.getElementById(DESKTOP_LINK_ID);
+      if (stale) stale.remove();
+      return;
+    }
+    if (document.getElementById(DESKTOP_LINK_ID)) {
+      applyTheme(document.getElementById(DESKTOP_LINK_ID));
+      return;
+    }
+
+    const anchor = findSidebarAnchor();
+    if (!anchor) return;
+
+    // Sit alongside the nav item, not inside it — appending into the anchor
+    // would put our markup inside Claude's own <a>, which nests interactive
+    // elements and breaks keyboard navigation.
+    const row = anchor.parentElement;
+    const list = row && row.parentElement;
+    if (!row || !list) return;
+
+    const wrap = document.createElement("div");
+    wrap.id = DESKTOP_LINK_ID;
+    wrap.className = "cut-desktop-link";
+
+    const link = document.createElement("a");
+    link.href = DESKTOP_URL;
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    link.className = "cut-desktop-link-a";
+    link.title = "Claude Usage Meter — desktop app for macOS and Windows";
+
+    const icon = document.createElement("span");
+    icon.className = "cut-desktop-ico";
+    icon.innerHTML =
+      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" ' +
+      'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+      '<rect x="2" y="3" width="20" height="14" rx="2"></rect>' +
+      '<path d="M8 21h8M12 17v4"></path></svg>';
+
+    // Two lines: the product on top, what it IS underneath. One line reading
+    // "Usage Meter Desktop" leaves people guessing whether it's a setting, a
+    // page, or something they can actually install.
+    const label = document.createElement("span");
+    label.className = "cut-desktop-label";
+
+    const title = document.createElement("span");
+    title.className = "cut-desktop-title";
+    title.textContent = "Claude Usage Meter";
+
+    const sub = document.createElement("span");
+    sub.className = "cut-desktop-sub";
+    sub.textContent = "Desktop version available";
+
+    label.appendChild(title);
+    label.appendChild(sub);
+
+    link.appendChild(icon);
+    link.appendChild(label);
+
+    const close = document.createElement("button");
+    close.type = "button";
+    close.className = "cut-desktop-x";
+    close.setAttribute("aria-label", "Hide the desktop app link");
+    close.textContent = "\u00d7";
+    close.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      desktopLinkDismissed = true;
+      try { chrome.storage.local.set({ [DESKTOP_DISMISS_KEY]: true }); } catch (_) {}
+      wrap.remove();
+    });
+
+    wrap.appendChild(link);
+    wrap.appendChild(close);
+    applyTheme(wrap);
+    list.insertBefore(wrap, row.nextSibling);
+  }
+
+  try {
+    chrome.storage.local.get(DESKTOP_DISMISS_KEY, (res) => {
+      desktopLinkDismissed = !!(res && res[DESKTOP_DISMISS_KEY]);
+      ensureDesktopLink();
+    });
+  } catch (_) {}
+
   function findMountTarget() {
     const editor =
       document.querySelector('div.ProseMirror[contenteditable="true"]') ||
@@ -2259,6 +2405,7 @@
   let bootAttempts = 0;
   const bootTimer = setInterval(() => {
     ensureMounted();
+    ensureDesktopLink();
     reportModelIfChanged();
     scanLockoutBanner();
     if (++bootAttempts >= 30) clearInterval(bootTimer);
@@ -2271,6 +2418,7 @@
     setTimeout(() => {
       observerScheduled = false;
       ensureMounted();
+      ensureDesktopLink();
       reportModelIfChanged();
       scanLockoutBanner();
     }, 400);
