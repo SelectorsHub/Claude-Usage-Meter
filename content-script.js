@@ -1,4 +1,20 @@
-// content-script.js (isolated world, v1.28)
+// content-script.js (isolated world, v1.29)
+// - v1.3.1: PROJECTS QUICK-PICKER. A "Projects" button in claude.ai's composer
+//   footer, immediately after the Chat/Cowork control, that drops the account's
+//   full project list: type to filter, arrow keys to move, Enter to open, and
+//   the projects you actually open pinned to the top under "Recent" (our own
+//   record, kept in chrome.storage.local, not the API's updated_at). It replaces
+//   a two-level menu walk (plus icon -> hover Projects -> pick) or a trip to the
+//   sidebar with one click. Anchoring, placement and the decision to navigate
+//   rather than fake an SPA route are all argued at the block itself; the list
+//   comes from background.js (the org id lives in an HttpOnly cookie this side
+//   can't read).
+//   The menu's last line names us — the button sits inside Claude's own
+//   composer, so without it a user fairly assumes Anthropic shipped it and has
+//   nowhere to go when they want it gone — and links straight to the toggle:
+//   the strip's gear when it's on screen (with the row flashed so they don't
+//   have to hunt for it), the options page when it isn't. settings.projectsButton
+//   appears in all three settings surfaces (gear, popup panel, options page).
 // - v1.2.8: LIVE-UPDATE NEEDLE SWEEP. The strip mark is now inline SVG instead
 //   of icons/icon-strip.png, so its gauge needle is a rotatable node. On each
 //   arriving reading it runs a dashboard self-test: drop to the empty end of
@@ -482,6 +498,11 @@
       themeRefreshScheduled = false;
       applyTheme(document.getElementById(OVERLAY_ID));
       applyTheme(document.getElementById(DESKTOP_LINK_ID));
+      // v1.3.1: the composer button follows the page theme too, and the menu is
+      // portaled outside the overlay so it carries its own theme class.
+      applyTheme(document.getElementById(PROJ_BTN_ID));
+      const projPop = document.getElementById(PROJ_POP_ID);
+      if (projPop) projPop.classList.toggle("cut-proj-dark", detectClaudeTheme() === "dark");
     }, 150);
   }
 
@@ -1074,6 +1095,9 @@
             <label class="cut-sp-row"><input type="checkbox" data-sp="resetTimeSession" /><span>Session reset time</span></label>
             <label class="cut-sp-row"><input type="checkbox" data-sp="resetTimeWeekly" /><span>Weekly reset time</span></label>
             <label class="cut-sp-row"><input type="checkbox" data-sp="forecast" /><span>Limit forecast</span></label>
+            <div class="cut-sp-sep"></div>
+            <div class="cut-sp-title cut-sp-title-sub">In Claude&rsquo;s chat box</div>
+            <label class="cut-sp-row" data-cut="sp-projects-row"><input type="checkbox" data-sp-top="projectsButton" /><span>Projects button</span></label>
             <div class="cut-sp-foot" data-cut="sp-foot">Keep at least one meter on.</div>
           </div>
         </span>
@@ -1127,7 +1151,9 @@
     const settingsPop = root.querySelector('[data-cut="settings-pop"]');
     if (settingsPop) {
       settingsPop.addEventListener("change", (e) => {
-        if (e.target && e.target.matches("input[data-sp]")) saveSettingsPop(settingsPop);
+        if (e.target && e.target.matches("input[data-sp], input[data-sp-top]")) {
+          saveSettingsPop(settingsPop);
+        }
       });
       // Clicks inside the popover must not bubble to the strip's own click
       // handlers (which drop tooltips) or the document outside-click closer.
@@ -1695,6 +1721,12 @@
     for (const box of spBoxes(pop)) {
       box.checked = fieldOn(box.getAttribute("data-sp"));
     }
+    // v1.3.1: rows that are NOT stripFields. The Projects button lives in
+    // Claude's composer rather than in our strip, so it can't ride the
+    // stripFields path — but it belongs in the same menu, because "settings" to
+    // a user is whichever of our three surfaces they happen to open.
+    const projBox = pop.querySelector('input[data-sp-top="projectsButton"]');
+    if (projBox) projBox.checked = projectsEnabled;
     // The Fable row only makes sense when the API reports a Fable bucket; a
     // checkbox that visibly does nothing reads as broken, so hide the row and
     // its divider position stays natural.
@@ -1720,13 +1752,23 @@
   function saveSettingsPop(pop) {
     const sf = {};
     for (const box of spBoxes(pop)) sf[box.getAttribute("data-sp")] = box.checked;
+    const settings = { stripFields: sf };
+
+    const projBox = pop.querySelector('input[data-sp-top="projectsButton"]');
+    if (projBox) {
+      settings.projectsButton = projBox.checked;
+      projectsEnabled = projBox.checked;
+      projectsSettingsKnown = true;
+      ensureProjectsButton();
+    }
+
     // Apply locally right away for a snappy strip update; the storage.onChanged
     // round-trip lands the same values, so the double render is idempotent.
     stripFields = { ...stripFields, ...sf };
     syncSettingsPop(pop);
     renderInto(document.getElementById(OVERLAY_ID));
     try {
-      chrome.runtime.sendMessage({ type: "save-settings", settings: { stripFields: sf } });
+      chrome.runtime.sendMessage({ type: "save-settings", settings });
     } catch (_) {}
   }
 
@@ -2349,6 +2391,606 @@
     });
   } catch (_) {}
 
+  // ===== v1.3.1: Projects quick-picker in Claude's composer footer =====
+  //
+  // Opening a project today is a two-level walk — plus icon, hover Projects,
+  // pick — or a trip to the sidebar. This puts one button next to Chat/Cowork
+  // that drops the whole list, filterable, keyboard-driven, with the projects
+  // you actually use pinned to the top.
+  //
+  // Placement: immediately after the Chat/Cowork segmented control. That control
+  // is found via [data-surface-segment], a data attribute the app owns — the
+  // surrounding class names are generated and would break on any deploy. We then
+  // climb out of any display:contents wrappers so the button lands in the real
+  // flex row rather than inside a wrapper Claude may re-render, and insert as a
+  // sibling AFTER it. If the control isn't there (older build, redesign) we fall
+  // back to the attach button's row, and if neither is found we mount nothing.
+  //
+  // Selection navigates to /project/{uuid} with a full page load. Faking an SPA
+  // route (pushState + a synthetic popstate) was considered and dropped: it
+  // works until Claude's router changes, and a half-navigated app is a much
+  // worse failure than a one-second reload. Cmd/Ctrl/middle-click still opens a
+  // new tab, because each row is a real <a href>.
+  const PROJ_BTN_ID = "cut-projects-btn";
+  const PROJ_POP_ID = "cut-projects-pop";
+  const PROJ_RECENT_KEY = "projects_recent";      // { uuid: lastOpenedMs }
+  const PROJ_RECENT_MAX = 12;                     // stored
+  const PROJ_RECENT_SHOWN = 3;                    // pinned at the top
+  const PROJ_LIST_CAP = 300;                      // rendered rows, filtered or not
+  const PROJ_FRESH_MS = 60 * 1000;                // in-page reuse window
+  const PROJ_ICON_ONLY_W = 520;                   // composer width below which the label goes
+  const PROJECTS_PAGE_URL = "https://claude.ai/projects";
+  const projectHref = (uuid) => "https://claude.ai/project/" + uuid;
+
+  let projectsEnabled = true;      // settings.projectsButton
+  // Nothing is injected until the stored setting has actually been read. The
+  // default is ON, so mounting first and correcting later would flash a button
+  // into the composer of every user who has turned it off — the same reason the
+  // Rate/Donate buttons start hidden in CSS.
+  let projectsSettingsKnown = false;
+  let projectsList = null;         // last good list from the background
+  let projectsError = null;
+  let projectsLoading = false;
+  let projectsAt = 0;
+  let projRecent = {};             // uuid -> ms, our own "you opened this" record
+  let projPopOpen = false;
+  let projFilter = "";
+  let projActive = -1;             // index into the currently rendered rows
+  let projOutsideHandler = null;
+  let projFollowHandler = null;
+  let projKeyHandler = null;
+  let projFitObserver = null;
+  let projFitTarget = null;
+
+  try {
+    chrome.storage.local.get(PROJ_RECENT_KEY, (res) => {
+      const v = res && res[PROJ_RECENT_KEY];
+      if (v && typeof v === "object") projRecent = v;
+    });
+  } catch (_) {}
+
+  function rememberProject(uuid) {
+    projRecent[uuid] = Date.now();
+    const entries = Object.entries(projRecent).sort((a, b) => b[1] - a[1]);
+    if (entries.length > PROJ_RECENT_MAX) {
+      projRecent = Object.fromEntries(entries.slice(0, PROJ_RECENT_MAX));
+    }
+    try { chrome.storage.local.set({ [PROJ_RECENT_KEY]: projRecent }); } catch (_) {}
+  }
+
+  function projWhen(ts) {
+    if (!ts) return "";
+    const diff = Date.now() - ts;
+    if (diff < 60 * 1000) return "now";
+    if (diff < 60 * 60 * 1000) return Math.round(diff / 60000) + "m";
+    if (diff < 24 * 60 * 60 * 1000) return Math.round(diff / 3600000) + "h";
+    if (diff < 7 * 24 * 60 * 60 * 1000) return Math.round(diff / 86400000) + "d";
+    try {
+      return new Date(ts).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+    } catch (_) {
+      return "";
+    }
+  }
+
+  function requestProjects(force) {
+    if (projectsLoading) return;
+    if (!force && projectsList && Date.now() - projectsAt < PROJ_FRESH_MS) return;
+    projectsLoading = true;
+    renderProjectsPop();
+    try {
+      chrome.runtime.sendMessage({ type: "get-projects", force: !!force }, (resp) => {
+        void chrome.runtime.lastError;
+        projectsLoading = false;
+        if (resp && resp.ok) {
+          projectsList = Array.isArray(resp.projects) ? resp.projects : [];
+          projectsError = null;
+          projectsAt = Date.now();
+        } else {
+          projectsError = (resp && resp.error) || "unavailable";
+        }
+        renderProjectsPop();
+      });
+    } catch (_) {
+      projectsLoading = false;
+      projectsError = "unavailable";
+      renderProjectsPop();
+    }
+  }
+
+  // ---- anchor + button ---------------------------------------------------
+
+  function findProjectsSpot() {
+    const seg =
+      document.querySelector('[data-surface-segment="cowork"]') ||
+      document.querySelector("[data-surface-segment]");
+    let node =
+      (seg &&
+        (seg.closest('[data-cds="SegmentedControl"]') || seg.closest('[role="radiogroup"]'))) ||
+      null;
+
+    if (!node) {
+      const attach = document.querySelector('[data-testid="chat-input-attach"]');
+      node = attach ? attach.closest("div") : null;
+    }
+    if (!node || node.offsetParent === null) return null;
+
+    // display:contents wrappers are not boxes — inserting beside the control
+    // inside one still works, but climbing to the real flex row keeps us out of
+    // the subtree React is most likely to replace wholesale.
+    for (let i = 0; i < 4 && node.parentElement; i++) {
+      let display = "";
+      try { display = getComputedStyle(node.parentElement).display; } catch (_) {}
+      if (display !== "contents") break;
+      node = node.parentElement;
+    }
+    const row = node.parentElement;
+    if (!row) return null;
+
+    // Sanity check: the row must belong to the composer, not to some other
+    // radiogroup elsewhere on the page.
+    const target = findMountTarget();
+    if (target && target.wrapper && !target.wrapper.contains(row) && !row.contains(target.wrapper)) {
+      return null;
+    }
+    return { row, after: node, composer: target ? target.wrapper : null };
+  }
+
+  function projIcon() {
+    return (
+      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" ' +
+      'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+      '<path d="M3 7.5A1.5 1.5 0 0 1 4.5 6h4l2 2.2h7A1.5 1.5 0 0 1 19 9.7V17a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 3 17z"></path>' +
+      "</svg>"
+    );
+  }
+
+  function ensureProjectsButton() {
+    const existing = document.getElementById(PROJ_BTN_ID);
+
+    if (!projectsEnabled) {
+      if (existing) existing.remove();
+      if (projPopOpen) closeProjectsPop();
+      return;
+    }
+
+    if (!projectsSettingsKnown) return;
+
+    const spot = findProjectsSpot();
+    if (!spot) return;
+
+    if (existing) {
+      applyTheme(existing);
+      // Claude re-renders the footer often (surface switches, attachments). If
+      // our button drifted or was orphaned, put it back where it belongs; if
+      // it's already right, touch nothing — a needless move would feed the
+      // MutationObserver that brought us here.
+      if (existing.parentElement !== spot.row || existing.previousElementSibling !== spot.after) {
+        spot.row.insertBefore(existing, spot.after.nextSibling);
+      }
+      observeProjFit(spot.composer);
+      applyProjFit(spot.composer);
+      return;
+    }
+
+    const btn = document.createElement("button");
+    btn.id = PROJ_BTN_ID;
+    btn.type = "button";
+    btn.className = "cut-proj-btn";
+    btn.title = "Open one of your projects";
+    btn.setAttribute("aria-label", "Projects");
+    btn.setAttribute("aria-haspopup", "listbox");
+    btn.setAttribute("aria-expanded", "false");
+    btn.innerHTML =
+      '<span class="cut-proj-ico">' + projIcon() + "</span>" +
+      '<span class="cut-proj-text">Projects</span>' +
+      '<span class="cut-proj-caret"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
+      'stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+      '<path d="M6 9l6 6 6-6"></path></svg></span>';
+
+    // Warm the list on hover/focus so the menu is already populated by the time
+    // the click lands. Cheap: the background answers from cache most of the time.
+    btn.addEventListener("mouseenter", () => requestProjects(false));
+    btn.addEventListener("focus", () => requestProjects(false));
+    btn.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (projPopOpen) closeProjectsPop();
+      else openProjectsPop();
+    });
+
+    applyTheme(btn);
+    spot.row.insertBefore(btn, spot.after.nextSibling);
+    observeProjFit(spot.composer);
+    applyProjFit(spot.composer);
+  }
+
+  // The label is the first thing to go when the composer gets narrow (preview
+  // panel open, split window) — same measure-don't-guess approach the strip
+  // uses, since the composer's width has nothing to do with the viewport's.
+  function observeProjFit(composer) {
+    if (!composer || !window.ResizeObserver) return;
+    // Idempotent: ensureProjectsButton() runs on every mutation burst, and
+    // tearing down a working observer several times a second would be pure
+    // churn. Only re-arm when the composer element itself has been swapped.
+    if (projFitObserver && projFitTarget === composer) return;
+    if (projFitObserver) projFitObserver.disconnect();
+    projFitTarget = composer;
+    projFitObserver = new ResizeObserver(() => applyProjFit(composer));
+    projFitObserver.observe(composer);
+  }
+
+  function applyProjFit(composer) {
+    const btn = document.getElementById(PROJ_BTN_ID);
+    if (!btn || !composer) return;
+    btn.classList.toggle("cut-proj-icononly", composer.clientWidth < PROJ_ICON_ONLY_W);
+  }
+
+  // ---- the popover -------------------------------------------------------
+
+  function buildProjectsPop() {
+    const pop = document.createElement("div");
+    pop.id = PROJ_POP_ID;
+    pop.className = "cut-proj-pop";
+    pop.setAttribute("role", "dialog");
+    pop.setAttribute("aria-label", "Your projects");
+
+    const head = document.createElement("div");
+    head.className = "cut-proj-head";
+
+    const search = document.createElement("input");
+    search.type = "text";
+    search.className = "cut-proj-search";
+    search.placeholder = "Search projects";
+    search.setAttribute("aria-label", "Search projects");
+    search.addEventListener("input", () => {
+      projFilter = search.value.trim().toLowerCase();
+      projActive = -1;
+      renderProjectsPop();
+    });
+
+    const refresh = document.createElement("button");
+    refresh.type = "button";
+    refresh.className = "cut-proj-refresh";
+    refresh.title = "Reload the list";
+    refresh.setAttribute("aria-label", "Reload the list");
+    refresh.innerHTML =
+      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" ' +
+      'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+      '<path d="M20 11a8 8 0 1 0-2.3 5.7"></path><path d="M20 5v6h-6"></path></svg>';
+    refresh.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      requestProjects(true);
+      search.focus();
+    });
+
+    head.appendChild(search);
+    head.appendChild(refresh);
+
+    const list = document.createElement("div");
+    list.className = "cut-proj-list";
+    list.setAttribute("role", "listbox");
+
+    const foot = document.createElement("div");
+    foot.className = "cut-proj-foot";
+    const all = document.createElement("a");
+    all.className = "cut-proj-all";
+    all.href = PROJECTS_PAGE_URL;
+    all.textContent = "All projects";
+    const hint = document.createElement("span");
+    hint.className = "cut-proj-hint";
+    hint.textContent = "\u2191\u2193 Enter";
+    foot.appendChild(all);
+    foot.appendChild(hint);
+
+    // Say plainly whose button this is. This menu appears inside Claude's own
+    // composer, so without a line like this a user reasonably assumes Anthropic
+    // shipped it — and then has nowhere to go when they want it gone. The
+    // wording names the extension AND where the off switch is, and the link
+    // takes them straight there so it isn't a scavenger hunt.
+    const brand = document.createElement("div");
+    brand.className = "cut-proj-brand";
+    const brandText = document.createElement("span");
+    brandText.textContent = "Added by Claude Usage Meter. Hide it from ";
+    const brandBtn = document.createElement("button");
+    brandBtn.type = "button";
+    brandBtn.className = "cut-proj-brand-link";
+    brandBtn.innerHTML =
+      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" ' +
+      'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+      '<circle cx="12" cy="12" r="3.2"></circle>' +
+      '<path d="M19.1 14.8a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1.03 1.55V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.56 1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.55-1.03H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.56-1.1 1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.7 1.7 0 0 0 1.87.34H9a1.7 1.7 0 0 0 1.03-1.55V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1.03 1.55 1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.7 1.7 0 0 0-.34 1.87V9a1.7 1.7 0 0 0 1.55 1.03H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.55 1.03z"></path></svg>' +
+      "<span>its settings</span>";
+    brandBtn.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      openMeterSettings();
+    });
+    brand.appendChild(brandText);
+    brand.appendChild(brandBtn);
+
+    pop.appendChild(head);
+    pop.appendChild(list);
+    pop.appendChild(foot);
+    pop.appendChild(brand);
+    return pop;
+  }
+
+  // Take the user to the toggle rather than describing where it is. The gear on
+  // the strip is the nearest surface, so use it when it's actually on screen
+  // (it's hidden in collapsed mode, and the strip can be dismissed for 12
+  // hours); otherwise fall back to the extension's options page, which always
+  // exists. Either way the Projects row gets a brief highlight so it's the
+  // thing they see first.
+  function openMeterSettings() {
+    closeProjectsPop();
+    const root = document.getElementById(OVERLAY_ID);
+    const gear = root && root.querySelector('[data-cut="settings"]');
+    const gearVisible = !!(gear && gear.isConnected && gear.getClientRects().length > 0);
+
+    if (root && gearVisible && !collapsed) {
+      if (!settingsPopOpen) openSettingsPop(root);
+      const pop = activeSettingsPop || root.querySelector('[data-cut="settings-pop"]');
+      const row = pop && pop.querySelector('[data-cut="sp-projects-row"]');
+      if (row) {
+        row.classList.remove("cut-sp-flash");
+        void row.offsetWidth;                 // restart the animation
+        row.classList.add("cut-sp-flash");
+        setTimeout(() => row.classList.remove("cut-sp-flash"), 2400);
+      }
+      return;
+    }
+    try { chrome.runtime.sendMessage({ type: "open-options" }); } catch (_) {}
+  }
+
+  function projRow(p, groupRecent) {
+    const a = document.createElement("a");
+    a.className = "cut-proj-item";
+    a.href = projectHref(p.uuid);
+    a.setAttribute("role", "option");
+    a.dataset.uuid = p.uuid;
+
+    const name = document.createElement("span");
+    name.className = "cut-proj-name";
+    name.textContent = p.name;
+
+    const when = document.createElement("span");
+    when.className = "cut-proj-when";
+    when.textContent = groupRecent ? projWhen(projRecent[p.uuid]) : projWhen(p.updatedAt);
+
+    a.appendChild(name);
+    a.appendChild(when);
+    a.addEventListener("click", (e) => openProject(p.uuid, e));
+    a.addEventListener("mousemove", () => {
+      const rows = currentProjRows();
+      const i = rows.indexOf(a);
+      if (i > -1 && i !== projActive) setProjActive(i, false);
+    });
+    return a;
+  }
+
+  function projHeader(text) {
+    const h = document.createElement("div");
+    h.className = "cut-proj-group";
+    h.textContent = text;
+    return h;
+  }
+
+  function projNote(text, sub) {
+    const d = document.createElement("div");
+    d.className = "cut-proj-note";
+    d.textContent = text;
+    if (sub) {
+      const s = document.createElement("div");
+      s.className = "cut-proj-note-sub";
+      s.textContent = sub;
+      d.appendChild(s);
+    }
+    return d;
+  }
+
+  function currentProjRows() {
+    const pop = document.getElementById(PROJ_POP_ID);
+    if (!pop) return [];
+    return Array.from(pop.querySelectorAll(".cut-proj-item"));
+  }
+
+  function setProjActive(i, scroll) {
+    const rows = currentProjRows();
+    projActive = i;
+    rows.forEach((r, n) => r.classList.toggle("cut-proj-active", n === i));
+    if (scroll && rows[i]) rows[i].scrollIntoView({ block: "nearest" });
+  }
+
+  function renderProjectsPop() {
+    const pop = document.getElementById(PROJ_POP_ID);
+    if (!pop || !projPopOpen) return;
+    const list = pop.querySelector(".cut-proj-list");
+    if (!list) return;
+    list.textContent = "";
+
+    if (projectsError && !projectsList) {
+      list.appendChild(
+        projectsError === "not_signed_in"
+          ? projNote("Not signed in to claude.ai", "Sign in and reopen this menu.")
+          : projNote("Couldn't load your projects", "Try Reload, or open claude.ai/projects.")
+      );
+      positionProjectsPop();
+      return;
+    }
+    if (!projectsList) {
+      list.appendChild(projNote("Loading your projects\u2026"));
+      positionProjectsPop();
+      return;
+    }
+    if (projectsList.length === 0) {
+      list.appendChild(projNote("No projects yet", "Create one from the Projects page."));
+      positionProjectsPop();
+      return;
+    }
+
+    const filtered = projFilter
+      ? projectsList.filter((p) => p.name.toLowerCase().includes(projFilter))
+      : projectsList;
+
+    if (filtered.length === 0) {
+      list.appendChild(projNote("Nothing matches \u201c" + projFilter + "\u201d"));
+      positionProjectsPop();
+      return;
+    }
+
+    // While searching, one flat list of matches: grouping a 3-item result under
+    // two headers is noise. Unfiltered, the projects this user actually opens
+    // ride on top — that's the whole point of the button.
+    let shown = filtered;
+    if (!projFilter) {
+      const recent = filtered
+        .filter((p) => projRecent[p.uuid])
+        .sort((a, b) => projRecent[b.uuid] - projRecent[a.uuid])
+        .slice(0, PROJ_RECENT_SHOWN);
+      if (recent.length) {
+        const seen = new Set(recent.map((p) => p.uuid));
+        list.appendChild(projHeader("Recent"));
+        for (const p of recent) list.appendChild(projRow(p, true));
+        list.appendChild(projHeader("All projects"));
+        shown = filtered.filter((p) => !seen.has(p.uuid));
+      }
+    }
+    for (const p of shown.slice(0, PROJ_LIST_CAP)) list.appendChild(projRow(p, false));
+
+    if (projActive >= 0) setProjActive(Math.min(projActive, currentProjRows().length - 1), false);
+    positionProjectsPop();
+  }
+
+  // Anchored to the button's left edge and opening UPWARD: the composer sits at
+  // the bottom of the window, so there is never room below it.
+  function positionProjectsPop() {
+    const pop = document.getElementById(PROJ_POP_ID);
+    const btn = document.getElementById(PROJ_BTN_ID);
+    if (!pop || !btn || !projPopOpen || !btn.isConnected) return;
+    const br = btn.getBoundingClientRect();
+    const margin = 10;
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+
+    // Cap the height to whatever room exists above the button before measuring,
+    // so a long list can't push the menu off the top of the screen.
+    const above = br.top - margin - 8;
+    pop.style.maxHeight = Math.max(160, Math.min(380, above)) + "px";
+
+    const pr = pop.getBoundingClientRect();
+    let left = br.left;
+    left = Math.max(margin, Math.min(left, vw - pr.width - margin));
+    let top = br.top - pr.height - 8;
+    if (top < margin) top = Math.min(br.bottom + 8, vh - pr.height - margin);
+    pop.style.left = left + "px";
+    pop.style.top = Math.max(margin, top) + "px";
+  }
+
+  function openProjectsPop() {
+    const btn = document.getElementById(PROJ_BTN_ID);
+    if (!btn) return;
+    let pop = document.getElementById(PROJ_POP_ID);
+    if (!pop) pop = buildProjectsPop();
+
+    projPopOpen = true;
+    projFilter = "";
+    projActive = -1;
+    btn.setAttribute("aria-expanded", "true");
+
+    // Portaled to <body> at fixed position: the composer clips and scrolls its
+    // own subtree, which would trap the menu inside the chat box.
+    pop.classList.toggle("cut-proj-dark", detectClaudeTheme() === "dark");
+    document.body.appendChild(pop);
+    pop.style.visibility = "hidden";
+    const search = pop.querySelector(".cut-proj-search");
+    if (search) search.value = "";
+    renderProjectsPop();
+    positionProjectsPop();
+    pop.style.visibility = "";
+    if (search) search.focus();
+
+    requestProjects(false);
+
+    let queued = false;
+    projFollowHandler = () => {
+      if (queued) return;
+      queued = true;
+      requestAnimationFrame(() => { queued = false; positionProjectsPop(); });
+    };
+    window.addEventListener("resize", projFollowHandler);
+    window.addEventListener("scroll", projFollowHandler, true);
+
+    projKeyHandler = (ev) => {
+      if (!projPopOpen) return;
+      if (ev.key === "Escape") {
+        ev.preventDefault();
+        ev.stopPropagation();
+        closeProjectsPop();
+        return;
+      }
+      const rows = currentProjRows();
+      if (!rows.length) return;
+      if (ev.key === "ArrowDown") {
+        ev.preventDefault();
+        setProjActive(projActive < rows.length - 1 ? projActive + 1 : 0, true);
+      } else if (ev.key === "ArrowUp") {
+        ev.preventDefault();
+        setProjActive(projActive > 0 ? projActive - 1 : rows.length - 1, true);
+      } else if (ev.key === "Enter") {
+        const pick = rows[projActive >= 0 ? projActive : 0];
+        if (pick) {
+          ev.preventDefault();
+          openProject(pick.dataset.uuid, ev);
+        }
+      }
+    };
+    document.addEventListener("keydown", projKeyHandler, true);
+
+    projOutsideHandler = (ev) => {
+      if (!pop.contains(ev.target) && ev.target !== btn && !btn.contains(ev.target)) {
+        closeProjectsPop();
+      }
+    };
+    setTimeout(() => document.addEventListener("click", projOutsideHandler, true), 0);
+  }
+
+  function closeProjectsPop() {
+    projPopOpen = false;
+    projActive = -1;
+    projFilter = "";
+    if (projOutsideHandler) {
+      document.removeEventListener("click", projOutsideHandler, true);
+      projOutsideHandler = null;
+    }
+    if (projKeyHandler) {
+      document.removeEventListener("keydown", projKeyHandler, true);
+      projKeyHandler = null;
+    }
+    if (projFollowHandler) {
+      window.removeEventListener("resize", projFollowHandler);
+      window.removeEventListener("scroll", projFollowHandler, true);
+      projFollowHandler = null;
+    }
+    const pop = document.getElementById(PROJ_POP_ID);
+    if (pop && pop.parentNode === document.body) pop.remove();
+    const btn = document.getElementById(PROJ_BTN_ID);
+    if (btn) btn.setAttribute("aria-expanded", "false");
+  }
+
+  function openProject(uuid, ev) {
+    if (!uuid) return;
+    rememberProject(uuid);
+    // Modified clicks are the browser's business — let it open the tab/window.
+    if (ev && (ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.button === 1)) {
+      closeProjectsPop();
+      return;
+    }
+    if (ev) ev.preventDefault();
+    closeProjectsPop();
+    window.location.assign(projectHref(uuid));
+  }
+
   function findMountTarget() {
     const editor =
       document.querySelector('div.ProseMirror[contenteditable="true"]') ||
@@ -2402,10 +3044,19 @@
     renderInto(pill);
   }
 
+  // If get-state never answers (a suspended service worker on a cold tab), fall
+  // back to the default rather than withholding the button forever.
+  setTimeout(() => {
+    if (projectsSettingsKnown) return;
+    projectsSettingsKnown = true;
+    ensureProjectsButton();
+  }, 4000);
+
   let bootAttempts = 0;
   const bootTimer = setInterval(() => {
     ensureMounted();
     ensureDesktopLink();
+    ensureProjectsButton();
     reportModelIfChanged();
     scanLockoutBanner();
     if (++bootAttempts >= 30) clearInterval(bootTimer);
@@ -2419,6 +3070,7 @@
       observerScheduled = false;
       ensureMounted();
       ensureDesktopLink();
+      ensureProjectsButton();
       reportModelIfChanged();
       scanLockoutBanner();
     }, 400);
@@ -2491,6 +3143,11 @@
       if (resp && resp.settings && resp.settings.pollMinutes) {
         pollMinutes = Number(resp.settings.pollMinutes) || 1;
       }
+      // v1.3.1: the composer Projects button (options page toggle, default on).
+      if (resp && resp.settings) {
+        projectsEnabled = resp.settings.projectsButton !== false;
+      }
+      projectsSettingsKnown = true;
       try {
         const { [RATE_KEY]: rv, [RATE_AT_KEY]: rav, [SHARE_KEY]: sv, [COLLAPSE_KEY]: cv,
                 [INSTALL_KEY]: iv, [NUDGE_KEY]: nv } =
@@ -2526,6 +3183,7 @@
         }
       } catch (_) {}
       ensureMounted();
+      ensureProjectsButton();
       // v1.2.14: the initial render above used STORED state, which right after
       // an account switch is the previous account's numbers. Kick a poll now so
       // the fresh account's data lands and re-broadcasts within a second or two
@@ -2550,6 +3208,14 @@
         stripFields = { ...stripFields, ...sf };
       }
       if (sf || nv.pollMinutes) renderInto(document.getElementById(OVERLAY_ID));
+      // v1.3.1: switching the Projects button off on the options page takes it
+      // out of every open claude.ai tab immediately, no reload.
+      const wantProjects = nv.projectsButton !== false;
+      if (wantProjects !== projectsEnabled || !projectsSettingsKnown) {
+        projectsEnabled = wantProjects;
+        projectsSettingsKnown = true;
+        ensureProjectsButton();
+      }
     }
     if (changes[RATE_AT_KEY]) {
       ratedAt = Number(changes[RATE_AT_KEY].newValue) || 0;
@@ -2582,6 +3248,13 @@
       shared = !!changes[SHARE_KEY].newValue;
       const root = document.getElementById(OVERLAY_ID);
       if (root && !sharePopOpen) applyShareVisibility(root);
+    }
+    if (changes[PROJ_RECENT_KEY]) {
+      const v = changes[PROJ_RECENT_KEY].newValue;
+      if (v && typeof v === "object") {
+        projRecent = v;
+        if (projPopOpen) renderProjectsPop();
+      }
     }
     if (changes[COLLAPSE_KEY]) {
       collapsed = !!changes[COLLAPSE_KEY].newValue;

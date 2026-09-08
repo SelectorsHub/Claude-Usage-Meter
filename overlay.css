@@ -1776,3 +1776,225 @@
 @media (prefers-reduced-motion: reduce) {
   #cut-desktop-link, #cut-desktop-link:hover { transform: none; transition: none; }
 }
+
+/* ===== v1.3.1 — Projects quick-picker in claude.ai's composer =====
+   Unlike the sidebar link, this one deliberately does NOT wear the SelectorsHub
+   gold. It sits inside Claude's own composer chrome next to Chat/Cowork, and a
+   branded button there reads as an ad wedged into the app; a native-looking one
+   reads as a feature and actually gets used. The brand shows up where it costs
+   nothing: the coral focus ring on the search field. */
+#cut-projects-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: 0 0 auto;
+  height: 28px;
+  padding: 0 8px;
+  margin: 0 0 0 2px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  cursor: pointer;
+  white-space: nowrap;
+  font: 500 12px/1 ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: rgba(28, 25, 23, 0.62);
+  transition: background 0.12s ease, color 0.12s ease;
+}
+#cut-projects-btn.cut-theme-dark { color: rgba(255, 255, 255, 0.62); }
+#cut-projects-btn:hover { background: rgba(28, 25, 23, 0.07); color: rgba(28, 25, 23, 0.92); }
+#cut-projects-btn.cut-theme-dark:hover { background: rgba(255, 255, 255, 0.09); color: #fff; }
+#cut-projects-btn[aria-expanded="true"] { background: rgba(28, 25, 23, 0.09); color: rgba(28, 25, 23, 0.95); }
+#cut-projects-btn.cut-theme-dark[aria-expanded="true"] { background: rgba(255, 255, 255, 0.12); color: #fff; }
+#cut-projects-btn:focus-visible { outline: 2px solid #d97757; outline-offset: 1px; }
+#cut-projects-btn .cut-proj-ico,
+#cut-projects-btn .cut-proj-caret { display: inline-flex; flex: 0 0 auto; }
+#cut-projects-btn .cut-proj-ico svg { width: 15px; height: 15px; display: block; }
+#cut-projects-btn .cut-proj-caret svg { width: 10px; height: 10px; display: block; opacity: 0.65; }
+
+/* Narrow composer (preview panel open, split window): the label goes first —
+   driven by a measured composer width, not a viewport media query, because the
+   two have nothing to do with each other here. */
+#cut-projects-btn.cut-proj-icononly .cut-proj-text,
+#cut-projects-btn.cut-proj-icononly .cut-proj-caret { display: none; }
+#cut-projects-btn.cut-proj-icononly { padding: 0 6px; }
+
+/* The menu. Portaled to <body> at fixed position (the composer clips and
+   scrolls its own subtree), so every selector here is top-level. It follows the
+   PAGE theme rather than inverting like the strip's tooltips — a list of the
+   user's own project names is a menu, and a menu that fights the surface it
+   opens over looks like it belongs to another app. */
+.cut-proj-pop {
+  position: fixed;
+  z-index: 2147483646;
+  display: flex;
+  flex-direction: column;
+  width: 300px;
+  max-width: calc(100vw - 20px);
+  padding: 8px;
+  box-sizing: border-box;
+  border-radius: 12px;
+  background: #ffffff;
+  color: #1c1917;
+  box-shadow: 0 14px 38px rgba(0, 0, 0, 0.18), 0 0 0 1px rgba(28, 25, 23, 0.08);
+  font: 500 12.5px/1.35 ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+.cut-proj-pop.cut-proj-dark {
+  background: #262320;
+  color: #f2efec;
+  box-shadow: 0 14px 38px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(255, 255, 255, 0.1);
+}
+
+.cut-proj-head { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; }
+.cut-proj-search {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 30px;
+  box-sizing: border-box;
+  padding: 0 9px;
+  border-radius: 8px;
+  border: 1px solid rgba(28, 25, 23, 0.14);
+  background: rgba(28, 25, 23, 0.03);
+  color: inherit;
+  font: inherit;
+  outline: none;
+}
+.cut-proj-pop.cut-proj-dark .cut-proj-search {
+  border-color: rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.05);
+}
+.cut-proj-search::placeholder { color: currentColor; opacity: 0.45; }
+.cut-proj-search:focus { border-color: #d97757; box-shadow: 0 0 0 2px rgba(217, 119, 87, 0.22); }
+
+.cut-proj-refresh {
+  appearance: none;
+  flex: 0 0 auto;
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  opacity: 0.6;
+  cursor: pointer;
+  transition: opacity 0.12s ease, background 0.12s ease;
+}
+.cut-proj-refresh:hover { opacity: 1; background: rgba(28, 25, 23, 0.07); }
+.cut-proj-pop.cut-proj-dark .cut-proj-refresh:hover { background: rgba(255, 255, 255, 0.1); }
+.cut-proj-refresh svg { width: 14px; height: 14px; display: block; }
+
+.cut-proj-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  margin-top: 6px;
+  scrollbar-width: thin;
+}
+.cut-proj-group {
+  padding: 6px 8px 3px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  opacity: 0.45;
+}
+.cut-proj-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 8px;
+  border-radius: 8px;
+  color: inherit;
+  text-decoration: none;
+  cursor: pointer;
+}
+.cut-proj-item:hover,
+.cut-proj-item.cut-proj-active { background: rgba(28, 25, 23, 0.07); }
+.cut-proj-pop.cut-proj-dark .cut-proj-item:hover,
+.cut-proj-pop.cut-proj-dark .cut-proj-item.cut-proj-active { background: rgba(255, 255, 255, 0.09); }
+.cut-proj-item:visited { color: inherit; }
+.cut-proj-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cut-proj-when { flex: 0 0 auto; font-size: 10.5px; opacity: 0.42; }
+
+.cut-proj-note { padding: 16px 8px; text-align: center; opacity: 0.75; }
+.cut-proj-note-sub { margin-top: 4px; font-size: 11px; font-weight: 500; opacity: 0.7; }
+
+.cut-proj-foot {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 6px;
+  padding: 7px 8px 2px;
+  border-top: 1px solid rgba(28, 25, 23, 0.09);
+}
+.cut-proj-pop.cut-proj-dark .cut-proj-foot { border-top-color: rgba(255, 255, 255, 0.1); }
+.cut-proj-all { color: inherit; text-decoration: none; font-size: 11.5px; opacity: 0.75; }
+.cut-proj-all:hover { opacity: 1; text-decoration: underline; }
+.cut-proj-hint { font-size: 10.5px; opacity: 0.4; }
+
+/* ---- v1.3.1: Projects row inside the strip's settings popover ---- */
+.cut-settings-pop-portal .cut-sp-title-sub,
+#claude-usage-overlay .cut-sp-title-sub { margin-top: 2px; }
+
+/* Arriving here from the menu's "hide it from its settings" link: the popover
+   opens with several rows and the one they came for should be the one they see.
+   Two slow pulses, then it stops — a permanent highlight would just look like a
+   selected state. */
+@keyframes cut-sp-flash {
+  0%, 100% { background: transparent; }
+  25%, 75% { background: rgba(217, 119, 87, 0.28); }
+}
+.cut-settings-pop-portal .cut-sp-row.cut-sp-flash,
+#claude-usage-overlay .cut-sp-row.cut-sp-flash {
+  border-radius: 6px;
+  animation: cut-sp-flash 1.2s ease-in-out 2;
+}
+@media (prefers-reduced-motion: reduce) {
+  .cut-settings-pop-portal .cut-sp-row.cut-sp-flash,
+  #claude-usage-overlay .cut-sp-row.cut-sp-flash {
+    animation: none;
+    background: rgba(217, 119, 87, 0.22);
+  }
+}
+
+/* ---- v1.3.1: "who added this" line at the foot of the Projects menu ----
+   The menu opens inside Claude's own composer, so without this a user fairly
+   assumes Anthropic shipped the button — and has nowhere to go when they want
+   it gone. Muted and one line: it's an answer for the person who goes looking,
+   not a banner. */
+.cut-proj-brand {
+  flex: 0 0 auto;
+  margin-top: 2px;
+  padding: 0 8px 2px;
+  font-size: 10.5px;
+  line-height: 1.45;
+  opacity: 0.55;
+}
+.cut-proj-brand-link {
+  appearance: none;
+  border: 0;
+  padding: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  vertical-align: baseline;
+}
+.cut-proj-brand-link svg { width: 11px; height: 11px; display: block; }
+.cut-proj-brand:hover { opacity: 0.8; }
+.cut-proj-brand-link:hover { color: #d97757; }
+.cut-proj-brand-link:focus-visible { outline: 2px solid #d97757; outline-offset: 2px; border-radius: 3px; }

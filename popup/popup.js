@@ -254,6 +254,11 @@ const METER_FIELDS = ["session", "weekly", "fable"];
 // v1.2.17: `forecast` joins the trimmings — it can be switched off entirely
 // without leaving the strip empty, so it's outside METER_FIELDS.
 const ALL_FIELDS = [...METER_FIELDS, "resetTimeSession", "resetTimeWeekly", "forecast"];
+// v1.3.1: rows in the same panel that are NOT stripFields. The Projects button
+// is injected into Claude's composer, not our strip, so it saves as a top-level
+// setting — but it belongs in this list, because "settings" to a user means
+// whichever of our three surfaces they happened to open.
+const TOP_FIELDS = ["projectsButton"];
 
 // Whether the usage API is actually reporting a Fable bucket for this account.
 // A checked-but-unreported Fable can't satisfy the "keep one meter on" rule —
@@ -271,6 +276,15 @@ function effectiveMeters() {
 function readFields() {
   const out = {};
   for (const f of ALL_FIELDS) {
+    const box = fieldBox(f);
+    if (box) out[f] = box.checked;
+  }
+  return out;
+}
+
+function readTopFields() {
+  const out = {};
+  for (const f of TOP_FIELDS) {
     const box = fieldBox(f);
     if (box) out[f] = box.checked;
   }
@@ -309,6 +323,10 @@ function renderFields(settings, usage) {
   // letting the user think the toggle is broken.
   const note = document.getElementById("field-fable-note");
   if (note) note.classList.toggle("hidden", fableAvailable);
+  for (const f of TOP_FIELDS) {
+    const box = fieldBox(f);
+    if (box) box.checked = settings && settings[f] !== false;
+  }
   applyMeterLock();
 }
 
@@ -317,7 +335,7 @@ async function saveFields() {
   try {
     await chrome.runtime.sendMessage({
       type: "save-settings",
-      settings: { stripFields: readFields() }
+      settings: { stripFields: readFields(), ...readTopFields() }
     });
   } catch (_) {}
 }
@@ -330,7 +348,7 @@ document.getElementById("fields-toggle").addEventListener("click", () => {
   panel.classList.toggle("hidden", open);
 });
 
-for (const f of ALL_FIELDS) {
+for (const f of [...ALL_FIELDS, ...TOP_FIELDS]) {
   const box = fieldBox(f);
   if (box) box.addEventListener("change", saveFields);
 }

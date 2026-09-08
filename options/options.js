@@ -1,4 +1,7 @@
-// options.js (v1.5)
+// options.js (v1.6)
+// - v1.3.1: `projectsButton` toggle for the Projects button injected into
+//   claude.ai's composer. It writes into Claude's own UI rather than our strip,
+//   so it gets an explicit off switch even though it's on by default.
 // - v1.2.17: `forecastAlerts` toggle. Separate from the threshold notifications
 //   because it answers a different question ("will I run out early?" vs "have I
 //   crossed 75%?"), and some people want the milestones without the projection.
@@ -14,6 +17,7 @@ let state = {
   // different question, and some people want the milestones without the
   // projection (or the other way round).
   forecastAlerts: true,
+  projectsButton: true,
   pollMinutes: 1
 };
 
@@ -23,9 +27,11 @@ async function load() {
   state.weeklyThresholds  = settings.weeklyThresholds  || [];
   state.notificationsEnabled = settings.notificationsEnabled !== false;
   state.forecastAlerts = settings.forecastAlerts !== false;
+  state.projectsButton = settings.projectsButton !== false;
   state.pollMinutes = settings.pollMinutes || 1;
   document.getElementById("notifications-enabled").checked = state.notificationsEnabled;
   document.getElementById("forecast-alerts").checked = state.forecastAlerts;
+  document.getElementById("projects-button").checked = state.projectsButton;
   document.getElementById("poll-minutes").value = state.pollMinutes;
   renderAll();
 }
@@ -69,6 +75,7 @@ function addThreshold(scope) {
 async function save() {
   state.notificationsEnabled = document.getElementById("notifications-enabled").checked;
   state.forecastAlerts = document.getElementById("forecast-alerts").checked;
+  state.projectsButton = document.getElementById("projects-button").checked;
   const pm = parseInt(document.getElementById("poll-minutes").value, 10);
   state.pollMinutes = isNaN(pm) ? 1 : Math.max(1, Math.min(60, pm));
   document.getElementById("poll-minutes").value = state.pollMinutes;
@@ -79,6 +86,7 @@ async function save() {
       weeklyThresholds:  state.weeklyThresholds,
       notificationsEnabled: state.notificationsEnabled,
       forecastAlerts: state.forecastAlerts,
+      projectsButton: state.projectsButton,
       pollMinutes: state.pollMinutes
     }
   });

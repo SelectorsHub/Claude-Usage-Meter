@@ -1,4 +1,9 @@
-// background.js (service worker, v1.20)
+// background.js (service worker, v1.21)
+// - v1.3.1: projects list endpoint for the composer's Projects button.
+//   GET /api/organizations/{id}/projects through the same cookie-org ->
+//   widen-to-every-org path as the usage poll, cached for a minute and
+//   dropped on any account/org switch. Also adds the `projectsButton`
+//   setting (default on) that gates the button in the page.
 // - v1.2.9: Free accounts get real usage again, plus the bugs found on the way.
 //   * /usage is empty on Free by design: it returns 200 (the account IS
 //     entitled) with every bucket null, `limits` [], member_dashboard_available
@@ -107,7 +112,12 @@ const DEFAULT_SETTINGS = {
   },
   // v1.2.17: one-shot desktop heads-up when the projection says the session
   // quota runs out well before it resets. Rides on notificationsEnabled.
-  forecastAlerts: true
+  forecastAlerts: true,
+  // v1.3.1: the Projects button in claude.ai's composer footer. On by default —
+  // it costs one button and replaces a two-level menu walk — but it writes into
+  // Claude's own UI rather than our strip, so it gets an explicit off switch on
+  // the options page for anyone who wants the composer left alone.
+  projectsButton: true
 };
 
 // Merge helper for stripFields: a partial or legacy-missing object must still
@@ -1474,6 +1484,8 @@ if (chrome.cookies && chrome.cookies.onChanged) {
     const domain = String(cookie.domain || "").replace(/^\./, "");
     if (!domain.endsWith("claude.ai")) return;
     if (cookie.name !== "lastActiveOrg" && cookie.name !== "sessionKey") return;
+    // v1.3.1: the projects list is org-scoped, so it must not survive a switch.
+    clearProjectsCache();
     if (cookieSwitchTimer) clearTimeout(cookieSwitchTimer);
     cookieSwitchTimer = setTimeout(() => {
       cookieSwitchTimer = null;
@@ -1520,6 +1532,131 @@ chrome.runtime.onStartup.addListener(async () => {
   await rescheduleAlarm();
   pollUsage();
 });
+
+// ---------- projects list (v1.3.1) ----------
+//
+// Backs the Projects button the content script injects into claude.ai's
+// composer footer. It lives here rather than in the page for two reasons: the
+// org id comes from the `lastActiveOrg` cookie, which is HttpOnly and therefore
+// invisible to a content script, and the org-widening fallback below is already
+// written and tested here (see pollUsage).
+//
+// Cached for PROJECTS_TTL_MS. The list is opened by a human clicking a button,
+// so a fresh request per click would be a request per click; a minute of
+// staleness costs nothing (a project created in that window is one Refresh
+// away) and keeps repeated opens instant. The cache is dropped whenever the
+// account or active org changes, since it is org-scoped data.
+const PROJECTS_TTL_MS = 60 * 1000;
+let projectsCache = null; // { orgId, list, at }
+
+function clearProjectsCache() { projectsCache = null; }
+
+// Accepts the bare array the endpoint returns today, and the three wrapper
+// shapes Anthropic's other list endpoints use, so a future envelope change
+// doesn't blank the menu. Anything else returns null = "not a project list",
+// which lets loadProjects() keep trying other orgs instead of caching junk.
+function normalizeProjects(data) {
+  const raw = Array.isArray(data)
+    ? data
+    : (data && typeof data === "object"
+        ? (Array.isArray(data.data) ? data.data
+          : Array.isArray(data.projects) ? data.projects
+          : Array.isArray(data.results) ? data.results
+          : null)
+        : null);
+  if (!raw) return null;
+  const list = [];
+  for (const p of raw) {
+    if (!p || typeof p !== "object") continue;
+    const uuid = p.uuid || p.id;
+    if (!uuid) continue;
+    if (p.archived_at) continue;   // archived projects aren't somewhere you chat
+    const name = String(p.name || "").trim() || "Untitled project";
+    const updatedAt =
+      Date.parse(p.updated_at || p.created_at || "") || 0;
+    list.push({ uuid: String(uuid), name, updatedAt, starter: !!p.is_starter_project });
+  }
+  // Most-recently-touched first: the project you want next is nearly always one
+  // you touched recently, and the picker's own recents ride on top of this.
+  list.sort((a, b) => b.updatedAt - a.updatedAt);
+  return list;
+}
+
+async function fetchProjectsFor(orgId) {
+  return fetch(`https://claude.ai/api/organizations/${orgId}/projects`, {
+    credentials: "include",
+    headers: { accept: "application/json", "X-Organization-UUID": orgId }
+  });
+}
+
+async function loadProjects(force) {
+  if (!force && projectsCache && Date.now() - projectsCache.at < PROJECTS_TTL_MS) {
+    return { ok: true, projects: projectsCache.list, cached: true };
+  }
+
+  const tried = new Set();
+  const candidates = [];
+  const cookieOrg = await getActiveOrgFromCookie();
+  if (cookieOrg) candidates.push(cookieOrg);
+
+  let widened = false;
+  let sawAuthFailure = false;
+  let lastStatus = null;
+
+  const widen = async () => {
+    if (widened) return;
+    widened = true;
+    try {
+      for (const id of await listOrgIds()) if (!tried.has(id)) candidates.push(id);
+    } catch (err) {
+      if (err && err.message === "not_signed_in") sawAuthFailure = true;
+    }
+  };
+  if (candidates.length === 0) await widen();
+
+  for (let i = 0; i < candidates.length; i++) {
+    const orgId = candidates[i];
+    if (!orgId || tried.has(orgId)) continue;
+    tried.add(orgId);
+
+    let resp;
+    try {
+      resp = await fetchProjectsFor(orgId);
+    } catch (_) {
+      if (i === candidates.length - 1) await widen();
+      continue;
+    }
+    lastStatus = resp.status;
+
+    if (resp.status === 401 || resp.status === 403) {
+      sawAuthFailure = true;
+    } else if (resp.ok) {
+      let data = null;
+      try { data = await resp.json(); } catch (_) {}
+      if (data && data.type === "error") {
+        // fall through to the next candidate
+      } else {
+        const list = normalizeProjects(data);
+        // An EMPTY list from the active org is a real answer ("you have no
+        // projects yet"), not a miss — don't widen past it and start showing
+        // some other org's projects.
+        if (list) {
+          projectsCache = { orgId, list, at: Date.now() };
+          return { ok: true, projects: list };
+        }
+      }
+    }
+
+    if (i === candidates.length - 1) await widen();
+  }
+
+  return {
+    ok: false,
+    error: sawAuthFailure
+      ? "not_signed_in"
+      : (lastStatus ? `projects_http_${lastStatus}` : "no_projects_response")
+  };
+}
 
 // ---------- message router ----------
 
@@ -1576,6 +1713,17 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     return true;
   }
 
+  if (msg.type === "get-projects") {
+    (async () => {
+      try {
+        sendResponse(await loadProjects(!!msg.force));
+      } catch (err) {
+        sendResponse({ ok: false, error: (err && err.message) || "projects_failed" });
+      }
+    })();
+    return true;
+  }
+
   if (msg.type === "force-refresh") {
     (async () => { await pollUsage(); sendResponse({ ok: true }); })();
     return true;
@@ -1617,6 +1765,20 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     return true;
   }
 
+  // v1.3.1: the Projects menu's "hide it from its settings" link, used when the
+  // strip's gear isn't on screen (collapsed strip, or dismissed for 12 hours).
+  // Only the service worker can open the options page.
+  if (msg.type === "open-options") {
+    (async () => {
+      try {
+        if (chrome.runtime.openOptionsPage) await chrome.runtime.openOptionsPage();
+        else await chrome.tabs.create({ url: chrome.runtime.getURL("options/options.html") });
+      } catch (_) {}
+      sendResponse && sendResponse({ ok: true });
+    })();
+    return true;
+  }
+
   if (msg.type === "keepalive") {
     // No-op: receiving this message keeps the service worker alive so
     // chrome.alarms continues to fire normally during screen recording
@@ -1643,6 +1805,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         [STORAGE_KEYS.usageRaw]: null,
         overlay_dismissed_until: 0
       });
+      clearProjectsCache();
       try { await chrome.action.setBadgeText({ text: "" }); } catch (_) {}
       pollUsage();
       sendResponse({ ok: true });

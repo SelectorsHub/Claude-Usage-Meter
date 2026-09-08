@@ -46,6 +46,14 @@ Cookies are sent automatically because `manifest.json` declares `host_permission
 
 The content script finds the contenteditable input, walks up to the composer wrapper (`<fieldset>` typically), and inserts the strip as the wrapper's first child. A MutationObserver keeps it remounted across React rerenders and chat navigations. Click × to hide for 12 hours.
 
+## Projects button (v1.3.1)
+
+A **Projects** button sits in the composer footer, right after the Chat / Cowork control, and drops the account's project list: type to filter, arrow keys to move, Enter to open, and the projects you open most pinned to the top under **Recent** (recorded locally, in `chrome.storage.local`). Selecting one navigates to `/project/{uuid}`; Cmd/Ctrl-click opens it in a new tab.
+
+The menu's last line names the extension and links straight to the toggle, since a button that appears inside Claude's own composer would otherwise look like Anthropic's. The toggle itself is in all three settings surfaces: the gear on the strip, the popup's **Show in strip** panel, and the settings page.
+
+The list comes from `GET /api/organizations/{id}/projects` in the service worker — the org id lives in the HttpOnly `lastActiveOrg` cookie, which a content script can't read — cached for a minute and dropped on any account or org switch. The button is anchored to `[data-surface-segment]`, a data attribute the app owns, rather than to generated class names. Turn it off under **Chat box** on the settings page.
+
 ## Files
 
 ```
