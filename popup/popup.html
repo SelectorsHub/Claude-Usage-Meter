@@ -4,6 +4,7 @@
   <meta charset="UTF-8" />
   <title>Claude Usage</title>
   <link rel="stylesheet" href="popup.css" />
+  <link rel="stylesheet" href="tools.css" />
 </head>
 <body>
   <header class="hdr">
@@ -156,6 +157,23 @@
         <button id="share-copy-btn" class="share-copy-btn">Copy</button>
       </div>
     </div>
+    <!-- v1.3.2: the full SelectorsHub catalogue lives here rather than in
+         claude.ai's sidebar. Cards are built in popup.js from one array so the
+         list has a single place to change. -->
+    <div id="sh-tools">
+      <button id="sh-tools-toggle" type="button" aria-expanded="false" aria-controls="sh-tools-grid">
+        <span class="sh-t-ico">
+          <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="5" r="1.9"/><circle cx="12" cy="5" r="1.9"/><circle cx="19" cy="5" r="1.9"/><circle cx="5" cy="12" r="1.9"/><circle cx="12" cy="12" r="1.9"/><circle cx="19" cy="12" r="1.9"/><circle cx="5" cy="19" r="1.9"/><circle cx="12" cy="19" r="1.9"/><circle cx="19" cy="19" r="1.9"/></svg>
+        </span>
+        <span class="sh-t-txt">More tools by SelectorsHub</span>
+        <span class="sh-t-chev">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg>
+        </span>
+      </button>
+      <div id="sh-tools-grid"></div>
+      <a id="sh-tools-all" target="_blank" rel="noopener noreferrer">See all tools →</a>
+    </div>
+
     <a href="https://buymeacoffee.com/selectorshub" target="_blank" rel="noopener noreferrer" id="donate-btn" class="btn-donate">
       <span class="btn-donate-icon">❤️</span>
       <span>Support on Buy Me a Coffee</span>

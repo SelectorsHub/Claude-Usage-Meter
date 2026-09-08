@@ -498,6 +498,8 @@
       themeRefreshScheduled = false;
       applyTheme(document.getElementById(OVERLAY_ID));
       applyTheme(document.getElementById(DESKTOP_LINK_ID));
+      // v1.3.2: whichever promo row currently holds the shared sidebar slot.
+      applyTheme(document.getElementById(TOOLS_LINK_ID));
       // v1.3.1: the composer button follows the page theme too, and the menu is
       // portaled outside the overlay so it carries its own theme class.
       applyTheme(document.getElementById(PROJ_BTN_ID));
@@ -514,6 +516,50 @@
   const DESKTOP_DISMISS_KEY = "desktop_link_dismissed";
   const DESKTOP_URL = "https://github.com/SelectorsHub/Claude-Usage-Meter-Desktop/releases/latest";
   const PRODUCT_URL = "https://selectorshub.com/claude-usage-meter/";
+
+  // ===== v1.3.2: the sidebar promo slot =====
+  //
+  // Claude's sidebar gets AT MOST ONE row from us, ever. Desktop takes priority
+  // — it's a direct upgrade of the thing they already installed — and the
+  // SelectorsHub tools row only appears once desktop has been dismissed. Two
+  // promo rows in someone else's navigation is the point where a useful
+  // extension starts reading as adware, and the 5-star rating is the moat here.
+  //
+  // The row's identity never changes: same position, same title, same icon. Only
+  // the second line rotates through tools. That keeps the discovery benefit of
+  // naming a specific tool (nobody clicks "All tools") without the row behaving
+  // like an ad carousel. Dismissal is permanent and syncs across tabs.
+  const TOOLS_LINK_ID = "cut-tools-link";
+  const TOOLS_DISMISS_KEY = "tools_link_dismissed";
+  // Anchor for the rotation clock. Written once, the first time the row renders;
+  // the index is then derived from it rather than stored, so every tab computes
+  // the same tool without any cross-tab coordination.
+  const TOOLS_ANCHOR_KEY = "tools_link_anchor";
+
+  // Each tool holds the second line for 3 days. Flip TEST_BUILD to true to run
+  // the rotation on a 45-second clock and watch the whole cycle in one sitting.
+  const TEST_BUILD = false;
+  const TOOLS_ROTATE_MS = TEST_BUILD ? 45 * 1000 : 3 * 24 * 60 * 60 * 1000;
+
+  // Deliberately NOT the full catalogue. The sidebar reaches people who came to
+  // claude.ai to write, code or think — mostly not QA engineers — so the rotation
+  // carries only tools with broad appeal. The locator/recorder/QA tools live in
+  // the popup grid instead, where the audience opted in by opening it.
+  const SH_TOOLS = [
+    { name: "Screenshot with URL", url: "https://selectorshub.com/screenshot-with-url/" },
+    { name: "Bookmarks Finder",    url: "https://www.selectorshub.com/bookmarks-finder/" },
+    { name: "AnyFormat",           url: "https://www.selectorshub.com/anyformat/" },
+    { name: "Check My Links",      url: "https://selectorshub.com/checkmylinks/" },
+    { name: "Page Load Timer",     url: "https://selectorshub.com/page-load-timer/" },
+  ];
+
+  // Tagging every outbound link means sidebar vs popup can actually be compared
+  // in analytics instead of guessed at.
+  function utm(url, medium) {
+    const sep = url.indexOf("?") === -1 ? "?" : "&";
+    return url + sep +
+      "utm_source=claude-usage-meter&utm_medium=" + medium + "&utm_campaign=more-tools";
+  }
   const RATE_KEY = "rate_us_clicked";
   // v1.2.3: timestamp of the Rate us click. The Share button used to appear the
   // instant someone rated, which reads as "thanks — now do one more thing for
@@ -2305,45 +2351,51 @@
   }
 
   let desktopLinkDismissed = false;
-  function ensureDesktopLink() {
-    if (desktopLinkDismissed) {
-      const stale = document.getElementById(DESKTOP_LINK_ID);
-      if (stale) stale.remove();
-      return;
-    }
-    if (document.getElementById(DESKTOP_LINK_ID)) {
-      applyTheme(document.getElementById(DESKTOP_LINK_ID));
-      return;
-    }
+  let toolsLinkDismissed = false;
+  let toolsAnchorAt = 0;
+  let promoStateKnown = false;
 
-    const anchor = findSidebarAnchor();
-    if (!anchor) return;
+  const DESKTOP_ICON =
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" ' +
+    'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+    '<rect x="2" y="3" width="20" height="14" rx="2"></rect>' +
+    '<path d="M8 21h8M12 17v4"></path></svg>';
 
-    // Sit alongside the nav item, not inside it — appending into the anchor
-    // would put our markup inside Claude's own <a>, which nests interactive
-    // elements and breaks keyboard navigation.
-    const row = anchor.parentElement;
-    const list = row && row.parentElement;
-    if (!row || !list) return;
+  // A 3x3 grid of dots — reads as "a set of things" at 15px, which is what the
+  // row is actually offering. A wrench or box would over-promise a single tool.
+  const TOOLS_ICON =
+    '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">' +
+    '<circle cx="5" cy="5" r="1.9"></circle><circle cx="12" cy="5" r="1.9"></circle>' +
+    '<circle cx="19" cy="5" r="1.9"></circle><circle cx="5" cy="12" r="1.9"></circle>' +
+    '<circle cx="12" cy="12" r="1.9"></circle><circle cx="19" cy="12" r="1.9"></circle>' +
+    '<circle cx="5" cy="19" r="1.9"></circle><circle cx="12" cy="19" r="1.9"></circle>' +
+    '<circle cx="19" cy="19" r="1.9"></circle></svg>';
 
+  // Which tool the rotation is currently on. Derived from a stored anchor rather
+  // than a stored index: no writes per rotation, and every open tab agrees on the
+  // answer without needing to talk to each other.
+  function toolsIndex() {
+    if (!toolsAnchorAt) return 0;
+    const n = Math.floor((Date.now() - toolsAnchorAt) / TOOLS_ROTATE_MS);
+    const len = SH_TOOLS.length;
+    return ((n % len) + len) % len;
+  }
+
+  function buildPromoRow(cfg) {
     const wrap = document.createElement("div");
-    wrap.id = DESKTOP_LINK_ID;
-    wrap.className = "cut-desktop-link";
+    wrap.id = cfg.id;
+    // Shared class carries the styling for both rows; the id stays for the
+    // existing theme/lookup calls and for anyone debugging in DevTools.
+    wrap.className = "cut-promo-row " + cfg.id;
 
     const link = document.createElement("a");
-    link.href = DESKTOP_URL;
     link.target = "_blank";
     link.rel = "noopener noreferrer";
     link.className = "cut-desktop-link-a";
-    link.title = "Claude Usage Meter — desktop app for macOS and Windows";
 
     const icon = document.createElement("span");
     icon.className = "cut-desktop-ico";
-    icon.innerHTML =
-      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" ' +
-      'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
-      '<rect x="2" y="3" width="20" height="14" rx="2"></rect>' +
-      '<path d="M8 21h8M12 17v4"></path></svg>';
+    icon.innerHTML = cfg.icon;
 
     // Two lines: the product on top, what it IS underneath. One line reading
     // "Usage Meter Desktop" leaves people guessing whether it's a setting, a
@@ -2353,43 +2405,162 @@
 
     const title = document.createElement("span");
     title.className = "cut-desktop-title";
-    title.textContent = "Claude Usage Meter";
+    title.textContent = cfg.title;
 
     const sub = document.createElement("span");
     sub.className = "cut-desktop-sub";
-    sub.textContent = "Desktop version available";
 
     label.appendChild(title);
     label.appendChild(sub);
-
     link.appendChild(icon);
     link.appendChild(label);
 
     const close = document.createElement("button");
     close.type = "button";
     close.className = "cut-desktop-x";
-    close.setAttribute("aria-label", "Hide the desktop app link");
+    close.setAttribute("aria-label", cfg.closeLabel);
     close.textContent = "\u00d7";
     close.addEventListener("click", (e) => {
       e.preventDefault();
       e.stopPropagation();
-      desktopLinkDismissed = true;
-      try { chrome.storage.local.set({ [DESKTOP_DISMISS_KEY]: true }); } catch (_) {}
+      cfg.onDismiss();
       wrap.remove();
+      // Dismissing desktop hands the slot to the tools row rather than leaving
+      // a gap — but only on the next pass, so it doesn't swap under the cursor
+      // the instant they click the X.
+      setTimeout(ensureSidebarPromo, 600);
     });
 
     wrap.appendChild(link);
     wrap.appendChild(close);
-    applyTheme(wrap);
-    list.insertBefore(wrap, row.nextSibling);
+    return wrap;
   }
 
+  // Point an existing row at a destination. Split out so the tools row can
+  // re-target on rotation without being torn down and rebuilt — a rebuild would
+  // lose focus and flash the row on every mutation-observer pass.
+  function setPromoTarget(wrap, href, subText, tip) {
+    const link = wrap.querySelector(".cut-desktop-link-a");
+    const sub = wrap.querySelector(".cut-desktop-sub");
+    if (!link || !sub) return;
+    if (link.href !== href) link.href = href;
+    if (sub.textContent !== subText) sub.textContent = subText;
+    if (link.title !== tip) link.title = tip;
+  }
+
+  function mountPromo(wrap) {
+    const anchor = findSidebarAnchor();
+    if (!anchor) return false;
+
+    // Sit alongside the nav item, not inside it — appending into the anchor
+    // would put our markup inside Claude's own <a>, which nests interactive
+    // elements and breaks keyboard navigation.
+    const row = anchor.parentElement;
+    const list = row && row.parentElement;
+    if (!row || !list) return false;
+
+    applyTheme(wrap);
+    list.insertBefore(wrap, row.nextSibling);
+    return true;
+  }
+
+  function dropPromo(id) {
+    const stale = document.getElementById(id);
+    if (stale) stale.remove();
+  }
+
+  // The whole sidebar policy lives here: at most one row, desktop first, tools
+  // second, nothing once both are dismissed.
+  function ensureSidebarPromo() {
+    // Until storage has answered we don't know what's been dismissed. Rendering
+    // optimistically would flash a row at someone who closed it weeks ago.
+    if (!promoStateKnown) return;
+
+    if (!desktopLinkDismissed) {
+      dropPromo(TOOLS_LINK_ID);
+      let wrap = document.getElementById(DESKTOP_LINK_ID);
+      if (wrap) { applyTheme(wrap); return; }
+      wrap = buildPromoRow({
+        id: DESKTOP_LINK_ID,
+        title: "Claude Usage Meter",
+        icon: DESKTOP_ICON,
+        closeLabel: "Hide the desktop app link",
+        onDismiss: () => {
+          desktopLinkDismissed = true;
+          try { chrome.storage.local.set({ [DESKTOP_DISMISS_KEY]: true }); } catch (_) {}
+        },
+      });
+      setPromoTarget(wrap, DESKTOP_URL, "Desktop version available",
+        "Claude Usage Meter \u2014 desktop app for macOS and Windows");
+      mountPromo(wrap);
+      return;
+    }
+
+    dropPromo(DESKTOP_LINK_ID);
+
+    if (toolsLinkDismissed) {
+      dropPromo(TOOLS_LINK_ID);
+      return;
+    }
+
+    // First time the tools row is eligible, start its rotation clock.
+    if (!toolsAnchorAt) {
+      toolsAnchorAt = Date.now();
+      try { chrome.storage.local.set({ [TOOLS_ANCHOR_KEY]: toolsAnchorAt }); } catch (_) {}
+    }
+
+    const tool = SH_TOOLS[toolsIndex()];
+    let wrap = document.getElementById(TOOLS_LINK_ID);
+    if (!wrap) {
+      wrap = buildPromoRow({
+        id: TOOLS_LINK_ID,
+        title: "More tools by SelectorsHub",
+        icon: TOOLS_ICON,
+        closeLabel: "Hide the SelectorsHub tools link",
+        onDismiss: () => {
+          toolsLinkDismissed = true;
+          try { chrome.storage.local.set({ [TOOLS_DISMISS_KEY]: true }); } catch (_) {}
+        },
+      });
+      setPromoTarget(wrap, utm(tool.url, "sidebar"), tool.name,
+        tool.name + " \u2014 free, from the Claude Usage Meter team");
+      mountPromo(wrap);
+      return;
+    }
+    applyTheme(wrap);
+    // Already mounted: just re-point it if the clock has moved on.
+    setPromoTarget(wrap, utm(tool.url, "sidebar"), tool.name,
+      tool.name + " \u2014 free, from the Claude Usage Meter team");
+  }
+
+  // Kept as a name so the existing call sites read the same; the slot logic is
+  // all in ensureSidebarPromo.
+  function ensureDesktopLink() { ensureSidebarPromo(); }
+
   try {
-    chrome.storage.local.get(DESKTOP_DISMISS_KEY, (res) => {
-      desktopLinkDismissed = !!(res && res[DESKTOP_DISMISS_KEY]);
-      ensureDesktopLink();
-    });
-  } catch (_) {}
+    chrome.storage.local.get(
+      [DESKTOP_DISMISS_KEY, TOOLS_DISMISS_KEY, TOOLS_ANCHOR_KEY],
+      (res) => {
+        desktopLinkDismissed = !!(res && res[DESKTOP_DISMISS_KEY]);
+        toolsLinkDismissed = !!(res && res[TOOLS_DISMISS_KEY]);
+        toolsAnchorAt = Number(res && res[TOOLS_ANCHOR_KEY]) || 0;
+        promoStateKnown = true;
+        ensureSidebarPromo();
+      }
+    );
+  } catch (_) {
+    // No storage (unpacked oddity, torn-down context): show nothing rather than
+    // show a row that can't remember being dismissed.
+  }
+
+  // The observer already re-runs this on DOM churn, but a tab left open and
+  // untouched would never advance. Tick on a fraction of the rotation period,
+  // capped at 10 minutes — uncapped, the 3-day production period would put the
+  // check 18 hours apart and an idle tab could sit on a stale name all day.
+  setInterval(
+    ensureSidebarPromo,
+    Math.min(10 * 60 * 1000, Math.max(15000, Math.floor(TOOLS_ROTATE_MS / 4)))
+  );
 
   // ===== v1.3.1: Projects quick-picker in Claude's composer footer =====
   //
@@ -3216,6 +3387,23 @@
         projectsSettingsKnown = true;
         ensureProjectsButton();
       }
+    }
+    // v1.3.2: dismissing a promo row in one tab takes it out of every other open
+    // tab immediately. Closing the same row twice because a second window still
+    // had it is exactly the kind of thing that reads as ignoring the dismissal.
+    if (changes[DESKTOP_DISMISS_KEY] || changes[TOOLS_DISMISS_KEY] ||
+        changes[TOOLS_ANCHOR_KEY]) {
+      if (changes[DESKTOP_DISMISS_KEY]) {
+        desktopLinkDismissed = !!changes[DESKTOP_DISMISS_KEY].newValue;
+      }
+      if (changes[TOOLS_DISMISS_KEY]) {
+        toolsLinkDismissed = !!changes[TOOLS_DISMISS_KEY].newValue;
+      }
+      if (changes[TOOLS_ANCHOR_KEY]) {
+        toolsAnchorAt = Number(changes[TOOLS_ANCHOR_KEY].newValue) || 0;
+      }
+      promoStateKnown = true;
+      ensureSidebarPromo();
     }
     if (changes[RATE_AT_KEY]) {
       ratedAt = Number(changes[RATE_AT_KEY].newValue) || 0;

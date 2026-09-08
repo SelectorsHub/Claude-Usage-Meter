@@ -54,6 +54,20 @@ The menu's last line names the extension and links straight to the toggle, since
 
 The list comes from `GET /api/organizations/{id}/projects` in the service worker — the org id lives in the HttpOnly `lastActiveOrg` cookie, which a content script can't read — cached for a minute and dropped on any account or org switch. The button is anchored to `[data-surface-segment]`, a data attribute the app owns, rather than to generated class names. Turn it off under **Chat box** on the settings page.
 
+## Sidebar promo slot (v1.3.2)
+
+Claude's sidebar gets **at most one** row from this extension, ever. The desktop-app row holds the slot first; once it's dismissed, a **More tools by SelectorsHub** row takes its place; once that's dismissed too, the sidebar is left alone permanently. Both dismissals are stored in `chrome.storage.local` and sync across open tabs via `storage.onChanged`.
+
+The tools row keeps a fixed identity — same position, same title, same icon — and rotates only its second line through a small set of broad-appeal tools, one every three days. Rotating the whole button would make it behave like an ad carousel; naming a specific tool converts far better than a generic "All tools" link. The index is derived from a stored anchor timestamp rather than a stored index, so every open tab computes the same tool with no coordination and no write per rotation, and the row is re-pointed in place rather than rebuilt so it never flashes on a MutationObserver pass.
+
+Styling is shared between both rows via `.cut-promo-row` in `overlay.css`.
+
+## More tools drawer (popup)
+
+The full SelectorsHub catalogue lives in the popup rather than in claude.ai's UI — opening the popup is an intent signal, so the drawer costs nothing in attention and asks nothing of anyone who ignores it. It starts collapsed, builds its cards on first open only, and remembers whether it was left open.
+
+Every outbound link in both surfaces carries `utm_source=claude-usage-meter` with `utm_medium=sidebar` or `popup`, so the two can be compared.
+
 ## Files
 
 ```

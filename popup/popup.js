@@ -595,3 +595,93 @@ if (shareCopyBtn) {
 
 setInterval(() => refresh({ forceFetch: false }), 3000);
 setInterval(() => refreshStripButtonState(), 3000);
+
+/* ===== v1.3.2 — "More tools by SelectorsHub" drawer =====================
+   The popup is the right home for the full catalogue: someone who opened it
+   came to us deliberately, so this costs nothing in attention and asks nothing
+   of people who ignore it. Deliberately NOT seven rotating buttons in
+   claude.ai's own sidebar — that reads as an ad unit to users and to store
+   reviewers, and the rating is worth more than the clicks.
+
+   Whether the drawer was left open persists, so anyone who does want the list
+   isn't re-opening it on every popup launch. */
+(() => {
+  const SH_TOOLS_OPEN_KEY = "sh_tools_open";
+  const ALL_TOOLS_URL = "https://selectorshub.com/";
+
+  const SH_TOOLS = [
+    { name: "Screenshot with URL", desc: "Screenshots with the URL bar", url: "https://selectorshub.com/screenshot-with-url/" },
+    { name: "Bookmarks Finder",    desc: "Find any bookmark by typing",  url: "https://www.selectorshub.com/bookmarks-finder/" },
+    { name: "AnyFormat",           desc: "Save images in any format",    url: "https://www.selectorshub.com/anyformat/" },
+    { name: "Check My Links",      desc: "Find broken links in 1 click", url: "https://selectorshub.com/checkmylinks/" },
+    { name: "SelectorsHub",        desc: "XPath & Playwright locators",  url: "https://selectorshub.com/selectorshub/" },
+    { name: "TestCase Studio",     desc: "Record test steps as you go",  url: "https://selectorshub.com/testcase-studio/" },
+    { name: "Page Load Timer",     desc: "Page load time, automatically", url: "https://selectorshub.com/page-load-timer/" },
+    { name: "Auto Data Filler",    desc: "Fill forms in one click",      url: "https://selectorshub.com/auto-data-filler/" },
+  ];
+
+  // Tag outbound links so sidebar and popup can be told apart in analytics —
+  // otherwise there's no way to know which surface is actually earning clicks.
+  function utm(url, medium) {
+    const sep = url.indexOf("?") === -1 ? "?" : "&";
+    return url + sep +
+      "utm_source=claude-usage-meter&utm_medium=" + medium + "&utm_campaign=more-tools";
+  }
+
+  const wrap = document.getElementById("sh-tools");
+  const toggle = document.getElementById("sh-tools-toggle");
+  const grid = document.getElementById("sh-tools-grid");
+  const all = document.getElementById("sh-tools-all");
+  if (!wrap || !toggle || !grid || !all) return;
+
+  all.href = utm(ALL_TOOLS_URL, "popup");
+
+  // Built once, on first open. Building at load would put eight anchors in the
+  // DOM for every popup launch, including the majority that never open this.
+  let built = false;
+  function buildGrid() {
+    if (built) return;
+    built = true;
+    const frag = document.createDocumentFragment();
+    for (const t of SH_TOOLS) {
+      const a = document.createElement("a");
+      a.className = "sh-t-card";
+      a.href = utm(t.url, "popup");
+      a.target = "_blank";
+      a.rel = "noopener noreferrer";
+      a.title = t.name + " — " + t.desc;
+
+      const name = document.createElement("span");
+      name.className = "sh-t-name";
+      name.textContent = t.name;
+
+      const desc = document.createElement("span");
+      desc.className = "sh-t-desc";
+      desc.textContent = t.desc;
+
+      a.appendChild(name);
+      a.appendChild(desc);
+      frag.appendChild(a);
+    }
+    grid.appendChild(frag);
+  }
+
+  function setOpen(open, persist) {
+    if (open) buildGrid();
+    wrap.classList.toggle("sh-open", open);
+    toggle.setAttribute("aria-expanded", open ? "true" : "false");
+    if (persist) {
+      try { chrome.storage.local.set({ [SH_TOOLS_OPEN_KEY]: open }); } catch (_) {}
+    }
+  }
+
+  toggle.addEventListener("click", () => {
+    setOpen(!wrap.classList.contains("sh-open"), true);
+  });
+
+  try {
+    chrome.storage.local.get(SH_TOOLS_OPEN_KEY, (res) => {
+      if (res && res[SH_TOOLS_OPEN_KEY]) setOpen(true, false);
+    });
+  } catch (_) {}
+})();

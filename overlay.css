@@ -1679,12 +1679,12 @@
 }
 #claude-usage-overlay.cut-fit-scroll .cut-strip::-webkit-scrollbar { display: none; }
 
-/* ===== v1.3.0 — Usage Meter Desktop link in Claude's sidebar =====
+/* ===== v1.3.0 — the shared sidebar promo slot (generalised in v1.3.2) =====
    Carries the SelectorsHub gold gradient so it reads as ours and not as one of
    Claude's own nav rows — the point is for it to be noticed. It sits low in the
    sidebar (beside Customize/Settings) rather than at the top, so it stands out
    without pushing anyone's chats down. */
-#cut-desktop-link {
+.cut-promo-row {
   display: flex;
   align-items: center;
   gap: 2px;
@@ -1696,11 +1696,11 @@
   padding: 1px;
   transition: box-shadow 0.16s ease, transform 0.16s ease;
 }
-#cut-desktop-link:hover {
+.cut-promo-row:hover {
   box-shadow: 0 4px 16px rgba(202, 119, 2, 0.48);
   transform: translateY(-1px);
 }
-#cut-desktop-link .cut-desktop-link-a {
+.cut-promo-row .cut-desktop-link-a {
   display: flex;
   align-items: center;
   gap: 9px;
@@ -1712,14 +1712,14 @@
   text-decoration: none;
   letter-spacing: 0.01em;
 }
-#cut-desktop-link .cut-desktop-label {
+.cut-promo-row .cut-desktop-label {
   display: flex;
   flex-direction: column;
   gap: 1px;
   flex: 1 1 auto;
   min-width: 0;
 }
-#cut-desktop-link .cut-desktop-title {
+.cut-promo-row .cut-desktop-title {
   font-size: 12.5px;
   font-weight: 600;
   line-height: 1.25;
@@ -1727,7 +1727,7 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-#cut-desktop-link .cut-desktop-sub {
+.cut-promo-row .cut-desktop-sub {
   font-size: 10px;
   font-weight: 500;
   line-height: 1.25;
@@ -1737,15 +1737,15 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-#cut-desktop-link .cut-desktop-link-a:hover,
-#cut-desktop-link .cut-desktop-link-a:visited { color: #fff; text-decoration: none; }
-#cut-desktop-link .cut-desktop-ico {
+.cut-promo-row .cut-desktop-link-a:hover,
+.cut-promo-row .cut-desktop-link-a:visited { color: #fff; text-decoration: none; }
+.cut-promo-row .cut-desktop-ico {
   display: inline-flex;
   flex: 0 0 auto;
   color: #fff;
 }
-#cut-desktop-link .cut-desktop-ico svg { width: 15px; height: 15px; display: block; }
-#cut-desktop-link .cut-desktop-x {
+.cut-promo-row .cut-desktop-ico svg { width: 15px; height: 15px; display: block; }
+.cut-promo-row .cut-desktop-x {
   appearance: none;
   background: rgba(0, 0, 0, 0.16);
   border: 0;
@@ -1763,18 +1763,18 @@
   margin-right: 4px;
   transition: opacity 0.14s ease, background 0.14s ease;
 }
-#cut-desktop-link:hover .cut-desktop-x { opacity: 0.85; }
-#cut-desktop-link .cut-desktop-x:hover { opacity: 1; background: rgba(0, 0, 0, 0.22); }
-#cut-desktop-link .cut-desktop-x:focus-visible { opacity: 1; outline: 2px solid #fff; }
+.cut-promo-row:hover .cut-desktop-x { opacity: 0.85; }
+.cut-promo-row .cut-desktop-x:hover { opacity: 1; background: rgba(0, 0, 0, 0.22); }
+.cut-promo-row .cut-desktop-x:focus-visible { opacity: 1; outline: 2px solid #fff; }
 
 /* A collapsed sidebar shrinks to an icon rail; drop the text so we never force
    it wider than Claude intends. */
 @media (max-width: 220px) {
-  #cut-desktop-link .cut-desktop-label { display: none; }
-  #cut-desktop-link .cut-desktop-link-a { justify-content: center; padding: 8px 6px; }
+  .cut-promo-row .cut-desktop-label { display: none; }
+  .cut-promo-row .cut-desktop-link-a { justify-content: center; padding: 8px 6px; }
 }
 @media (prefers-reduced-motion: reduce) {
-  #cut-desktop-link, #cut-desktop-link:hover { transform: none; transition: none; }
+  .cut-promo-row, .cut-promo-row:hover { transform: none; transition: none; }
 }
 
 /* ===== v1.3.1 — Projects quick-picker in claude.ai's composer =====

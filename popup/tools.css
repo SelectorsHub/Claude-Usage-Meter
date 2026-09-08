@@ -1,0 +1,127 @@
+/* ===== v1.3.2 — "More tools by SelectorsHub" grid in the popup =====
+   Every selector here is scoped under #sh-tools so this file can be dropped
+   alongside popup.css without touching or depending on any of its rules.
+
+   This is the surface the full catalogue belongs on: opening the popup is an
+   intent signal, so a collapsed row costs nothing to people who don't want it
+   and reaches people already engaged with the brand. It starts CLOSED — an
+   expanded grid on every popup open would be an ad, and the whole point is that
+   this is a drawer people choose to pull. */
+
+#sh-tools {
+  margin: 10px 0 0;
+  font-family: inherit;
+}
+
+#sh-tools-toggle {
+  appearance: none;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 9px 11px;
+  border: 1px solid rgba(217, 119, 87, 0.32);
+  border-radius: 10px;
+  background: rgba(217, 119, 87, 0.09);
+  color: inherit;
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+#sh-tools-toggle:hover {
+  background: rgba(217, 119, 87, 0.16);
+  border-color: rgba(217, 119, 87, 0.5);
+}
+#sh-tools-toggle:focus-visible { outline: 2px solid #d97757; outline-offset: 1px; }
+
+#sh-tools-toggle .sh-t-ico {
+  display: inline-flex;
+  flex: 0 0 auto;
+  color: #d97757;
+}
+#sh-tools-toggle .sh-t-ico svg { width: 14px; height: 14px; display: block; }
+
+#sh-tools-toggle .sh-t-txt { flex: 1 1 auto; min-width: 0; }
+
+/* Rotates to point down when the drawer is open, so the control says which way
+   it's going rather than relying on the user remembering they clicked it. */
+#sh-tools-toggle .sh-t-chev {
+  flex: 0 0 auto;
+  display: inline-flex;
+  color: #d97757;
+  transition: transform 0.18s ease;
+}
+#sh-tools-toggle .sh-t-chev svg { width: 13px; height: 13px; display: block; }
+#sh-tools.sh-open #sh-tools-toggle .sh-t-chev { transform: rotate(90deg); }
+
+/* Default-hidden in CSS and revealed by a JS class, not hidden by JS after
+   render — otherwise the grid flashes open for a frame every time the popup
+   paints. */
+#sh-tools-grid { display: none; }
+#sh-tools.sh-open #sh-tools-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  margin-top: 7px;
+}
+
+#sh-tools-grid .sh-t-card {
+  display: block;
+  padding: 8px 9px;
+  border-radius: 9px;
+  border: 1px solid rgba(127, 127, 127, 0.22);
+  background: rgba(127, 127, 127, 0.06);
+  text-decoration: none;
+  color: inherit;
+  transition: border-color 0.14s ease, background 0.14s ease, transform 0.14s ease;
+}
+#sh-tools-grid .sh-t-card:hover {
+  border-color: rgba(217, 119, 87, 0.55);
+  background: rgba(217, 119, 87, 0.1);
+  transform: translateY(-1px);
+}
+#sh-tools-grid .sh-t-card:focus-visible { outline: 2px solid #d97757; outline-offset: 1px; }
+
+#sh-tools-grid .sh-t-name {
+  display: block;
+  font-size: 11.5px;
+  font-weight: 600;
+  line-height: 1.3;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+#sh-tools-grid .sh-t-desc {
+  display: block;
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 1.35;
+  margin-top: 2px;
+  opacity: 0.68;
+}
+
+#sh-tools-all {
+  display: block;
+  margin-top: 7px;
+  padding: 6px 4px;
+  font-size: 10.5px;
+  font-weight: 600;
+  text-align: center;
+  color: #d97757;
+  text-decoration: none;
+  border-radius: 8px;
+  opacity: 0.9;
+}
+#sh-tools-all:hover { opacity: 1; background: rgba(217, 119, 87, 0.1); }
+#sh-tools.sh-open #sh-tools-all { display: block; }
+#sh-tools:not(.sh-open) #sh-tools-all { display: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  #sh-tools-toggle,
+  #sh-tools-grid .sh-t-card,
+  #sh-tools-toggle .sh-t-chev { transition: none; }
+  #sh-tools-grid .sh-t-card:hover { transform: none; }
+}
