@@ -505,6 +505,11 @@
       applyTheme(document.getElementById(PROJ_BTN_ID));
       const projPop = document.getElementById(PROJ_POP_ID);
       if (projPop) projPop.classList.toggle("cut-proj-dark", detectClaudeTheme() === "dark");
+      // v1.3.4: the sidebar search box, and its panel — also portaled out of the
+      // overlay, so it carries its own theme class.
+      applyTheme(document.getElementById(CS_WRAP_ID));
+      const csPop = document.getElementById(CS_POP_ID);
+      if (csPop) csPop.classList.toggle("cut-cs-dark", detectClaudeTheme() === "dark");
     }, 150);
   }
 
@@ -529,6 +534,30 @@
   // the second line rotates through tools. That keeps the discovery benefit of
   // naming a specific tool (nobody clicks "All tools") without the row behaving
   // like an ad carousel. Dismissal is permanent and syncs across tabs.
+  // v1.3.4: the FIRST row rotates too. It used to say one thing forever
+  // ("Desktop version available"), which meant the Firefox build had nowhere to
+  // be announced — and adding a second row for it would have broken the
+  // one-row rule above, which is the thing keeping this from reading as adware.
+  //
+  // So the row keeps its identity (same title, same icon, same position) and
+  // rotates its second line through Claude Usage Meter news, exactly as the
+  // tools row rotates through tools. Firefox leads: the anchor key is new, so
+  // every existing install starts this rotation at index 0 on update, which is
+  // the announcement worth making now.
+  const NEWS_ANCHOR_KEY = "desktop_link_anchor";
+  const CUM_NEWS = [
+    {
+      sub: "Now available for Firefox",
+      url: PRODUCT_URL,
+      tip: "Claude Usage Meter \u2014 now on Firefox, alongside Chrome and Edge",
+    },
+    {
+      sub: "Desktop version available",
+      url: DESKTOP_URL,
+      tip: "Claude Usage Meter \u2014 desktop app for macOS and Windows",
+    },
+  ];
+
   const TOOLS_LINK_ID = "cut-tools-link";
   const TOOLS_DISMISS_KEY = "tools_link_dismissed";
   // Anchor for the rotation clock. Written once, the first time the row renders;
@@ -1023,23 +1052,114 @@
     }
   }
 
-  function buildOverlay() {
-    const root = document.createElement("div");
-    root.id = OVERLAY_ID;
-    const tooltipText =
-      "Claude Usage Meter — shows your Claude.ai session and weekly usage. " +
-      "The gauge sweeps each time fresh numbers arrive. " +
-      "Click the logo to learn more, or the extension icon in the toolbar " +
-      "for full details and settings.";
-    // v1.2.8: the mark is inline SVG rather than icons/icon-strip.png so the
-    // needle can be its own rotatable node. Geometry is traced from the 256px
-    // PNG: gauge pivot (19.78, 18.19) doubles as the needle hub, band runs
-    // from 12 o'clock counter-clockwise to ~105°, grey handing over to coral at
-    // ~58°, which is exactly where the needle rests. Draw order matters — the
-    // hub is painted AFTER the needle so the needle's wide base is hidden
-    // underneath it and the pivot stays clean through the whole sweep.
-    const logoSvg = `
-      <svg class="cut-logo" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false">
+  // ===== the meter's mark, read from icons/usage-meter-logo.svg =====
+  //
+  // The asset is fetched by the CONTENT SCRIPT and its markup injected, rather
+  // than pointed at from an <img src> or a CSS background-image. Both of those
+  // are page resource loads, and claude.ai's CSP does not list
+  // chrome-extension: in img-src — which is why the icon came up blank both
+  // ways. A content-script fetch of a web-accessible resource is
+  // extension-privileged and never reaches the page's CSP, so this is the one
+  // route that both uses the file and actually renders.
+  //
+  // Fetched once and cached for the life of the page; the sidebar box repaints
+  // itself when it lands (a few milliseconds, local file, no network).
+  let meterLogoText = null;
+  let meterLogoAsked = false;
+
+  function loadMeterLogo() {
+    if (meterLogoText || meterLogoAsked) return;
+    meterLogoAsked = true;
+    let url = "";
+    try {
+      url = chrome.runtime.getURL("icons/usage-meter-logo.svg");
+    } catch (_) {
+      return;
+    }
+    if (!url) return;
+    fetch(url)
+      .then((r) => (r.ok ? r.text() : null))
+      .then((text) => {
+        if (!text || text.indexOf("<svg") === -1) return;
+        meterLogoText = text;
+        paintChatSearchMark();
+      })
+      .catch(() => {
+        // Left null: the mark falls back to meterLogoSvg() below, so a failed
+        // read costs nothing visible.
+      });
+  }
+
+  // Parse rather than assign innerHTML. This is our own asset, not user
+  // content, but parsing keeps anything executable out of the page by
+  // construction rather than by trust.
+  function meterLogoNode(size, cls) {
+    if (meterLogoText) {
+      try {
+        const doc = new DOMParser().parseFromString(meterLogoText, "image/svg+xml");
+        const svg = doc.querySelector("svg");
+        if (svg && !doc.querySelector("parsererror")) {
+          svg.querySelectorAll("script, foreignObject, style").forEach((n) => n.remove());
+          const node = document.importNode(svg, true);
+          node.setAttribute("class", cls);
+          node.setAttribute("width", String(size));
+          node.setAttribute("height", String(size));
+          node.setAttribute("aria-hidden", "true");
+          node.removeAttribute("role");
+          node.removeAttribute("aria-label");
+          return node;
+        }
+      } catch (_) {}
+    }
+    // Fallback to the builder the strip already uses — no new copy of the
+    // artwork, and test_assets.js keeps that copy honest against the file.
+    const holder = document.createElement("span");
+    holder.innerHTML = meterLogoSvg(size, cls);
+    return holder.firstElementChild;
+  }
+
+  function paintChatSearchMark() {
+    const mark = document.getElementById(CS_WRAP_ID);
+    const slot = mark && mark.querySelector(".cut-cs-mark-logo");
+    if (!slot) return;
+    const node = meterLogoNode(15, "cut-cs-gauge");
+    if (!node) return;
+    slot.textContent = "";
+    slot.appendChild(node);
+  }
+
+  // ===== the strip's copy of the mark =====
+  //
+  // The artwork's home is icons/usage-meter-logo.svg, and everywhere that can
+  // use the file does — see .cut-cs-mark-logo in overlay.css.
+  //
+  // The STRIP can't. Its needle is a live DOM node that the cut-needle-sweep
+  // keyframes rotate on every fresh reading, and CSS cannot reach inside an
+  // <img> or a background-image. So the strip inlines the same artwork here,
+  // where the needle stays addressable as .cut-needle.
+  //
+  // That makes this the one copy of the path data that has to track the .svg by
+  // hand. Change one, change the other. The alternative — fetching the file at
+  // startup and injecting its text — would make the logo's appearance depend on
+  // a request resolving before the strip mounts, and a signature detail of the
+  // product going missing on a slow or failed load is a worse outcome than a
+  // duplicated path.
+  //
+  // Colours are baked into the markup rather than driven by CSS so the mark is
+  // correct wherever it's mounted, including outside the overlay's scope. The
+  // white pivot details sit on top of the coral hub, so it reads on light and
+  // dark backgrounds alike with no theme handling at all.
+  //
+  // v1.2.8: inline SVG rather than icons/icon-strip.png so the needle can be
+  // its own rotatable node. Geometry is traced from the 256px PNG: gauge pivot
+  // (19.78, 18.19) doubles as the needle hub, band runs from 12 o'clock
+  // counter-clockwise to ~105°, grey handing over to coral at ~58°, which is
+  // exactly where the needle rests. Draw order matters — the hub is painted
+  // AFTER the needle so the needle's wide base is hidden underneath it and the
+  // pivot stays clean through the whole sweep.
+  function meterLogoSvg(size, cls) {
+    return `
+      <svg class="${cls}" viewBox="0 0 24 24" width="${size}" height="${size}" aria-hidden="true" focusable="false">
         <g class="cut-logo-art" fill="none">
           <path class="cut-gauge-rest" d="M19.78 4.08A14.11 14.11 0 0 0 7.82 10.71"
                 stroke="#a8a8ad" stroke-width="3.66"></path>
@@ -1054,6 +1174,17 @@
           <circle cx="19.78" cy="18.19" r="0.72" fill="#ffffff"></circle>
         </g>
       </svg>`;
+  }
+
+  function buildOverlay() {
+    const root = document.createElement("div");
+    root.id = OVERLAY_ID;
+    const tooltipText =
+      "Claude Usage Meter — shows your Claude.ai session and weekly usage. " +
+      "The gauge sweeps each time fresh numbers arrive. " +
+      "Click the logo to learn more, or the extension icon in the toolbar " +
+      "for full details and settings.";
+    const logoSvg = meterLogoSvg(16, "cut-logo");
     root.innerHTML = `
       <div class="cut-strip" role="status">
         <a class="cut-logo-wrap" href="${PRODUCT_URL}" target="_blank" rel="noopener noreferrer"
@@ -1144,6 +1275,8 @@
             <div class="cut-sp-sep"></div>
             <div class="cut-sp-title cut-sp-title-sub">In Claude&rsquo;s chat box</div>
             <label class="cut-sp-row" data-cut="sp-projects-row"><input type="checkbox" data-sp-top="projectsButton" /><span>Projects button</span></label>
+            <div class="cut-sp-title cut-sp-title-sub">In Claude&rsquo;s sidebar</div>
+            <label class="cut-sp-row" data-cut="sp-chatsearch-row"><input type="checkbox" data-sp-top="chatSearch" /><span>Chat history search</span></label>
             <div class="cut-sp-foot" data-cut="sp-foot">Keep at least one meter on.</div>
           </div>
         </span>
@@ -1773,6 +1906,10 @@
     // a user is whichever of our three surfaces they happen to open.
     const projBox = pop.querySelector('input[data-sp-top="projectsButton"]');
     if (projBox) projBox.checked = projectsEnabled;
+    // v1.3.4: same story for the sidebar search box — not a stripField, but it
+    // belongs in the one menu people actually find.
+    const csBox = pop.querySelector('input[data-sp-top="chatSearch"]');
+    if (csBox) csBox.checked = chatSearchEnabled;
     // The Fable row only makes sense when the API reports a Fable bucket; a
     // checkbox that visibly does nothing reads as broken, so hide the row and
     // its divider position stays natural.
@@ -1806,6 +1943,14 @@
       projectsEnabled = projBox.checked;
       projectsSettingsKnown = true;
       ensureProjectsButton();
+    }
+
+    const csBox = pop.querySelector('input[data-sp-top="chatSearch"]');
+    if (csBox) {
+      settings.chatSearch = csBox.checked;
+      chatSearchEnabled = csBox.checked;
+      chatSearchSettingsKnown = true;
+      ensureChatSearch();
     }
 
     // Apply locally right away for a snappy strip update; the storage.onChanged
@@ -2353,6 +2498,7 @@
   let desktopLinkDismissed = false;
   let toolsLinkDismissed = false;
   let toolsAnchorAt = 0;
+  let newsAnchorAt = 0;
   let promoStateKnown = false;
 
   const DESKTOP_ICON =
@@ -2378,6 +2524,16 @@
     if (!toolsAnchorAt) return 0;
     const n = Math.floor((Date.now() - toolsAnchorAt) / TOOLS_ROTATE_MS);
     const len = SH_TOOLS.length;
+    return ((n % len) + len) % len;
+  }
+
+  // Same derived-from-an-anchor trick as toolsIndex(): no write per rotation,
+  // and every open tab agrees on which line is showing without talking to each
+  // other. Shares the rotation period, so the two rows tick in step.
+  function newsIndex() {
+    if (!newsAnchorAt) return 0;
+    const n = Math.floor((Date.now() - newsAnchorAt) / TOOLS_ROTATE_MS);
+    const len = CUM_NEWS.length;
     return ((n % len) + len) % len;
   }
 
@@ -2464,6 +2620,36 @@
     return true;
   }
 
+  // v1.3.4: the news row goes to the TOP of the sidebar. An announcement that
+  // only pays off while it's news has to be seen, and the bottom of the sidebar
+  // is below the fold on a short window.
+  //
+  // It anchors to the "New chat" row and inserts immediately AFTER it, never
+  // before: displacing Claude's primary action is the kind of thing that gets
+  // an extension reported, and the row is just as visible one slot down. The
+  // stacking climb is the same one the search box uses — a previous/next
+  // sibling inside a flex row would sit BESIDE the nav item and squeeze it.
+  //
+  // The evergreen tools row stays at the bottom by design (see mountPromo).
+  // Only time-sensitive news earns the top slot.
+  function findPromoTopAnchor() {
+    const nav = document.querySelector("nav") || document.querySelector('[role="navigation"]');
+    const scope = nav || document.body;
+    const link = scope.querySelector('a[href="/new"]');
+    if (!link || link.getClientRects().length === 0) return null;
+    return csInsertionPoint(link);
+  }
+
+  function mountPromoTop(wrap) {
+    const spot = findPromoTopAnchor();
+    // No anchor (collapsed rail, redesign): fall back to the bottom slot rather
+    // than drop the row entirely.
+    if (!spot) return mountPromo(wrap);
+    applyTheme(wrap);
+    spot.parent.insertBefore(wrap, spot.before.nextSibling);
+    return true;
+  }
+
   function dropPromo(id) {
     const stale = document.getElementById(id);
     if (stale) stale.remove();
@@ -2478,21 +2664,41 @@
 
     if (!desktopLinkDismissed) {
       dropPromo(TOOLS_LINK_ID);
+
+      // Start the news clock the first time this row is eligible.
+      if (!newsAnchorAt) {
+        newsAnchorAt = Date.now();
+        try { chrome.storage.local.set({ [NEWS_ANCHOR_KEY]: newsAnchorAt }); } catch (_) {}
+      }
+      const news = CUM_NEWS[newsIndex()];
+
       let wrap = document.getElementById(DESKTOP_LINK_ID);
-      if (wrap) { applyTheme(wrap); return; }
+      if (wrap) {
+        applyTheme(wrap);
+        // Already mounted: re-point it in place if the clock has moved on. A
+        // rebuild would flash the row on every MutationObserver pass.
+        setPromoTarget(wrap, utm(news.url, "sidebar-news"), news.sub, news.tip);
+        // Claude re-renders the sidebar constantly. If the row survived but got
+        // moved out of the top slot, put it back — but only if it actually
+        // drifted, since a needless move feeds the observer that called us.
+        const spot = findPromoTopAnchor();
+        if (spot && wrap.parentElement !== spot.parent) {
+          spot.parent.insertBefore(wrap, spot.before.nextSibling);
+        }
+        return;
+      }
       wrap = buildPromoRow({
         id: DESKTOP_LINK_ID,
         title: "Claude Usage Meter",
         icon: DESKTOP_ICON,
-        closeLabel: "Hide the desktop app link",
+        closeLabel: "Hide the Claude Usage Meter news link",
         onDismiss: () => {
           desktopLinkDismissed = true;
           try { chrome.storage.local.set({ [DESKTOP_DISMISS_KEY]: true }); } catch (_) {}
         },
       });
-      setPromoTarget(wrap, DESKTOP_URL, "Desktop version available",
-        "Claude Usage Meter \u2014 desktop app for macOS and Windows");
-      mountPromo(wrap);
+      setPromoTarget(wrap, utm(news.url, "sidebar-news"), news.sub, news.tip);
+      mountPromoTop(wrap);
       return;
     }
 
@@ -2539,11 +2745,12 @@
 
   try {
     chrome.storage.local.get(
-      [DESKTOP_DISMISS_KEY, TOOLS_DISMISS_KEY, TOOLS_ANCHOR_KEY],
+      [DESKTOP_DISMISS_KEY, TOOLS_DISMISS_KEY, TOOLS_ANCHOR_KEY, NEWS_ANCHOR_KEY],
       (res) => {
         desktopLinkDismissed = !!(res && res[DESKTOP_DISMISS_KEY]);
         toolsLinkDismissed = !!(res && res[TOOLS_DISMISS_KEY]);
         toolsAnchorAt = Number(res && res[TOOLS_ANCHOR_KEY]) || 0;
+        newsAnchorAt = Number(res && res[NEWS_ANCHOR_KEY]) || 0;
         promoStateKnown = true;
         ensureSidebarPromo();
       }
@@ -3162,6 +3369,864 @@
     window.location.assign(projectHref(uuid));
   }
 
+  // ===== v1.3.4: chat history search in claude.ai's sidebar =====
+  //
+  // Finding an old chat today means scrolling Recents and recognising a title.
+  // This puts a box directly above the "Chats and tasks" heading that filters
+  // every conversation on the account as you type, and — only when asked — goes
+  // on to read the messages themselves.
+  //
+  // Two levels, because they cost different amounts (see background.js):
+  //
+  //   Titles are free. The whole list is fetched once, cached, and filtered
+  //   locally, so every keystroke re-ranks instantly.
+  //
+  //   Message text is one request per chat. It is never automatic: the user
+  //   presses the button, watches a counter, and can stop. Anything else would
+  //   mean firing hundreds of requests at claude.ai on their account without
+  //   them knowing.
+  //
+  // Placement: immediately BEFORE the sidebar heading, matched by its visible
+  // text rather than a class name — Claude's sidebar class names are generated
+  // and change between deploys (the same reason the promo row matches labels).
+  // If the heading isn't there — collapsed rail, logged out, a redesign — we
+  // mount nothing rather than guess at a container and land in the middle of
+  // someone's chat list.
+  const CS_WRAP_ID = "cut-chat-search";
+  const CS_POP_ID = "cut-chat-search-pop";
+  const CS_RECENT_KEY = "chat_search_recent";   // { uuid: lastOpenedMs }
+  const CS_RECENT_MAX = 15;
+  const CS_LIST_CAP = 60;            // title rows rendered
+  const CS_DEEP_CAP = 40;            // message-match rows rendered
+  const CS_SCAN_CAP = 150;           // chats a deep scan will read, newest first
+  const CS_SCAN_BATCH = 8;           // uuids per background call
+  const CS_FRESH_MS = 45 * 1000;     // in-page reuse window for the list
+  const CS_DEBOUNCE_MS = 130;
+  const CS_MIN_DEEP = 2;             // shortest query worth a deep scan
+  const chatHref = (uuid) => "https://claude.ai/chat/" + uuid;
+
+  // Most specific first: "chats" on its own must not win while "chats and
+  // tasks" is sitting right there, or we'd anchor to whichever wrapper happens
+  // to hold the shorter string.
+  const CS_HEADINGS = [
+    "chats and tasks",
+    "chats & tasks",
+    "chats and projects",
+    "recent chats",
+    "recents",
+    "chats"
+  ];
+
+  let chatSearchEnabled = true;       // settings.chatSearch
+  let chatSearchSettingsKnown = false;
+  let csList = null;                  // last good conversation list
+  let csError = null;
+  let csLoading = false;
+  let csAt = 0;
+  let csQuery = "";
+  let csActive = -1;
+  let csPopOpen = false;
+  let csRecent = {};
+  let csDebounce = null;
+  let csOutsideHandler = null;
+  let csFollowHandler = null;
+  let csKeyHandler = null;
+
+  // Deep-scan state. `csScanToken` is the guard: every scan carries the token it
+  // started with, and any query change or Stop bumps it, so results from an
+  // abandoned scan are dropped instead of landing under a different query.
+  let csScanToken = 0;
+  let csScanning = false;
+  let csScanQuery = "";
+  let csScanned = 0;
+  let csScanTotal = 0;
+  let csDeep = [];
+  let csScanError = null;
+  let csScanDone = false;
+
+  try {
+    chrome.storage.local.get(CS_RECENT_KEY, (res) => {
+      const v = res && res[CS_RECENT_KEY];
+      if (v && typeof v === "object") csRecent = v;
+    });
+  } catch (_) {}
+
+  function rememberChat(uuid) {
+    csRecent[uuid] = Date.now();
+    const entries = Object.entries(csRecent).sort((a, b) => b[1] - a[1]);
+    if (entries.length > CS_RECENT_MAX) {
+      csRecent = Object.fromEntries(entries.slice(0, CS_RECENT_MAX));
+    }
+    try { chrome.storage.local.set({ [CS_RECENT_KEY]: csRecent }); } catch (_) {}
+  }
+
+  function csWhen(ts) {
+    if (!ts) return "";
+    const diff = Date.now() - ts;
+    if (diff < 60 * 1000) return "now";
+    if (diff < 60 * 60 * 1000) return Math.round(diff / 60000) + "m";
+    if (diff < 24 * 60 * 60 * 1000) return Math.round(diff / 3600000) + "h";
+    if (diff < 7 * 24 * 60 * 60 * 1000) return Math.round(diff / 86400000) + "d";
+    try {
+      return new Date(ts).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+    } catch (_) {
+      return "";
+    }
+  }
+
+  function requestConversations(force) {
+    if (csLoading) return;
+    if (!force && csList && Date.now() - csAt < CS_FRESH_MS) return;
+    csLoading = true;
+    renderChatSearchPop();
+    try {
+      chrome.runtime.sendMessage({ type: "get-conversations", force: !!force }, (resp) => {
+        void chrome.runtime.lastError;
+        csLoading = false;
+        if (resp && resp.ok) {
+          csList = Array.isArray(resp.conversations) ? resp.conversations : [];
+          csError = null;
+          csAt = Date.now();
+        } else {
+          csError = (resp && resp.error) || "unavailable";
+        }
+        renderChatSearchPop();
+      });
+    } catch (_) {
+      csLoading = false;
+      csError = "unavailable";
+      renderChatSearchPop();
+    }
+  }
+
+  // ---- ranking -----------------------------------------------------------
+
+  // Three tiers so the obvious answer comes first: the chat whose title STARTS
+  // with what you typed beats one that merely contains it somewhere, and a hit
+  // in the title beats a hit in the auto-summary. Within a tier, most recent
+  // wins — the chat you're hunting for is usually a recent one.
+  function csScore(c, q) {
+    const name = c.name.toLowerCase();
+    if (name.startsWith(q)) return 0;
+    const at = name.indexOf(q);
+    if (at === 0) return 0;
+    if (at > 0) return /\s|[-_/:(]/.test(name.charAt(at - 1)) ? 1 : 2;
+    if (c.summary && c.summary.toLowerCase().includes(q)) return 3;
+    return -1;
+  }
+
+  function csTitleMatches(q) {
+    if (!csList) return [];
+    const scored = [];
+    for (const c of csList) {
+      const s = csScore(c, q);
+      if (s < 0) continue;
+      scored.push({ c, s });
+    }
+    scored.sort((a, b) => (a.s - b.s) || (b.c.updatedAt - a.c.updatedAt));
+    return scored.map((x) => x.c);
+  }
+
+  // ---- anchoring + the box itself ----------------------------------------
+
+  function findChatsHeading() {
+    const nav = document.querySelector("nav") || document.querySelector('[role="navigation"]');
+    const scope = nav || document.body;
+    const nodes = scope.querySelectorAll("div, span, h1, h2, h3, h4, h5, p, li, a, button");
+    for (const want of CS_HEADINGS) {
+      for (const el of nodes) {
+        if (el.id === CS_WRAP_ID) continue;
+        if (el.closest && el.closest("#" + CS_WRAP_ID)) continue;
+        const text = (el.textContent || "").trim().toLowerCase();
+        // Exact-ish only, and short: a chat titled "chats I should archive"
+        // must never be mistaken for the heading above the list.
+        if (text !== want || text.length > 24) continue;
+        if (el.getClientRects().length === 0) continue;
+        // querySelectorAll is in document order, so an ancestor whose entire
+        // text is this heading comes back before its children — which is the
+        // one we want to sit above, not the inner <span>.
+        return el;
+      }
+    }
+    return null;
+  }
+
+  // Being a previous sibling of the heading is NOT enough to be ABOVE it. If the
+  // heading's parent lays its children out in a row — a flex row holding the
+  // label and, say, a collapse chevron — then a sibling sits BESIDE the heading
+  // and squeezes its text, which is exactly what happened on the first build.
+  //
+  // So: climb until we reach a parent that actually stacks its children, and
+  // insert there. Anything else (row flex, display:contents wrappers, inline
+  // containers) gets climbed past. If nothing in five levels stacks, we mount
+  // nothing rather than wedge a full-width box into a row.
+  function csStacks(el) {
+    let display = "";
+    let dir = "";
+    let cols = "";
+    try {
+      const cs = getComputedStyle(el);
+      display = cs.display;
+      dir = cs.flexDirection || "";
+      cols = cs.gridTemplateColumns || "";
+    } catch (_) {
+      return false;
+    }
+    if (display === "block" || display === "flow-root" || display === "list-item") return true;
+    if (display === "flex" || display === "inline-flex") return dir.indexOf("column") === 0;
+    if (display === "grid" || display === "inline-grid") {
+      // A single-track grid stacks; a multi-column one would drop us into a cell
+      // beside the heading, which is the very thing we're avoiding. "none" is
+      // the implicit single column. An unreadable value is treated as NOT
+      // stacking: climbing one level too far still leaves us above the heading,
+      // whereas guessing wrong lands us in a cell next to it.
+      const tracks = cols.trim();
+      if (!tracks) return false;
+      return tracks === "none" || tracks.split(/\s+/).length === 1;
+    }
+    return false;
+  }
+
+  function csInsertionPoint(heading) {
+    let node = heading;
+    for (let i = 0; i < 5; i++) {
+      const parent = node.parentElement;
+      if (!parent) return null;
+      if (csStacks(parent)) return { parent, before: node };
+      node = parent;
+    }
+    return null;
+  }
+
+  function csIcon() {
+    return (
+      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" ' +
+      'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+      '<circle cx="11" cy="11" r="7"></circle><path d="M20 20l-3.6-3.6"></path></svg>'
+    );
+  }
+
+  function buildChatSearchBox() {
+    const wrap = document.createElement("div");
+    wrap.id = CS_WRAP_ID;
+    wrap.className = "cut-cs-wrap";
+
+    // The meter's own mark, ahead of everything else. Attribution that only
+    // appears once the panel is open isn't really attribution — someone who
+    // never clicks still deserves to know whose box is sitting in their
+    // sidebar. It's the one coloured thing in the row, so it gets noticed
+    // without having to be large or loud.
+    //
+    // The artwork lives in icons/usage-meter-logo.svg. This is an empty slot
+    // that paintChatSearchMark() fills from the fetched file — see the note on
+    // loadMeterLogo() for why the file can't simply be an <img src>.
+    const mark = document.createElement("span");
+    mark.className = "cut-cs-mark-logo";
+    // Hidden on the slot, not just on the artwork: the whole subtree is
+    // decoration beside a field that already has its own label, and that stays
+    // true whichever way the mark ends up being filled.
+    mark.setAttribute("aria-hidden", "true");
+
+    const sep = document.createElement("span");
+    sep.className = "cut-cs-sep";
+    sep.setAttribute("aria-hidden", "true");
+
+    const icon = document.createElement("span");
+    icon.className = "cut-cs-ico";
+    icon.innerHTML = csIcon();
+
+    const input = document.createElement("input");
+    input.type = "text";
+    input.className = "cut-cs-input";
+    input.placeholder = "Search chat history";
+    input.setAttribute("aria-label", "Search your Claude chat history");
+    input.setAttribute("autocomplete", "off");
+    input.setAttribute("spellcheck", "false");
+
+    const clear = document.createElement("button");
+    clear.type = "button";
+    clear.className = "cut-cs-clear";
+    clear.setAttribute("aria-label", "Clear the search");
+    clear.textContent = "\u00d7";
+    clear.addEventListener("mousedown", (e) => e.preventDefault());
+    clear.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      input.value = "";
+      setChatQuery("");
+      input.focus();
+    });
+
+    input.addEventListener("focus", () => {
+      requestConversations(false);
+      // Open on focus even with nothing typed: an empty box still has something
+      // to say (the chats you last opened from here), and a panel that only
+      // appears after a keystroke makes the box feel inert on click.
+      openChatSearchPop();
+    });
+    input.addEventListener("input", () => {
+      wrap.classList.toggle("cut-cs-has-text", !!input.value);
+      if (csDebounce) clearTimeout(csDebounce);
+      csDebounce = setTimeout(() => {
+        csDebounce = null;
+        setChatQuery(input.value);
+      }, CS_DEBOUNCE_MS);
+    });
+    // Arrows and Enter have to be caught on the input itself: the document-level
+    // handler runs too, but claude.ai's own key handling sits in between and a
+    // bare Enter in a text field is otherwise a form submit waiting to happen.
+    input.addEventListener("keydown", (ev) => {
+      if (ev.key === "Escape") {
+        ev.stopPropagation();
+        if (csPopOpen) {
+          closeChatSearchPop();
+        } else if (input.value) {
+          input.value = "";
+          setChatQuery("");
+        } else {
+          input.blur();
+        }
+        return;
+      }
+      if (ev.key === "Enter" || ev.key === "ArrowDown" || ev.key === "ArrowUp") {
+        ev.stopPropagation();
+      }
+    });
+
+    // Spelled out in full on hover, since the mark alone can only hint.
+    wrap.title = "Search your Claude chat history \u2014 added by Claude Usage Meter";
+
+    // Clicking the logo or the divider should do the obvious thing rather than
+    // nothing: this is a search box, so any click in it lands in the field.
+    wrap.addEventListener("mousedown", (ev) => {
+      if (ev.target === input || (clear.contains && clear.contains(ev.target))) return;
+      ev.preventDefault();
+      input.focus();
+    });
+
+    wrap.appendChild(mark);
+    wrap.appendChild(sep);
+    wrap.appendChild(icon);
+    wrap.appendChild(input);
+    wrap.appendChild(clear);
+    return wrap;
+  }
+
+  function ensureChatSearch() {
+    const existing = document.getElementById(CS_WRAP_ID);
+
+    if (!chatSearchEnabled) {
+      if (existing) existing.remove();
+      if (csPopOpen) closeChatSearchPop();
+      return;
+    }
+    if (!chatSearchSettingsKnown) return;
+
+    const heading = findChatsHeading();
+    if (!heading) return;
+    const spot = csInsertionPoint(heading);
+    if (!spot) return;
+
+    if (existing) {
+      applyTheme(existing);
+      const misplaced =
+        existing.parentElement !== spot.parent || existing.nextElementSibling !== spot.before;
+      // Moving a node blurs whatever is focused inside it. Someone mid-query is
+      // not going to forgive losing their typing to a background re-render, so
+      // a cosmetic reposition waits until they're done.
+      const busy = existing.contains(document.activeElement);
+      if (misplaced && !busy) spot.parent.insertBefore(existing, spot.before);
+      if (csPopOpen) positionChatSearchPop();
+      return;
+    }
+
+    const box = buildChatSearchBox();
+    applyTheme(box);
+    spot.parent.insertBefore(box, spot.before);
+    loadMeterLogo();
+    paintChatSearchMark();
+  }
+
+  function csInput() {
+    const wrap = document.getElementById(CS_WRAP_ID);
+    return wrap ? wrap.querySelector(".cut-cs-input") : null;
+  }
+
+  function setChatQuery(raw) {
+    const next = String(raw || "").trim();
+    if (next === csQuery) return;
+    csQuery = next;
+    csActive = -1;
+    // Any change of query invalidates a scan in flight — its results answer a
+    // question nobody is asking any more.
+    stopChatScan();
+    csDeep = [];
+    csScanDone = false;
+    csScanError = null;
+    const wrap = document.getElementById(CS_WRAP_ID);
+    if (wrap) wrap.classList.toggle("cut-cs-has-text", !!next);
+    requestConversations(false);
+    if (document.activeElement === csInput() || next) openChatSearchPop();
+    renderChatSearchPop();
+  }
+
+  // ---- the results panel -------------------------------------------------
+
+  function buildChatSearchPop() {
+    const pop = document.createElement("div");
+    pop.id = CS_POP_ID;
+    pop.className = "cut-cs-pop";
+    pop.setAttribute("role", "dialog");
+    pop.setAttribute("aria-label", "Chat history search results");
+
+    const list = document.createElement("div");
+    list.className = "cut-cs-list";
+    list.setAttribute("role", "listbox");
+
+    const foot = document.createElement("div");
+    foot.className = "cut-cs-foot";
+
+    const deep = document.createElement("button");
+    deep.type = "button";
+    deep.className = "cut-cs-deep";
+    deep.addEventListener("mousedown", (e) => e.preventDefault());
+    deep.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (csScanning) stopChatScan(true);
+      else startChatScan();
+      renderChatSearchPop();
+    });
+
+    const hint = document.createElement("span");
+    hint.className = "cut-cs-hint";
+    hint.textContent = "\u2191\u2193 Enter";
+
+    foot.appendChild(deep);
+    foot.appendChild(hint);
+
+    // Say plainly whose box this is. It sits inside Claude's own sidebar, so
+    // without this line a user reasonably assumes Anthropic shipped it — and
+    // then has nowhere to go when they want it gone.
+    const brand = document.createElement("div");
+    brand.className = "cut-cs-brand";
+    const brandText = document.createElement("span");
+    brandText.textContent = "Added by Claude Usage Meter. Hide it from ";
+    const brandBtn = document.createElement("button");
+    brandBtn.type = "button";
+    brandBtn.className = "cut-cs-brand-link";
+    brandBtn.textContent = "its settings";
+    brandBtn.addEventListener("mousedown", (e) => e.preventDefault());
+    brandBtn.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      closeChatSearchPop();
+      openMeterSettings();
+    });
+    brand.appendChild(brandText);
+    brand.appendChild(brandBtn);
+
+    pop.appendChild(list);
+    pop.appendChild(foot);
+    pop.appendChild(brand);
+    return pop;
+  }
+
+  // Build the label as text nodes with the matched run wrapped, never as an
+  // HTML string — conversation titles are user content and would otherwise be
+  // an injection point straight into claude.ai's page.
+  function csHighlight(target, text, needle) {
+    const lower = text.toLowerCase();
+    let from = 0;
+    let found = 0;
+    for (;;) {
+      const at = needle ? lower.indexOf(needle, from) : -1;
+      if (at < 0 || found >= 8) break;
+      if (at > from) target.appendChild(document.createTextNode(text.slice(from, at)));
+      const mark = document.createElement("mark");
+      mark.className = "cut-cs-mark";
+      mark.textContent = text.slice(at, at + needle.length);
+      target.appendChild(mark);
+      from = at + needle.length;
+      found++;
+    }
+    if (from < text.length) target.appendChild(document.createTextNode(text.slice(from)));
+  }
+
+  function csRow(c, snippet) {
+    const a = document.createElement("a");
+    a.className = "cut-cs-item";
+    a.href = chatHref(c.uuid);
+    a.setAttribute("role", "option");
+    a.dataset.uuid = c.uuid;
+
+    const top = document.createElement("span");
+    top.className = "cut-cs-top";
+
+    const name = document.createElement("span");
+    name.className = "cut-cs-name";
+    csHighlight(name, c.name, csQuery.toLowerCase());
+
+    const when = document.createElement("span");
+    when.className = "cut-cs-when";
+    when.textContent = csWhen(c.updatedAt);
+
+    top.appendChild(name);
+    top.appendChild(when);
+    a.appendChild(top);
+
+    if (snippet) {
+      const snip = document.createElement("span");
+      snip.className = "cut-cs-snip";
+      csHighlight(snip, snippet, csQuery.toLowerCase());
+      a.appendChild(snip);
+    }
+
+    a.addEventListener("click", (e) => openChat(c.uuid, e));
+    a.addEventListener("mousemove", () => {
+      const rows = currentChatRows();
+      const i = rows.indexOf(a);
+      if (i > -1 && i !== csActive) setChatActive(i, false);
+    });
+    return a;
+  }
+
+  function csHeader(text) {
+    const h = document.createElement("div");
+    h.className = "cut-cs-group";
+    h.textContent = text;
+    return h;
+  }
+
+  function csNote(text, sub) {
+    const d = document.createElement("div");
+    d.className = "cut-cs-note";
+    d.textContent = text;
+    if (sub) {
+      const s = document.createElement("div");
+      s.className = "cut-cs-note-sub";
+      s.textContent = sub;
+      d.appendChild(s);
+    }
+    return d;
+  }
+
+  function currentChatRows() {
+    const pop = document.getElementById(CS_POP_ID);
+    if (!pop) return [];
+    return Array.from(pop.querySelectorAll(".cut-cs-item"));
+  }
+
+  function setChatActive(i, scroll) {
+    const rows = currentChatRows();
+    csActive = i;
+    rows.forEach((r, n) => r.classList.toggle("cut-cs-active", n === i));
+    if (scroll && rows[i]) rows[i].scrollIntoView({ block: "nearest" });
+  }
+
+  function renderChatSearchPop() {
+    const pop = document.getElementById(CS_POP_ID);
+    if (!pop || !csPopOpen) return;
+    const list = pop.querySelector(".cut-cs-list");
+    if (!list) return;
+    list.textContent = "";
+
+    const q = csQuery.toLowerCase();
+
+    if (csError && !csList) {
+      list.appendChild(
+        csError === "not_signed_in"
+          ? csNote("Not signed in to claude.ai", "Sign in and try again.")
+          : csNote("Couldn\u2019t load your chats", "Claude may have changed the API \u2014 try again shortly.")
+      );
+    } else if (!csList) {
+      list.appendChild(csNote("Loading your chats\u2026"));
+    } else if (!csQuery) {
+      const recent = Object.entries(csRecent)
+        .sort((a, b) => b[1] - a[1])
+        .map(([uuid]) => csList.find((c) => c.uuid === uuid))
+        .filter(Boolean)
+        .slice(0, 6);
+      if (recent.length) {
+        list.appendChild(csHeader("Recently opened from here"));
+        for (const c of recent) list.appendChild(csRow(c, null));
+      } else {
+        list.appendChild(
+          csNote(
+            "Search " + csList.length + " chat" + (csList.length === 1 ? "" : "s"),
+            "Type to match titles, then search inside the messages."
+          )
+        );
+      }
+    } else {
+      const titles = csTitleMatches(q);
+      const deepRows = csDeep.filter((m) => !titles.some((t) => t.uuid === m.uuid));
+
+      if (titles.length) {
+        list.appendChild(csHeader("Titles \u00b7 " + titles.length));
+        for (const c of titles.slice(0, CS_LIST_CAP)) list.appendChild(csRow(c, null));
+      } else if (!csScanning && !csDeep.length) {
+        list.appendChild(
+          csNote(
+            "No title matches \u201c" + csQuery + "\u201d",
+            csScanDone
+              ? "Nothing in the messages either."
+              : "Search message text below to look inside the chats."
+          )
+        );
+      }
+
+      if (deepRows.length) {
+        list.appendChild(csHeader("In messages \u00b7 " + deepRows.length));
+        for (const m of deepRows.slice(0, CS_DEEP_CAP)) {
+          const c = csList.find((x) => x.uuid === m.uuid);
+          if (c) list.appendChild(csRow(c, m.snippet));
+        }
+      }
+
+      if (csScanError) {
+        list.appendChild(
+          csScanError === "rate_limited"
+            ? csNote("Claude rate-limited the scan", "Wait a moment and run it again.")
+            : csScanError === "not_signed_in"
+              ? csNote("Not signed in to claude.ai")
+              : csNote("The message scan stopped early")
+        );
+      } else if (csScanDone && !deepRows.length && csScanQuery === csQuery) {
+        list.appendChild(
+          csNote(
+            "Nothing in the messages either",
+            "Scanned the " + csScanned + " most recent chats."
+          )
+        );
+      }
+    }
+
+    // Footer: the scan control doubles as its own progress readout, so there's
+    // one thing to look at rather than a button plus a status line.
+    const deepBtn = pop.querySelector(".cut-cs-deep");
+    if (deepBtn) {
+      if (csScanning) {
+        deepBtn.textContent =
+          "Stop \u00b7 " + csScanned + "/" + csScanTotal +
+          (csDeep.length ? " \u00b7 " + csDeep.length + " found" : "");
+        deepBtn.classList.add("cut-cs-deep-busy");
+        deepBtn.disabled = false;
+      } else if (csScanDone && csScanQuery === csQuery) {
+        deepBtn.textContent = "Scan again \u00b7 read " + csScanned + " chats";
+        deepBtn.classList.remove("cut-cs-deep-busy");
+        deepBtn.disabled = false;
+      } else {
+        deepBtn.textContent = "Search message text";
+        deepBtn.classList.remove("cut-cs-deep-busy");
+        deepBtn.disabled = csQuery.length < CS_MIN_DEEP || !csList;
+      }
+    }
+
+    if (csActive >= 0) setChatActive(Math.min(csActive, currentChatRows().length - 1), false);
+    positionChatSearchPop();
+  }
+
+  // Anchored under the box and opening DOWNWARD — the sidebar heading sits near
+  // the top of the window, so there's room below and none above. Portaled to
+  // <body> because the sidebar scrolls and clips its own subtree, which would
+  // trap the panel inside the chat list.
+  function positionChatSearchPop() {
+    const pop = document.getElementById(CS_POP_ID);
+    const wrap = document.getElementById(CS_WRAP_ID);
+    if (!pop || !wrap || !csPopOpen || !wrap.isConnected) return;
+    const br = wrap.getBoundingClientRect();
+    const margin = 10;
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+
+    // The sidebar is narrow; snippets need more room than that. Widen past the
+    // box, but never past the window.
+    const width = Math.min(Math.max(br.width, 340), vw - margin * 2);
+    pop.style.width = width + "px";
+
+    const below = vh - br.bottom - margin - 8;
+    pop.style.maxHeight = Math.max(180, Math.min(460, below)) + "px";
+
+    const pr = pop.getBoundingClientRect();
+    let left = Math.max(margin, Math.min(br.left, vw - width - margin));
+    let top = br.bottom + 6;
+    if (top + pr.height > vh - margin) {
+      const above = br.top - pr.height - 6;
+      if (above > margin) top = above;
+      else top = Math.max(margin, vh - pr.height - margin);
+    }
+    pop.style.left = left + "px";
+    pop.style.top = top + "px";
+  }
+
+  function openChatSearchPop() {
+    const wrap = document.getElementById(CS_WRAP_ID);
+    if (!wrap) return;
+    let pop = document.getElementById(CS_POP_ID);
+    if (!pop) pop = buildChatSearchPop();
+    if (csPopOpen && pop.parentNode === document.body) return;
+
+    csPopOpen = true;
+    pop.classList.toggle("cut-cs-dark", detectClaudeTheme() === "dark");
+    document.body.appendChild(pop);
+    pop.style.visibility = "hidden";
+    renderChatSearchPop();
+    positionChatSearchPop();
+    pop.style.visibility = "";
+
+    let queued = false;
+    csFollowHandler = () => {
+      if (queued) return;
+      queued = true;
+      requestAnimationFrame(() => { queued = false; positionChatSearchPop(); });
+    };
+    window.addEventListener("resize", csFollowHandler);
+    window.addEventListener("scroll", csFollowHandler, true);
+
+    csKeyHandler = (ev) => {
+      if (!csPopOpen) return;
+      if (ev.key === "Escape") {
+        ev.preventDefault();
+        closeChatSearchPop();
+        return;
+      }
+      const rows = currentChatRows();
+      if (!rows.length) return;
+      if (ev.key === "ArrowDown") {
+        ev.preventDefault();
+        setChatActive(csActive < rows.length - 1 ? csActive + 1 : 0, true);
+      } else if (ev.key === "ArrowUp") {
+        ev.preventDefault();
+        setChatActive(csActive > 0 ? csActive - 1 : rows.length - 1, true);
+      } else if (ev.key === "Enter") {
+        const pick = rows[csActive >= 0 ? csActive : 0];
+        if (pick) {
+          ev.preventDefault();
+          openChat(pick.dataset.uuid, ev);
+        }
+      }
+    };
+    document.addEventListener("keydown", csKeyHandler, true);
+
+    csOutsideHandler = (ev) => {
+      if (pop.contains(ev.target)) return;
+      if (wrap.contains(ev.target)) return;
+      closeChatSearchPop();
+    };
+    setTimeout(() => document.addEventListener("click", csOutsideHandler, true), 0);
+  }
+
+  function closeChatSearchPop() {
+    csPopOpen = false;
+    csActive = -1;
+    stopChatScan();
+    if (csOutsideHandler) {
+      document.removeEventListener("click", csOutsideHandler, true);
+      csOutsideHandler = null;
+    }
+    if (csKeyHandler) {
+      document.removeEventListener("keydown", csKeyHandler, true);
+      csKeyHandler = null;
+    }
+    if (csFollowHandler) {
+      window.removeEventListener("resize", csFollowHandler);
+      window.removeEventListener("scroll", csFollowHandler, true);
+      csFollowHandler = null;
+    }
+    const pop = document.getElementById(CS_POP_ID);
+    if (pop && pop.parentNode === document.body) pop.remove();
+  }
+
+  function openChat(uuid, ev) {
+    if (!uuid) return;
+    rememberChat(uuid);
+    if (ev && (ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.button === 1)) {
+      // Modified clicks are the browser's business — let it open the tab, and
+      // leave the panel up so they can open several in a row.
+      return;
+    }
+    if (ev) ev.preventDefault();
+    const input = csInput();
+    if (input) input.value = "";
+    csQuery = "";
+    closeChatSearchPop();
+    // A full load rather than a faked SPA route: pushState plus a synthetic
+    // popstate works right up until Claude's router changes, and a half-
+    // navigated app is a far worse failure than a one-second reload.
+    window.location.assign(chatHref(uuid));
+  }
+
+  // ---- the deep scan -----------------------------------------------------
+
+  function stopChatScan(userAsked) {
+    if (!csScanning) return;
+    csScanToken++;
+    csScanning = false;
+    // Stopping on purpose still counts as an answer for what was read so far;
+    // stopping because the query changed does not.
+    if (userAsked) csScanDone = true;
+  }
+
+  async function startChatScan() {
+    if (csScanning || !csList || csQuery.length < CS_MIN_DEEP) return;
+
+    const token = ++csScanToken;
+    csScanning = true;
+    csScanQuery = csQuery;
+    csScanned = 0;
+    csDeep = [];
+    csScanError = null;
+    csScanDone = false;
+
+    // Newest first, capped. Reading every chat on a long-lived account would be
+    // thousands of requests; the chat someone is hunting for is nearly always
+    // recent, and the cap is stated on the button once the scan finishes.
+    const queue = csList.slice(0, CS_SCAN_CAP).map((c) => c.uuid);
+    csScanTotal = queue.length;
+    renderChatSearchPop();
+
+    for (let i = 0; i < queue.length; i += CS_SCAN_BATCH) {
+      if (token !== csScanToken) return;
+      const batch = queue.slice(i, i + CS_SCAN_BATCH);
+      let resp;
+      try {
+        resp = await chrome.runtime.sendMessage({
+          type: "scan-conversations",
+          query: csScanQuery,
+          uuids: batch
+        });
+      } catch (_) {
+        resp = null;
+      }
+      if (token !== csScanToken) return;
+
+      if (!resp || !resp.ok) {
+        csScanned += (resp && resp.scanned) || 0;
+        if (resp && Array.isArray(resp.matches)) csDeep = csDeep.concat(resp.matches);
+        csScanError = (resp && resp.error) || "scan_failed";
+        csScanning = false;
+        csScanDone = true;
+        renderChatSearchPop();
+        return;
+      }
+
+      csScanned += resp.scanned || batch.length;
+      if (Array.isArray(resp.matches) && resp.matches.length) {
+        // Results land as they're found rather than at the end — a scan that
+        // shows nothing for twenty seconds reads as broken.
+        csDeep = csDeep.concat(resp.matches);
+        csDeep.sort((a, b) => (b.hits || 0) - (a.hits || 0));
+      }
+      renderChatSearchPop();
+    }
+
+    if (token !== csScanToken) return;
+    csScanning = false;
+    csScanDone = true;
+    renderChatSearchPop();
+  }
+
   function findMountTarget() {
     const editor =
       document.querySelector('div.ProseMirror[contenteditable="true"]') ||
@@ -3218,9 +4283,14 @@
   // If get-state never answers (a suspended service worker on a cold tab), fall
   // back to the default rather than withholding the button forever.
   setTimeout(() => {
-    if (projectsSettingsKnown) return;
-    projectsSettingsKnown = true;
-    ensureProjectsButton();
+    if (!projectsSettingsKnown) {
+      projectsSettingsKnown = true;
+      ensureProjectsButton();
+    }
+    if (!chatSearchSettingsKnown) {
+      chatSearchSettingsKnown = true;
+      ensureChatSearch();
+    }
   }, 4000);
 
   let bootAttempts = 0;
@@ -3228,6 +4298,7 @@
     ensureMounted();
     ensureDesktopLink();
     ensureProjectsButton();
+    ensureChatSearch();
     reportModelIfChanged();
     scanLockoutBanner();
     if (++bootAttempts >= 30) clearInterval(bootTimer);
@@ -3242,6 +4313,7 @@
       ensureMounted();
       ensureDesktopLink();
       ensureProjectsButton();
+      ensureChatSearch();
       reportModelIfChanged();
       scanLockoutBanner();
     }, 400);
@@ -3317,8 +4389,11 @@
       // v1.3.1: the composer Projects button (options page toggle, default on).
       if (resp && resp.settings) {
         projectsEnabled = resp.settings.projectsButton !== false;
+        // v1.3.4: the sidebar chat search (default on).
+        chatSearchEnabled = resp.settings.chatSearch !== false;
       }
       projectsSettingsKnown = true;
+      chatSearchSettingsKnown = true;
       try {
         const { [RATE_KEY]: rv, [RATE_AT_KEY]: rav, [SHARE_KEY]: sv, [COLLAPSE_KEY]: cv,
                 [INSTALL_KEY]: iv, [NUDGE_KEY]: nv } =
@@ -3355,6 +4430,7 @@
       } catch (_) {}
       ensureMounted();
       ensureProjectsButton();
+      ensureChatSearch();
       // v1.2.14: the initial render above used STORED state, which right after
       // an account switch is the previous account's numbers. Kick a poll now so
       // the fresh account's data lands and re-broadcasts within a second or two
@@ -3387,12 +4463,22 @@
         projectsSettingsKnown = true;
         ensureProjectsButton();
       }
+      // v1.3.4: and the sidebar search box, same live-apply path.
+      const wantChatSearch = nv.chatSearch !== false;
+      if (wantChatSearch !== chatSearchEnabled || !chatSearchSettingsKnown) {
+        chatSearchEnabled = wantChatSearch;
+        chatSearchSettingsKnown = true;
+        ensureChatSearch();
+      }
     }
     // v1.3.2: dismissing a promo row in one tab takes it out of every other open
     // tab immediately. Closing the same row twice because a second window still
     // had it is exactly the kind of thing that reads as ignoring the dismissal.
     if (changes[DESKTOP_DISMISS_KEY] || changes[TOOLS_DISMISS_KEY] ||
-        changes[TOOLS_ANCHOR_KEY]) {
+        changes[TOOLS_ANCHOR_KEY] || changes[NEWS_ANCHOR_KEY]) {
+      if (changes[NEWS_ANCHOR_KEY]) {
+        newsAnchorAt = Number(changes[NEWS_ANCHOR_KEY].newValue) || 0;
+      }
       if (changes[DESKTOP_DISMISS_KEY]) {
         desktopLinkDismissed = !!changes[DESKTOP_DISMISS_KEY].newValue;
       }
@@ -3436,6 +4522,13 @@
       shared = !!changes[SHARE_KEY].newValue;
       const root = document.getElementById(OVERLAY_ID);
       if (root && !sharePopOpen) applyShareVisibility(root);
+    }
+    if (changes[CS_RECENT_KEY]) {
+      const v = changes[CS_RECENT_KEY].newValue;
+      if (v && typeof v === "object") {
+        csRecent = v;
+        if (csPopOpen && !csQuery) renderChatSearchPop();
+      }
     }
     if (changes[PROJ_RECENT_KEY]) {
       const v = changes[PROJ_RECENT_KEY].newValue;

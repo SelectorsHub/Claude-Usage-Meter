@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Claude Usage Meter — the gauge mark.
+
+  Transparent background, square 24x24 viewBox, so it drops into any surface at
+  any size without a tile behind it.
+
+  Geometry is traced from the 256px icon: the gauge pivot (19.78, 18.19) doubles
+  as the needle hub, the band runs from 12 o'clock counter-clockwise to ~105°,
+  and grey hands over to coral at ~58°, which is exactly where the needle rests.
+  Draw order matters — the hub is painted AFTER the needle so the needle's wide
+  base is hidden underneath it and the pivot stays clean.
+
+  NOTE: the usage strip does NOT use this file. Its needle is a live, rotatable
+  DOM node driven by the cut-needle-sweep keyframes in overlay.css, and CSS
+  cannot reach inside an <img> or a background-image — so the strip keeps an
+  inline copy, built by meterLogoSvg() in content-script.js. If you change the
+  artwork here, change it there too.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24"
+     role="img" aria-label="Claude Usage Meter">
+  <g fill="none">
+    <path d="M19.78 4.08A14.11 14.11 0 0 0 7.82 10.71" stroke="#a8a8ad" stroke-width="3.66"/>
+    <path d="M7.82 10.71A14.11 14.11 0 0 0 6.15 21.84" stroke="#d97757" stroke-width="3.66"/>
+    <path d="M21.21 16.38 L10.52 10.34 L10.00 11.00 L18.36 19.99 Z" fill="#d97757"/>
+    <circle cx="19.78" cy="18.19" r="3.84" fill="#d97757"/>
+    <path d="M19.97 18.21L22.83 18.56M19.93 18.31L22.23 20.04M19.86 18.37L20.98 21.02M19.76 18.38L19.41 21.24M19.66 18.34L17.93 20.64M19.60 18.27L16.95 19.39M19.59 18.17L16.73 17.82M19.63 18.07L17.33 16.34M19.70 18.01L18.58 15.36M19.80 18.00L20.15 15.14M19.90 18.04L21.63 15.74M19.96 18.11L22.61 16.99"
+          stroke="#ffffff" stroke-width="0.66" stroke-linecap="round"/>
+    <circle cx="19.78" cy="18.19" r="0.72" fill="#ffffff"/>
+  </g>
+</svg>

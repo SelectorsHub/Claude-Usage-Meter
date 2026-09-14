@@ -1998,3 +1998,255 @@
 .cut-proj-brand:hover { opacity: 0.8; }
 .cut-proj-brand-link:hover { color: #d97757; }
 .cut-proj-brand-link:focus-visible { outline: 2px solid #d97757; outline-offset: 2px; border-radius: 3px; }
+
+/* ===== v1.3.4 — chat history search in claude.ai's sidebar =====
+   Like the Projects button and unlike the promo row, this one deliberately does
+   NOT wear the SelectorsHub gold. It sits above Claude's own "Chats and tasks"
+   heading as a piece of navigation, and a branded search box there reads as an
+   ad wedged into the sidebar; a native-looking one reads as a feature and gets
+   used. The brand shows where it costs nothing: the coral focus ring, and the
+   attribution line at the foot of the results panel. */
+.cut-cs-wrap {
+  display: flex;
+  align-items: center;
+  /* Tighter than the 6px it started with: the row now carries a logo, a
+     divider and the magnifier before the field, and typing space in a ~230px
+     sidebar is the scarcest thing here. */
+  gap: 5px;
+  box-sizing: border-box;
+  /* Belt and braces with csInsertionPoint(): even if we somehow land in a row,
+     these stop the box from stealing width from the heading next to it. */
+  flex: 0 0 auto;
+  align-self: stretch;
+  width: 100%;
+  margin: 4px 0 8px;
+  padding: 0 8px;
+  height: 32px;
+  border-radius: 9px;
+  border: 1px solid rgba(28, 25, 23, 0.14);
+  background: rgba(28, 25, 23, 0.035);
+  color: #1c1917;
+  font: 500 12.5px/1.35 ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  transition: border-color 0.14s ease, box-shadow 0.14s ease, background 0.14s ease;
+}
+.cut-cs-wrap.cut-theme-dark {
+  border-color: rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.05);
+  color: #f2efec;
+}
+.cut-cs-wrap:hover { border-color: rgba(217, 119, 87, 0.45); }
+.cut-cs-wrap:focus-within {
+  border-color: #d97757;
+  box-shadow: 0 0 0 2px rgba(217, 119, 87, 0.22);
+}
+/* The meter's mark, then a hairline, then the magnifier. The logo keeps its
+   colour — it's the thing that has to be noticed — while the magnifier stays a
+   muted utility glyph, so the two read as "brand, then function" rather than as
+   two competing icons. The divider is what makes that grouping legible at
+   14px; without it they look like clutter. */
+/* Sizing only. The artwork comes from icons/usage-meter-logo.svg, fetched by
+   the content script and injected into this slot — see loadMeterLogo() for why
+   neither an <img src> nor a background-image here can render on claude.ai. No
+   background colour and no radius: the file is transparent, so the mark sits in
+   the row rather than on a tile. */
+.cut-cs-mark-logo {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  width: 15px;
+  height: 15px;
+}
+.cut-cs-gauge { width: 15px; height: 15px; display: block; }
+.cut-cs-sep {
+  width: 1px;
+  height: 14px;
+  flex: 0 0 auto;
+  background: currentColor;
+  opacity: 0.16;
+}
+.cut-cs-ico { display: inline-flex; flex: 0 0 auto; opacity: 0.5; }
+.cut-cs-ico svg { width: 13px; height: 13px; display: block; }
+.cut-cs-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 100%;
+  border: 0;
+  padding: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  outline: none;
+}
+.cut-cs-input::placeholder { color: currentColor; opacity: 0.45; }
+.cut-cs-clear {
+  appearance: none;
+  display: none;
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(28, 25, 23, 0.1);
+  color: inherit;
+  font-size: 13px;
+  line-height: 1;
+  opacity: 0.6;
+  cursor: pointer;
+}
+.cut-cs-wrap.cut-theme-dark .cut-cs-clear { background: rgba(255, 255, 255, 0.12); }
+.cut-cs-wrap.cut-cs-has-text .cut-cs-clear { display: grid; }
+.cut-cs-clear:hover { opacity: 1; }
+.cut-cs-clear:focus-visible { opacity: 1; outline: 2px solid #d97757; }
+
+/* The results panel is portaled to <body> — the sidebar scrolls and clips its
+   own subtree, which would trap the panel inside the chat list. */
+.cut-cs-pop {
+  position: fixed;
+  z-index: 2147483646;
+  display: flex;
+  flex-direction: column;
+  max-width: calc(100vw - 20px);
+  padding: 8px;
+  box-sizing: border-box;
+  border-radius: 12px;
+  background: #ffffff;
+  color: #1c1917;
+  box-shadow: 0 14px 38px rgba(0, 0, 0, 0.18), 0 0 0 1px rgba(28, 25, 23, 0.08);
+  font: 500 12.5px/1.35 ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+.cut-cs-pop.cut-cs-dark {
+  background: #262320;
+  color: #f2efec;
+  box-shadow: 0 14px 38px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(255, 255, 255, 0.1);
+}
+
+.cut-cs-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+.cut-cs-list::-webkit-scrollbar { width: 8px; }
+.cut-cs-list::-webkit-scrollbar-thumb { background: rgba(28, 25, 23, 0.18); border-radius: 8px; }
+.cut-cs-pop.cut-cs-dark .cut-cs-list::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.18); }
+
+.cut-cs-group {
+  padding: 8px 8px 4px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  opacity: 0.45;
+}
+.cut-cs-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 7px 8px;
+  border-radius: 8px;
+  color: inherit;
+  text-decoration: none;
+  cursor: pointer;
+}
+.cut-cs-item:hover,
+.cut-cs-item.cut-cs-active { background: rgba(28, 25, 23, 0.07); }
+.cut-cs-pop.cut-cs-dark .cut-cs-item:hover,
+.cut-cs-pop.cut-cs-dark .cut-cs-item.cut-cs-active { background: rgba(255, 255, 255, 0.09); }
+.cut-cs-item:visited { color: inherit; }
+.cut-cs-top { display: flex; align-items: baseline; gap: 8px; }
+.cut-cs-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cut-cs-when { flex: 0 0 auto; font-size: 10.5px; opacity: 0.42; }
+/* Two lines of context is enough to recognise the chat; more and the list stops
+   being scannable. */
+.cut-cs-snip {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.4;
+  opacity: 0.62;
+}
+.cut-cs-mark {
+  background: rgba(217, 119, 87, 0.26);
+  color: inherit;
+  border-radius: 3px;
+  padding: 0 1px;
+}
+.cut-cs-pop.cut-cs-dark .cut-cs-mark { background: rgba(217, 119, 87, 0.38); }
+
+.cut-cs-note { padding: 16px 8px; text-align: center; opacity: 0.75; }
+.cut-cs-note-sub { margin-top: 4px; font-size: 11px; font-weight: 500; opacity: 0.7; }
+
+.cut-cs-foot {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 6px;
+  padding: 7px 4px 2px;
+  border-top: 1px solid rgba(28, 25, 23, 0.09);
+}
+.cut-cs-pop.cut-cs-dark .cut-cs-foot { border-top-color: rgba(255, 255, 255, 0.1); }
+.cut-cs-deep {
+  appearance: none;
+  border: 1px solid rgba(217, 119, 87, 0.45);
+  border-radius: 7px;
+  padding: 4px 9px;
+  background: rgba(217, 119, 87, 0.1);
+  color: inherit;
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+  transition: background 0.12s ease, opacity 0.12s ease;
+}
+.cut-cs-deep:hover:not(:disabled) { background: rgba(217, 119, 87, 0.2); }
+.cut-cs-deep:disabled { opacity: 0.4; cursor: default; }
+.cut-cs-deep:focus-visible { outline: 2px solid #d97757; outline-offset: 2px; }
+/* A scan in flight is the one moment this button is a status readout, so it
+   stops looking like a call to action and starts looking like a progress chip. */
+.cut-cs-deep-busy {
+  border-color: rgba(28, 25, 23, 0.2);
+  background: rgba(28, 25, 23, 0.06);
+  font-variant-numeric: tabular-nums;
+}
+.cut-cs-pop.cut-cs-dark .cut-cs-deep-busy {
+  border-color: rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.07);
+}
+.cut-cs-hint { flex: 0 0 auto; font-size: 10.5px; opacity: 0.38; white-space: nowrap; }
+
+.cut-cs-brand {
+  flex: 0 0 auto;
+  margin-top: 4px;
+  padding: 5px 4px 1px;
+  font-size: 10.5px;
+  font-weight: 500;
+  line-height: 1.4;
+  opacity: 0.5;
+}
+.cut-cs-brand-link {
+  appearance: none;
+  border: 0;
+  padding: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.cut-cs-brand:hover { opacity: 0.8; }
+.cut-cs-brand-link:hover { color: #d97757; }
+.cut-cs-brand-link:focus-visible { outline: 2px solid #d97757; outline-offset: 2px; border-radius: 3px; }
+
+/* No breakpoint for a collapsed sidebar on purpose: a viewport media query says
+   nothing about the sidebar's width, and the rail can't be reached with a
+   container query because the sidebar isn't ours to declare as a container.
+   The real guard is in JS — a collapsed rail doesn't render the "Chats and
+   tasks" heading at all, so findChatsHeading() finds nothing and we mount
+   nothing. */

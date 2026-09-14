@@ -54,9 +54,27 @@ The menu's last line names the extension and links straight to the toggle, since
 
 The list comes from `GET /api/organizations/{id}/projects` in the service worker — the org id lives in the HttpOnly `lastActiveOrg` cookie, which a content script can't read — cached for a minute and dropped on any account or org switch. The button is anchored to `[data-surface-segment]`, a data attribute the app owns, rather than to generated class names. Turn it off under **Chat box** on the settings page.
 
+## Chat history search (v1.3.4)
+
+A search box sits in Claude's sidebar directly above the **Chats and tasks** heading, and searches at two levels because they cost wildly different amounts.
+
+**Titles are free.** The account's whole conversation list is fetched once from `GET /api/organizations/{id}/chat_conversations` in the service worker (paginated, cached for 45 seconds), and filtered locally on every keystroke. Ranking is three-tier — a title that *starts* with the term beats one that merely contains it, which beats a hit in the auto-summary — with most-recent first inside each tier. Matches are highlighted in the results.
+
+**Message text is one request per chat**, so it never runs on its own. Pressing **Search message text** reads the 150 most recent chats newest-first, in batches of 8 with a concurrency of 3, streaming matches in with snippets as they're found; the button turns into its own progress counter with a Stop. Scanned text is cached in the worker, so changing the query and scanning again refetches nothing. A background job silently firing hundreds of requests at claude.ai on someone's account is not something to do behind their back.
+
+The box leads with the meter's own gauge mark, then a hairline, then the magnifier — the logo keeps its colour while the magnifier stays a muted utility glyph, so the pair reads as "brand, then function" rather than as two competing icons. Attribution that only appeared once the panel was open wouldn't be worth much, so the mark, a hover tooltip naming the extension, and the panel's footer line all carry it. A click anywhere in the box lands in the field. The mark is not SVG in the markup: the artwork lives in `icons/usage-meter-logo.svg` and is loaded as an `<img>` whose src comes from `runtime.getURL()`. A `background-image` from `overlay.css` was tried first and does not render on claude.ai — content-script CSS is injected as a page author stylesheet, so its resource loads answer to the **page's** CSP, which does not list `chrome-extension:`. A web-accessible resource fetched as an `<img>` is exempt. Empty `alt` plus `aria-hidden` keeps it decoration beside the field's own label, and a failed load removes the mark and its divider rather than leaving a broken-image glyph in Claude's sidebar.
+
+The **usage strip is the one surface that can't use the file.** Its needle is a live DOM node that the `cut-needle-sweep` keyframes rotate on every fresh reading, and CSS cannot reach inside an `<img>` or a background image — so the strip inlines the same artwork via `meterLogoSvg()`, where the needle stays addressable as `.cut-needle`. That leaves one copy of the path data tracking the `.svg` by hand, which `test_assets.js` guards: it compares every drawn node in the file against the inline copy and fails naming the node that drifted.
+
+Arrow keys move, Enter opens, Escape closes, Cmd/Ctrl-click opens in a new tab, and an empty box lists the chats last opened from it (recorded locally in `chrome.storage.local`). The panel's last line names the extension and links to the toggle, for the same reason the Projects menu does — a search box inside Claude's own sidebar would otherwise look like Anthropic's.
+
+Anchoring matches the heading by its **visible text**, not by class names, which are generated and change between deploys; the most specific label is tried first so a nav link reading "Chats" can't steal the anchor from "Chats and tasks". Being the heading's previous sibling is not the same as being *above* it — if the label shares a flex row with a chevron, a sibling lands beside it and squeezes the text — so the code climbs to the nearest parent that genuinely stacks its children (block, column flex, or a single-track grid), climbing past row-flex and `display:contents` wrappers. If no heading is found — collapsed rail, logged out, a redesign — nothing mounts, rather than guessing at a container and landing in the middle of the chat list. The results panel is portaled to `<body>` because the sidebar scrolls and clips its own subtree. Both conversation caches are dropped on any account or org switch. Turn it off under **Sidebar** on the settings page.
+
 ## Sidebar promo slot (v1.3.2)
 
 Claude's sidebar gets **at most one** row from this extension, ever. The desktop-app row holds the slot first; once it's dismissed, a **More tools by SelectorsHub** row takes its place; once that's dismissed too, the sidebar is left alone permanently. Both dismissals are stored in `chrome.storage.local` and sync across open tabs via `storage.onChanged`.
+
+As of v1.3.4 the **first** row rotates too. It used to say one thing forever ("Desktop version available"), which left the Firefox build with nowhere to be announced — and a second row for it would have broken the one-row rule that keeps this from reading as adware. So the row keeps its identity and rotates its second line through Claude Usage Meter news: *Now available for Firefox* (linking to the product page) and *Desktop version available* (linking to the latest release). Firefox leads, because the news anchor key is new and so every existing install starts that rotation at index 0 on update.
 
 The tools row keeps a fixed identity — same position, same title, same icon — and rotates only its second line through a small set of broad-appeal tools, one every three days. Rotating the whole button would make it behave like an ad carousel; naming a specific tool converts far better than a generic "All tools" link. The index is derived from a stored anchor timestamp rather than a stored index, so every open tab computes the same tool with no coordination and no write per rotation, and the row is re-pointed in place rather than rebuilt so it never flashes on a MutationObserver pass.
 
@@ -95,13 +113,13 @@ claude-usage-meter/
 
 ## Caveats
 
-- `/usage` and the SSE `message_limit` shape are undocumented and can change.
+- `/usage`, `chat_conversations`, and the SSE `message_limit` shape are undocumented and can change. If the conversation endpoints move, title search goes quiet and the message scan finds nothing.
 - `chrome.alarms` minimum period is 1 minute.
 - Tracks claude.ai web usage, not API key usage.
 
 ## Permissions
 
 - `storage`, `alarms`, `notifications`, `tabs` — local state, polling, alerts, broadcasting to claude.ai tabs.
-- `host_permissions: claude.ai` — to call the usage endpoint and inject the strip.
+- `host_permissions: claude.ai` — to call the usage and conversation endpoints and inject the strip, sidebar row, and search box.
 
 Nothing leaves your browser.

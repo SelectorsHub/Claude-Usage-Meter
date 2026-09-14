@@ -117,7 +117,12 @@ const DEFAULT_SETTINGS = {
   // it costs one button and replaces a two-level menu walk — but it writes into
   // Claude's own UI rather than our strip, so it gets an explicit off switch on
   // the options page for anyone who wants the composer left alone.
-  projectsButton: true
+  projectsButton: true,
+  // v1.3.4: the chat-history search box in claude.ai's sidebar. On by default —
+  // it replaces a scroll-and-squint hunt through Recents — but like the
+  // Projects button it writes into Claude's own UI, so it gets an explicit off
+  // switch on all three of our settings surfaces.
+  chatSearch: true
 };
 
 // Merge helper for stripFields: a partial or legacy-missing object must still
@@ -1486,6 +1491,10 @@ if (chrome.cookies && chrome.cookies.onChanged) {
     if (cookie.name !== "lastActiveOrg" && cookie.name !== "sessionKey") return;
     // v1.3.1: the projects list is org-scoped, so it must not survive a switch.
     clearProjectsCache();
+    // v1.3.4: so is the chat list, and the scanned message text even more so —
+    // searching one account and getting another account's chats back would be
+    // a genuine privacy failure, not just a stale cache.
+    clearConvosCache();
     if (cookieSwitchTimer) clearTimeout(cookieSwitchTimer);
     cookieSwitchTimer = setTimeout(() => {
       cookieSwitchTimer = null;
@@ -1658,6 +1667,347 @@ async function loadProjects(force) {
   };
 }
 
+// ---------- chat history search (v1.3.4) ----------
+//
+// Two levels, because they cost wildly different amounts:
+//
+//   1. TITLES. One paginated walk of
+//      GET /api/organizations/{id}/chat_conversations, cached, filtered in the
+//      content script as the user types. Every keystroke is free once the list
+//      is in hand, which is what makes the box feel instant.
+//   2. MESSAGE TEXT. One request PER conversation, so it is never automatic and
+//      never implicit — the user asks for it, the content script feeds uuids in
+//      small batches so it can show progress and stop, and we cap what we'll
+//      scan. A background job that silently fires hundreds of requests at
+//      claude.ai on someone's account is not something to do behind their back.
+//
+// Both live here rather than in the content script for the same reason projects
+// do: the org id comes from the HttpOnly `lastActiveOrg` cookie, and the
+// org-widening fallback is already written and tested on this side.
+
+const CONVOS_TTL_MS = 45 * 1000;
+const CONVOS_PAGE = 100;            // asked for per request
+const CONVOS_MAX = 3000;            // ceiling on what we'll hold in memory
+const CONVOS_MAX_PAGES = 40;
+
+// Scanned message text, keyed by conversation. Lives only as long as the
+// service worker: re-running a deep search with a different word right after
+// the first one is the common case, and re-downloading every chat for it would
+// be absurd. Trimmed and capped so a few hundred long chats can't balloon the
+// worker's memory.
+const BODY_TTL_MS = 15 * 60 * 1000;
+const BODY_CACHE_MAX = 220;
+const BODY_TEXT_CAP = 40000;        // chars kept per conversation
+const SCAN_CONCURRENCY = 3;         // parallel conversation fetches
+
+let convosCache = null;             // { orgId, list, at }
+const bodyCache = new Map();        // uuid -> { text, at }
+
+function clearConvosCache() {
+  convosCache = null;
+  bodyCache.clear();
+}
+
+// Accepts the bare array the endpoint returns today plus the usual envelope
+// shapes, so a future wrapper doesn't blank the box. Anything else is null =
+// "not a conversation list", which lets the caller try another org rather than
+// cache junk (same contract as normalizeProjects).
+function normalizeConversations(data) {
+  const raw = Array.isArray(data)
+    ? data
+    : (data && typeof data === "object"
+        ? (Array.isArray(data.data) ? data.data
+          : Array.isArray(data.conversations) ? data.conversations
+          : Array.isArray(data.chat_conversations) ? data.chat_conversations
+          : Array.isArray(data.results) ? data.results
+          : null)
+        : null);
+  if (!raw) return null;
+  const list = [];
+  for (const c of raw) {
+    if (!c || typeof c !== "object") continue;
+    const uuid = c.uuid || c.id;
+    if (!uuid) continue;
+    // A chat deleted through the API still comes back as a stub with no name;
+    // offering it as a search result gives the user a dead link.
+    if (c.deleted_at) continue;
+    const name = String(c.name || "").trim();
+    const summary = String(c.summary || "").trim();
+    const updatedAt = Date.parse(c.updated_at || c.created_at || "") || 0;
+    const project =
+      (c.project && (c.project.uuid || c.project.name)) ||
+      c.project_uuid ||
+      null;
+    list.push({
+      uuid: String(uuid),
+      name: name || "Untitled chat",
+      summary,
+      updatedAt,
+      starred: !!(c.is_starred || c.starred_at),
+      project: project ? String(project) : null
+    });
+  }
+  list.sort((a, b) => b.updatedAt - a.updatedAt);
+  return list;
+}
+
+function fetchConvosPage(orgId, offset, limit) {
+  const url =
+    `https://claude.ai/api/organizations/${orgId}/chat_conversations` +
+    `?limit=${limit}&offset=${offset}`;
+  return fetch(url, {
+    credentials: "include",
+    headers: { accept: "application/json", "X-Organization-UUID": orgId }
+  });
+}
+
+// Walk pages until the endpoint stops giving us anything new. Deliberately
+// tolerant of an endpoint that ignores limit/offset and returns everything in
+// one go: the second page is then a duplicate of the first, contributes zero
+// new uuids, and the loop ends. Without that check this would page forever.
+async function collectConversations(orgId, firstList) {
+  const seen = new Set();
+  const all = [];
+  const absorb = (list) => {
+    let added = 0;
+    for (const c of list) {
+      if (seen.has(c.uuid)) continue;
+      seen.add(c.uuid);
+      all.push(c);
+      added++;
+    }
+    return added;
+  };
+
+  absorb(firstList);
+  let short = firstList.length < CONVOS_PAGE;
+
+  for (let page = 1; !short && page < CONVOS_MAX_PAGES && all.length < CONVOS_MAX; page++) {
+    let resp;
+    try {
+      resp = await fetchConvosPage(orgId, page * CONVOS_PAGE, CONVOS_PAGE);
+    } catch (_) {
+      break;
+    }
+    if (!resp.ok) break;
+    let data = null;
+    try { data = await resp.json(); } catch (_) { break; }
+    const list = normalizeConversations(data);
+    if (!list || list.length === 0) break;
+    const added = absorb(list);
+    if (added === 0) break;          // endpoint ignored offset — we're done
+    if (list.length < CONVOS_PAGE) short = true;
+  }
+
+  all.sort((a, b) => b.updatedAt - a.updatedAt);
+  return all.slice(0, CONVOS_MAX);
+}
+
+async function loadConversations(force) {
+  if (!force && convosCache && Date.now() - convosCache.at < CONVOS_TTL_MS) {
+    return { ok: true, conversations: convosCache.list, cached: true };
+  }
+
+  const tried = new Set();
+  const candidates = [];
+  const cookieOrg = await getActiveOrgFromCookie();
+  if (cookieOrg) candidates.push(cookieOrg);
+
+  let widened = false;
+  let sawAuthFailure = false;
+  let lastStatus = null;
+
+  const widen = async () => {
+    if (widened) return;
+    widened = true;
+    try {
+      for (const id of await listOrgIds()) if (!tried.has(id)) candidates.push(id);
+    } catch (err) {
+      if (err && err.message === "not_signed_in") sawAuthFailure = true;
+    }
+  };
+  if (candidates.length === 0) await widen();
+
+  for (let i = 0; i < candidates.length; i++) {
+    const orgId = candidates[i];
+    if (!orgId || tried.has(orgId)) continue;
+    tried.add(orgId);
+
+    let resp;
+    try {
+      resp = await fetchConvosPage(orgId, 0, CONVOS_PAGE);
+    } catch (_) {
+      if (i === candidates.length - 1) await widen();
+      continue;
+    }
+    lastStatus = resp.status;
+
+    if (resp.status === 401 || resp.status === 403) {
+      sawAuthFailure = true;
+    } else if (resp.ok) {
+      let data = null;
+      try { data = await resp.json(); } catch (_) {}
+      if (!data || data.type !== "error") {
+        const first = normalizeConversations(data);
+        // An empty list from the active org is a real answer ("no chats yet"),
+        // not a miss — don't widen past it and start searching another org.
+        if (first) {
+          const list = await collectConversations(orgId, first);
+          convosCache = { orgId, list, at: Date.now() };
+          return { ok: true, conversations: list, orgId };
+        }
+      }
+    }
+
+    if (i === candidates.length - 1) await widen();
+  }
+
+  return {
+    ok: false,
+    error: sawAuthFailure
+      ? "not_signed_in"
+      : (lastStatus ? `convos_http_${lastStatus}` : "no_convos_response")
+  };
+}
+
+// ---- deep scan: message text -------------------------------------------
+
+function extractConvoText(data) {
+  const msgs = Array.isArray(data && data.chat_messages)
+    ? data.chat_messages
+    : (Array.isArray(data && data.messages) ? data.messages : []);
+  const parts = [];
+  for (const m of msgs) {
+    if (!m) continue;
+    if (typeof m.text === "string" && m.text) {
+      parts.push(m.text);
+      continue;
+    }
+    if (Array.isArray(m.content)) {
+      for (const c of m.content) {
+        if (c && typeof c.text === "string" && c.text) parts.push(c.text);
+      }
+    }
+  }
+  let text = parts.join("\n");
+  if (text.length > BODY_TEXT_CAP) text = text.slice(0, BODY_TEXT_CAP);
+  return text;
+}
+
+function cacheBody(uuid, text) {
+  bodyCache.set(uuid, { text, at: Date.now() });
+  // Plain insertion-order eviction. An LRU would be marginally better and much
+  // more code for a cache that exists for one search session.
+  while (bodyCache.size > BODY_CACHE_MAX) {
+    const oldest = bodyCache.keys().next().value;
+    if (oldest === undefined) break;
+    bodyCache.delete(oldest);
+  }
+}
+
+async function conversationText(orgId, uuid) {
+  const hit = bodyCache.get(uuid);
+  if (hit && Date.now() - hit.at < BODY_TTL_MS) return hit.text;
+
+  const url =
+    `https://claude.ai/api/organizations/${orgId}/chat_conversations/${uuid}` +
+    `?tree=True&rendering_mode=messages&render_all_tools=false`;
+  let resp;
+  try {
+    resp = await fetch(url, {
+      credentials: "include",
+      headers: { accept: "application/json", "X-Organization-UUID": orgId }
+    });
+  } catch (_) {
+    return null;
+  }
+  if (resp.status === 401 || resp.status === 403) throw new Error("not_signed_in");
+  if (resp.status === 429) throw new Error("rate_limited");
+  if (!resp.ok) return null;
+
+  let data = null;
+  try { data = await resp.json(); } catch (_) { return null; }
+  const text = extractConvoText(data);
+  cacheBody(uuid, text);
+  return text;
+}
+
+// A window around the first hit, whitespace flattened. The content script
+// re-finds the term in here to highlight it, so no index needs to travel.
+function snippetFor(text, needle) {
+  const at = text.toLowerCase().indexOf(needle);
+  if (at < 0) return null;
+  const start = Math.max(0, at - 70);
+  const end = Math.min(text.length, at + needle.length + 110);
+  let s = text.slice(start, end).replace(/\s+/g, " ").trim();
+  if (start > 0) s = "\u2026" + s;
+  if (end < text.length) s = s + "\u2026";
+  return s;
+}
+
+function countOccurrences(haystack, needle) {
+  let n = 0;
+  let i = haystack.indexOf(needle);
+  while (i !== -1 && n < 999) {
+    n++;
+    i = haystack.indexOf(needle, i + needle.length);
+  }
+  return n;
+}
+
+// One batch of uuids, scanned with a small concurrency. Returns a match per
+// conversation whose text contains the query. The content script owns the loop:
+// it decides how many batches to run, shows progress, and can stop — which it
+// can only do if each call is short-lived, hence batches rather than one big
+// streaming job.
+async function scanConversations(query, uuids) {
+  const needle = String(query || "").trim().toLowerCase();
+  if (needle.length < 2) return { ok: false, error: "query_too_short" };
+  const ids = Array.isArray(uuids) ? uuids.filter(Boolean).slice(0, 40) : [];
+  if (!ids.length) return { ok: true, matches: [], scanned: 0 };
+
+  let orgId = (convosCache && convosCache.orgId) || (await getActiveOrgFromCookie());
+  if (!orgId) {
+    try { orgId = await getOrgId(); } catch (_) {}
+  }
+  if (!orgId) return { ok: false, error: "no_org" };
+
+  const matches = [];
+  let scanned = 0;
+  let fatal = null;
+  let cursor = 0;
+
+  const worker = async () => {
+    for (;;) {
+      if (fatal) return;
+      const i = cursor++;
+      if (i >= ids.length) return;
+      const uuid = ids[i];
+      let text;
+      try {
+        text = await conversationText(orgId, uuid);
+      } catch (err) {
+        fatal = (err && err.message) || "scan_failed";
+        return;
+      }
+      scanned++;
+      if (!text) continue;
+      const lower = text.toLowerCase();
+      const snippet = snippetFor(text, needle);
+      if (snippet) {
+        matches.push({ uuid, snippet, hits: countOccurrences(lower, needle) });
+      }
+    }
+  };
+
+  await Promise.all(
+    Array.from({ length: Math.min(SCAN_CONCURRENCY, ids.length) }, worker)
+  );
+
+  if (fatal) return { ok: false, error: fatal, matches, scanned };
+  return { ok: true, matches, scanned };
+}
+
 // ---------- message router ----------
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
@@ -1719,6 +2069,28 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         sendResponse(await loadProjects(!!msg.force));
       } catch (err) {
         sendResponse({ ok: false, error: (err && err.message) || "projects_failed" });
+      }
+    })();
+    return true;
+  }
+
+  if (msg.type === "get-conversations") {
+    (async () => {
+      try {
+        sendResponse(await loadConversations(!!msg.force));
+      } catch (err) {
+        sendResponse({ ok: false, error: (err && err.message) || "convos_failed" });
+      }
+    })();
+    return true;
+  }
+
+  if (msg.type === "scan-conversations") {
+    (async () => {
+      try {
+        sendResponse(await scanConversations(msg.query, msg.uuids));
+      } catch (err) {
+        sendResponse({ ok: false, error: (err && err.message) || "scan_failed" });
       }
     })();
     return true;
@@ -1806,6 +2178,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         overlay_dismissed_until: 0
       });
       clearProjectsCache();
+      clearConvosCache();
       try { await chrome.action.setBadgeText({ text: "" }); } catch (_) {}
       pollUsage();
       sendResponse({ ok: true });

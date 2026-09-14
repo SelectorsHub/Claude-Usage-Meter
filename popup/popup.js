@@ -258,7 +258,9 @@ const ALL_FIELDS = [...METER_FIELDS, "resetTimeSession", "resetTimeWeekly", "for
 // is injected into Claude's composer, not our strip, so it saves as a top-level
 // setting — but it belongs in this list, because "settings" to a user means
 // whichever of our three surfaces they happened to open.
-const TOP_FIELDS = ["projectsButton"];
+// v1.3.4: `chatSearch` joins it — same story, in the sidebar instead of the
+// composer.
+const TOP_FIELDS = ["projectsButton", "chatSearch"];
 
 // Whether the usage API is actually reporting a Fable bucket for this account.
 // A checked-but-unreported Fable can't satisfy the "keep one meter on" rule —

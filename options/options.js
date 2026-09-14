@@ -18,6 +18,7 @@ let state = {
   // projection (or the other way round).
   forecastAlerts: true,
   projectsButton: true,
+  chatSearch: true,
   pollMinutes: 1
 };
 
@@ -28,10 +29,12 @@ async function load() {
   state.notificationsEnabled = settings.notificationsEnabled !== false;
   state.forecastAlerts = settings.forecastAlerts !== false;
   state.projectsButton = settings.projectsButton !== false;
+  state.chatSearch = settings.chatSearch !== false;
   state.pollMinutes = settings.pollMinutes || 1;
   document.getElementById("notifications-enabled").checked = state.notificationsEnabled;
   document.getElementById("forecast-alerts").checked = state.forecastAlerts;
   document.getElementById("projects-button").checked = state.projectsButton;
+  document.getElementById("chat-search").checked = state.chatSearch;
   document.getElementById("poll-minutes").value = state.pollMinutes;
   renderAll();
 }
@@ -76,6 +79,7 @@ async function save() {
   state.notificationsEnabled = document.getElementById("notifications-enabled").checked;
   state.forecastAlerts = document.getElementById("forecast-alerts").checked;
   state.projectsButton = document.getElementById("projects-button").checked;
+  state.chatSearch = document.getElementById("chat-search").checked;
   const pm = parseInt(document.getElementById("poll-minutes").value, 10);
   state.pollMinutes = isNaN(pm) ? 1 : Math.max(1, Math.min(60, pm));
   document.getElementById("poll-minutes").value = state.pollMinutes;
@@ -87,6 +91,7 @@ async function save() {
       notificationsEnabled: state.notificationsEnabled,
       forecastAlerts: state.forecastAlerts,
       projectsButton: state.projectsButton,
+      chatSearch: state.chatSearch,
       pollMinutes: state.pollMinutes
     }
   });
