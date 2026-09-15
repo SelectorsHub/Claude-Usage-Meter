@@ -2085,6 +2085,12 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     return true;
   }
 
+  // v1.3.5: NOT currently reachable. The sidebar panel was simplified down to
+  // title search, which removed the button that drove this. The handler and
+  // scanConversations() are kept — they are written, tested, and the expensive
+  // part to get right — so message search can be re-wired by adding a caller.
+  // If that is not the plan, this and scanConversations() should be deleted
+  // rather than left to rot.
   if (msg.type === "scan-conversations") {
     (async () => {
       try {

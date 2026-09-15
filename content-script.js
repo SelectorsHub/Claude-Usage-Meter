@@ -3394,15 +3394,9 @@
   // someone's chat list.
   const CS_WRAP_ID = "cut-chat-search";
   const CS_POP_ID = "cut-chat-search-pop";
-  const CS_RECENT_KEY = "chat_search_recent";   // { uuid: lastOpenedMs }
-  const CS_RECENT_MAX = 15;
   const CS_LIST_CAP = 60;            // title rows rendered
-  const CS_DEEP_CAP = 40;            // message-match rows rendered
-  const CS_SCAN_CAP = 150;           // chats a deep scan will read, newest first
-  const CS_SCAN_BATCH = 8;           // uuids per background call
   const CS_FRESH_MS = 45 * 1000;     // in-page reuse window for the list
   const CS_DEBOUNCE_MS = 130;
-  const CS_MIN_DEEP = 2;             // shortest query worth a deep scan
   const chatHref = (uuid) => "https://claude.ai/chat/" + uuid;
 
   // Most specific first: "chats" on its own must not win while "chats and
@@ -3426,39 +3420,10 @@
   let csQuery = "";
   let csActive = -1;
   let csPopOpen = false;
-  let csRecent = {};
   let csDebounce = null;
   let csOutsideHandler = null;
   let csFollowHandler = null;
   let csKeyHandler = null;
-
-  // Deep-scan state. `csScanToken` is the guard: every scan carries the token it
-  // started with, and any query change or Stop bumps it, so results from an
-  // abandoned scan are dropped instead of landing under a different query.
-  let csScanToken = 0;
-  let csScanning = false;
-  let csScanQuery = "";
-  let csScanned = 0;
-  let csScanTotal = 0;
-  let csDeep = [];
-  let csScanError = null;
-  let csScanDone = false;
-
-  try {
-    chrome.storage.local.get(CS_RECENT_KEY, (res) => {
-      const v = res && res[CS_RECENT_KEY];
-      if (v && typeof v === "object") csRecent = v;
-    });
-  } catch (_) {}
-
-  function rememberChat(uuid) {
-    csRecent[uuid] = Date.now();
-    const entries = Object.entries(csRecent).sort((a, b) => b[1] - a[1]);
-    if (entries.length > CS_RECENT_MAX) {
-      csRecent = Object.fromEntries(entries.slice(0, CS_RECENT_MAX));
-    }
-    try { chrome.storage.local.set({ [CS_RECENT_KEY]: csRecent }); } catch (_) {}
-  }
 
   function csWhen(ts) {
     if (!ts) return "";
@@ -3490,6 +3455,7 @@
         } else {
           csError = (resp && resp.error) || "unavailable";
         }
+        refreshChatPlaceholder();
         renderChatSearchPop();
       });
     } catch (_) {
@@ -3638,7 +3604,7 @@
     const input = document.createElement("input");
     input.type = "text";
     input.className = "cut-cs-input";
-    input.placeholder = "Search chat history";
+    input.placeholder = chatPlaceholder();
     input.setAttribute("aria-label", "Search your Claude chat history");
     input.setAttribute("autocomplete", "off");
     input.setAttribute("spellcheck", "false");
@@ -3658,11 +3624,12 @@
     });
 
     input.addEventListener("focus", () => {
+      // Fetch on focus so the list is ready by the first keystroke, but do NOT
+      // open the panel. With nothing typed there is nothing worth showing, and
+      // a dropdown that appears on click just to say it is loading makes the
+      // box feel slower than it is.
       requestConversations(false);
-      // Open on focus even with nothing typed: an empty box still has something
-      // to say (the chats you last opened from here), and a panel that only
-      // appears after a keystroke makes the box feel inert on click.
-      openChatSearchPop();
+      if (input.value.trim()) openChatSearchPop();
     });
     input.addEventListener("input", () => {
       wrap.classList.toggle("cut-cs-has-text", !!input.value);
@@ -3747,6 +3714,21 @@
     paintChatSearchMark();
   }
 
+  // The chat count lives here rather than in the panel: it is a standing fact
+  // about the box, not a result, and the placeholder is already showing while
+  // the field is empty — the exact moment the count is worth knowing. It also
+  // means the number never appears as something that had to load.
+  function chatPlaceholder() {
+    return csList && csList.length
+      ? "Search " + csList.length + " chats"
+      : "Search chat history";
+  }
+
+  function refreshChatPlaceholder() {
+    const input = csInput();
+    if (input) input.placeholder = chatPlaceholder();
+  }
+
   function csInput() {
     const wrap = document.getElementById(CS_WRAP_ID);
     return wrap ? wrap.querySelector(".cut-cs-input") : null;
@@ -3757,16 +3739,14 @@
     if (next === csQuery) return;
     csQuery = next;
     csActive = -1;
-    // Any change of query invalidates a scan in flight — its results answer a
-    // question nobody is asking any more.
-    stopChatScan();
-    csDeep = [];
-    csScanDone = false;
-    csScanError = null;
     const wrap = document.getElementById(CS_WRAP_ID);
     if (wrap) wrap.classList.toggle("cut-cs-has-text", !!next);
+    if (!next) {
+      closeChatSearchPop();
+      return;
+    }
     requestConversations(false);
-    if (document.activeElement === csInput() || next) openChatSearchPop();
+    openChatSearchPop();
     renderChatSearchPop();
   }
 
@@ -3783,39 +3763,20 @@
     list.className = "cut-cs-list";
     list.setAttribute("role", "listbox");
 
-    const foot = document.createElement("div");
-    foot.className = "cut-cs-foot";
-
-    const deep = document.createElement("button");
-    deep.type = "button";
-    deep.className = "cut-cs-deep";
-    deep.addEventListener("mousedown", (e) => e.preventDefault());
-    deep.addEventListener("click", (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      if (csScanning) stopChatScan(true);
-      else startChatScan();
-      renderChatSearchPop();
-    });
-
-    const hint = document.createElement("span");
-    hint.className = "cut-cs-hint";
-    hint.textContent = "\u2191\u2193 Enter";
-
-    foot.appendChild(deep);
-    foot.appendChild(hint);
-
     // Say plainly whose box this is. It sits inside Claude's own sidebar, so
     // without this line a user reasonably assumes Anthropic shipped it — and
     // then has nowhere to go when they want it gone.
     const brand = document.createElement("div");
     brand.className = "cut-cs-brand";
     const brandText = document.createElement("span");
-    brandText.textContent = "Added by Claude Usage Meter. Hide it from ";
+    // Short enough to hold one line at the width of the sidebar, and marked
+    // with an asterisk so it reads as a footnote about the box above rather
+    // than as another row in the results.
+    brandText.textContent = "* Added by Claude Usage Meter \u00b7 ";
     const brandBtn = document.createElement("button");
     brandBtn.type = "button";
     brandBtn.className = "cut-cs-brand-link";
-    brandBtn.textContent = "its settings";
+    brandBtn.textContent = "settings";
     brandBtn.addEventListener("mousedown", (e) => e.preventDefault());
     brandBtn.addEventListener("click", (e) => {
       e.preventDefault();
@@ -3826,8 +3787,37 @@
     brand.appendChild(brandText);
     brand.appendChild(brandBtn);
 
+    // Escape closes the panel, but a keyboard shortcut nobody can see is not a
+    // way out. This is the visible one.
+    //
+    // It rides on the footnote row rather than getting a header of its own: the
+    // panel was just cut back to results plus one line, and a whole strip added
+    // for a single glyph would undo that. Attribution, settings and close are
+    // all panel-level controls, so one row holds them all — and at the bottom
+    // of a dropdown that hangs directly below the input, it sits closer to the
+    // pointer than a top-right corner would.
+    //
+    // Distinct from the × in the search box, which clears the text: clearing
+    // the field and dismissing the panel are different intents, and one button
+    // doing both by guessing at state is how you get a control that surprises
+    // people.
+    const close = document.createElement("button");
+    close.type = "button";
+    close.className = "cut-cs-close";
+    close.textContent = "\u00d7";
+    close.setAttribute("aria-label", "Close the search results");
+    close.title = "Close (Esc)";
+    // Without this the input blurs on press, and a blur/refocus race can leave
+    // the panel reopening the instant it closes.
+    close.addEventListener("mousedown", (e) => e.preventDefault());
+    close.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      closeChatSearchPop();
+    });
+    brand.appendChild(close);
+
     pop.appendChild(list);
-    pop.appendChild(foot);
     pop.appendChild(brand);
     return pop;
   }
@@ -3853,7 +3843,7 @@
     if (from < text.length) target.appendChild(document.createTextNode(text.slice(from)));
   }
 
-  function csRow(c, snippet) {
+  function csRow(c) {
     const a = document.createElement("a");
     a.className = "cut-cs-item";
     a.href = chatHref(c.uuid);
@@ -3875,13 +3865,6 @@
     top.appendChild(when);
     a.appendChild(top);
 
-    if (snippet) {
-      const snip = document.createElement("span");
-      snip.className = "cut-cs-snip";
-      csHighlight(snip, snippet, csQuery.toLowerCase());
-      a.appendChild(snip);
-    }
-
     a.addEventListener("click", (e) => openChat(c.uuid, e));
     a.addEventListener("mousemove", () => {
       const rows = currentChatRows();
@@ -3889,13 +3872,6 @@
       if (i > -1 && i !== csActive) setChatActive(i, false);
     });
     return a;
-  }
-
-  function csHeader(text) {
-    const h = document.createElement("div");
-    h.className = "cut-cs-group";
-    h.textContent = text;
-    return h;
   }
 
   function csNote(text, sub) {
@@ -3933,93 +3909,25 @@
 
     const q = csQuery.toLowerCase();
 
+    // Matching chats, or one short line when there are none. Nothing else: the
+    // panel only ever opens with a query in the box, so there is no empty state
+    // to fill and no status to report on arrival.
     if (csError && !csList) {
       list.appendChild(
-        csError === "not_signed_in"
-          ? csNote("Not signed in to claude.ai", "Sign in and try again.")
-          : csNote("Couldn\u2019t load your chats", "Claude may have changed the API \u2014 try again shortly.")
+        csNote(csError === "not_signed_in"
+          ? "Not signed in to claude.ai"
+          : "Couldn\u2019t load your chats")
       );
     } else if (!csList) {
-      list.appendChild(csNote("Loading your chats\u2026"));
-    } else if (!csQuery) {
-      const recent = Object.entries(csRecent)
-        .sort((a, b) => b[1] - a[1])
-        .map(([uuid]) => csList.find((c) => c.uuid === uuid))
-        .filter(Boolean)
-        .slice(0, 6);
-      if (recent.length) {
-        list.appendChild(csHeader("Recently opened from here"));
-        for (const c of recent) list.appendChild(csRow(c, null));
-      } else {
-        list.appendChild(
-          csNote(
-            "Search " + csList.length + " chat" + (csList.length === 1 ? "" : "s"),
-            "Type to match titles, then search inside the messages."
-          )
-        );
-      }
+      // Only reachable if someone types faster than the list arrives — a real
+      // wait, not a greeting, so it is worth saying.
+      list.appendChild(csNote("Searching\u2026"));
     } else {
       const titles = csTitleMatches(q);
-      const deepRows = csDeep.filter((m) => !titles.some((t) => t.uuid === m.uuid));
-
       if (titles.length) {
-        list.appendChild(csHeader("Titles \u00b7 " + titles.length));
-        for (const c of titles.slice(0, CS_LIST_CAP)) list.appendChild(csRow(c, null));
-      } else if (!csScanning && !csDeep.length) {
-        list.appendChild(
-          csNote(
-            "No title matches \u201c" + csQuery + "\u201d",
-            csScanDone
-              ? "Nothing in the messages either."
-              : "Search message text below to look inside the chats."
-          )
-        );
-      }
-
-      if (deepRows.length) {
-        list.appendChild(csHeader("In messages \u00b7 " + deepRows.length));
-        for (const m of deepRows.slice(0, CS_DEEP_CAP)) {
-          const c = csList.find((x) => x.uuid === m.uuid);
-          if (c) list.appendChild(csRow(c, m.snippet));
-        }
-      }
-
-      if (csScanError) {
-        list.appendChild(
-          csScanError === "rate_limited"
-            ? csNote("Claude rate-limited the scan", "Wait a moment and run it again.")
-            : csScanError === "not_signed_in"
-              ? csNote("Not signed in to claude.ai")
-              : csNote("The message scan stopped early")
-        );
-      } else if (csScanDone && !deepRows.length && csScanQuery === csQuery) {
-        list.appendChild(
-          csNote(
-            "Nothing in the messages either",
-            "Scanned the " + csScanned + " most recent chats."
-          )
-        );
-      }
-    }
-
-    // Footer: the scan control doubles as its own progress readout, so there's
-    // one thing to look at rather than a button plus a status line.
-    const deepBtn = pop.querySelector(".cut-cs-deep");
-    if (deepBtn) {
-      if (csScanning) {
-        deepBtn.textContent =
-          "Stop \u00b7 " + csScanned + "/" + csScanTotal +
-          (csDeep.length ? " \u00b7 " + csDeep.length + " found" : "");
-        deepBtn.classList.add("cut-cs-deep-busy");
-        deepBtn.disabled = false;
-      } else if (csScanDone && csScanQuery === csQuery) {
-        deepBtn.textContent = "Scan again \u00b7 read " + csScanned + " chats";
-        deepBtn.classList.remove("cut-cs-deep-busy");
-        deepBtn.disabled = false;
+        for (const c of titles.slice(0, CS_LIST_CAP)) list.appendChild(csRow(c));
       } else {
-        deepBtn.textContent = "Search message text";
-        deepBtn.classList.remove("cut-cs-deep-busy");
-        deepBtn.disabled = csQuery.length < CS_MIN_DEEP || !csList;
+        list.appendChild(csNote("No matches"));
       }
     }
 
@@ -4040,9 +3948,10 @@
     const vw = window.innerWidth;
     const vh = window.innerHeight;
 
-    // The sidebar is narrow; snippets need more room than that. Widen past the
-    // box, but never past the window.
-    const width = Math.min(Math.max(br.width, 340), vw - margin * 2);
+    // Exactly the width of the box it drops from. It used to widen to a 340px
+    // minimum so message snippets had room to breathe; with snippets gone in
+    // v1.3.5 all that bought was a panel hanging off the side of its own input.
+    const width = Math.min(br.width, vw - margin * 2);
     pop.style.width = width + "px";
 
     const below = vh - br.bottom - margin - 8;
@@ -4120,7 +4029,6 @@
   function closeChatSearchPop() {
     csPopOpen = false;
     csActive = -1;
-    stopChatScan();
     if (csOutsideHandler) {
       document.removeEventListener("click", csOutsideHandler, true);
       csOutsideHandler = null;
@@ -4140,7 +4048,6 @@
 
   function openChat(uuid, ev) {
     if (!uuid) return;
-    rememberChat(uuid);
     if (ev && (ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.button === 1)) {
       // Modified clicks are the browser's business — let it open the tab, and
       // leave the panel up so they can open several in a row.
@@ -4155,76 +4062,6 @@
     // popstate works right up until Claude's router changes, and a half-
     // navigated app is a far worse failure than a one-second reload.
     window.location.assign(chatHref(uuid));
-  }
-
-  // ---- the deep scan -----------------------------------------------------
-
-  function stopChatScan(userAsked) {
-    if (!csScanning) return;
-    csScanToken++;
-    csScanning = false;
-    // Stopping on purpose still counts as an answer for what was read so far;
-    // stopping because the query changed does not.
-    if (userAsked) csScanDone = true;
-  }
-
-  async function startChatScan() {
-    if (csScanning || !csList || csQuery.length < CS_MIN_DEEP) return;
-
-    const token = ++csScanToken;
-    csScanning = true;
-    csScanQuery = csQuery;
-    csScanned = 0;
-    csDeep = [];
-    csScanError = null;
-    csScanDone = false;
-
-    // Newest first, capped. Reading every chat on a long-lived account would be
-    // thousands of requests; the chat someone is hunting for is nearly always
-    // recent, and the cap is stated on the button once the scan finishes.
-    const queue = csList.slice(0, CS_SCAN_CAP).map((c) => c.uuid);
-    csScanTotal = queue.length;
-    renderChatSearchPop();
-
-    for (let i = 0; i < queue.length; i += CS_SCAN_BATCH) {
-      if (token !== csScanToken) return;
-      const batch = queue.slice(i, i + CS_SCAN_BATCH);
-      let resp;
-      try {
-        resp = await chrome.runtime.sendMessage({
-          type: "scan-conversations",
-          query: csScanQuery,
-          uuids: batch
-        });
-      } catch (_) {
-        resp = null;
-      }
-      if (token !== csScanToken) return;
-
-      if (!resp || !resp.ok) {
-        csScanned += (resp && resp.scanned) || 0;
-        if (resp && Array.isArray(resp.matches)) csDeep = csDeep.concat(resp.matches);
-        csScanError = (resp && resp.error) || "scan_failed";
-        csScanning = false;
-        csScanDone = true;
-        renderChatSearchPop();
-        return;
-      }
-
-      csScanned += resp.scanned || batch.length;
-      if (Array.isArray(resp.matches) && resp.matches.length) {
-        // Results land as they're found rather than at the end — a scan that
-        // shows nothing for twenty seconds reads as broken.
-        csDeep = csDeep.concat(resp.matches);
-        csDeep.sort((a, b) => (b.hits || 0) - (a.hits || 0));
-      }
-      renderChatSearchPop();
-    }
-
-    if (token !== csScanToken) return;
-    csScanning = false;
-    csScanDone = true;
-    renderChatSearchPop();
   }
 
   function findMountTarget() {
@@ -4522,13 +4359,6 @@
       shared = !!changes[SHARE_KEY].newValue;
       const root = document.getElementById(OVERLAY_ID);
       if (root && !sharePopOpen) applyShareVisibility(root);
-    }
-    if (changes[CS_RECENT_KEY]) {
-      const v = changes[CS_RECENT_KEY].newValue;
-      if (v && typeof v === "object") {
-        csRecent = v;
-        if (csPopOpen && !csQuery) renderChatSearchPop();
-      }
     }
     if (changes[PROJ_RECENT_KEY]) {
       const v = changes[PROJ_RECENT_KEY].newValue;
