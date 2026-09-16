@@ -108,7 +108,11 @@ const DEFAULT_SETTINGS = {
     // v1.2.17: the burn-rate projection chip ("~1h 20m left") on the Session
     // segment. On by default — it costs no width until it has something urgent
     // to say (see the atRisk gate in the forecaster below).
-    forecast: true
+    forecast: true,
+    // v1.3.6: the per-chat size readout ("Chat ~36.9K tokens"). On by default —
+    // it is the answer to the question users actually ask ("how much does this
+    // chat take?"), and it only renders on a /chat/ page once it has a number.
+    chatTokens: true
   },
   // v1.2.17: one-shot desktop heads-up when the projection says the session
   // quota runs out well before it resets. Rides on notificationsEnabled.
@@ -1495,6 +1499,8 @@ if (chrome.cookies && chrome.cookies.onChanged) {
     // searching one account and getting another account's chats back would be
     // a genuine privacy failure, not just a stale cache.
     clearConvosCache();
+    // v1.3.6: chat sizes are per-conversation, and conversations are per-org.
+    clearChatTokensCache();
     if (cookieSwitchTimer) clearTimeout(cookieSwitchTimer);
     cookieSwitchTimer = setTimeout(() => {
       cookieSwitchTimer = null;
@@ -2008,6 +2014,212 @@ async function scanConversations(query, uuids) {
   return { ok: true, matches, scanned };
 }
 
+// ---------- per-chat token estimate (v1.3.6) ----------
+//
+// Answers "how much does this chat take?". claude.ai re-sends the whole active
+// branch of a conversation with every reply, so the size of that branch is what
+// each new message costs against the limits — and the one number a user can
+// actually act on (start a new chat).
+//
+// ONE request per trigger, never a loop: the content script asks when a chat is
+// opened and once after each reply finishes. Cached per conversation so a
+// second tab or a re-render doesn't refetch.
+//
+// It is an ESTIMATE and the strip says so ("~"). Claude's tokenizer isn't
+// public, and neither is what claude.ai adds around the messages (system
+// prompt, project knowledge, tool definitions). What's counted is what the
+// conversation endpoint returns for the ACTIVE branch:
+//   * text blocks from both sides, tool_use inputs and tool_result content
+//     (web search results and artifacts live there and really do take room);
+//   * attachment text (extracted_content — pasted/uploaded text files);
+//   * images and PDFs at a flat per-image / per-page estimate.
+// Thinking blocks are skipped: prior-turn thinking is stripped from the
+// context the model sees, so counting it would inflate every long chat.
+
+const CHAT_TOKENS_TTL_MS = 20 * 1000;
+const CHAT_TOKENS_CACHE_MAX = 60;
+const IMAGE_TOKENS = 1600;     // Anthropic's ceiling for a resized image (~1.15MP / 750)
+const PDF_PAGE_TOKENS = 1500;  // text + page image, rough middle of the published range
+const ROOT_PARENT = "00000000-0000-4000-8000-000000000000";
+
+const chatTokensCache = new Map();   // uuid -> { orgId, result, at }
+
+function clearChatTokensCache() { chatTokensCache.clear(); }
+
+// Word/punctuation-piece estimator. Tracks Claude's tokenizer to within ~10-15%
+// on English prose and code, which is all a "~36.9K" readout needs; a plain
+// chars/4 badly undercounts code and non-Latin scripts.
+const WIDE_RE = /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af\uf900-\ufaff]/g;
+const PIECE_RE = /[A-Za-z\u00C0-\u024F\u0370-\u03FF\u0400-\u04FF]+|\d+|\s{2,}|[^\sA-Za-z\d]+/g;
+
+function estimateTokens(str) {
+  if (!str || typeof str !== "string") return 0;
+  let tokens = 0;
+  const wide = str.match(WIDE_RE);
+  if (wide) {
+    tokens += wide.length;             // CJK: roughly a token per character
+    str = str.replace(WIDE_RE, " ");
+  }
+  const pieces = str.match(PIECE_RE);
+  if (!pieces) return tokens;
+  for (const p of pieces) {
+    const c = p.charCodeAt(0);
+    if (c <= 32) { tokens += 1; continue; }                       // indentation run
+    if (c >= 48 && c <= 57) { tokens += Math.ceil(p.length / 3); continue; }  // digits
+    if (!/[A-Za-z\u00C0-\u024F\u0370-\u03FF\u0400-\u04FF]/.test(p[0])) {        // symbol run / other script
+      tokens += /^[\x21-\x7e]+$/.test(p) ? Math.ceil(p.length / 2) : p.length;
+      continue;
+    }
+    tokens += p.length <= 6 ? 1 : Math.ceil(p.length / 4.5);      // words
+  }
+  return tokens;
+}
+
+// Every string under a `text` key, a few levels deep — tool_result content
+// arrives as strings, arrays of {type:"text"} blocks, or search "knowledge"
+// items with title/url/text, and the shape moves around.
+function collectText(node, out, depth = 0) {
+  if (node == null || depth > 5) return;
+  if (typeof node === "string") { out.push(node); return; }
+  if (Array.isArray(node)) { for (const n of node) collectText(n, out, depth + 1); return; }
+  if (typeof node !== "object") return;
+  for (const k of ["text", "title", "content"]) {
+    if (node[k] != null) collectText(node[k], out, depth + 1);
+  }
+}
+
+function blockTokens(b) {
+  if (!b || typeof b !== "object") return 0;
+  const type = String(b.type || "");
+  if (type === "thinking" || type === "redacted_thinking") return 0;
+  if (type === "text") return estimateTokens(b.text);
+  if (type === "tool_use" || type === "server_tool_use") {
+    let n = estimateTokens(b.name || "");
+    try { n += estimateTokens(JSON.stringify(b.input || {})); } catch (_) {}
+    return n;
+  }
+  if (type.endsWith("tool_result")) {
+    const parts = [];
+    collectText(b.content, parts);
+    return parts.reduce((a, t) => a + estimateTokens(t), 0);
+  }
+  return typeof b.text === "string" ? estimateTokens(b.text) : 0;
+}
+
+function fileTokens(f) {
+  if (!f || typeof f !== "object") return 0;
+  const kind = String(f.file_kind || f.kind || f.type || "").toLowerCase();
+  if (kind.includes("image")) {
+    const a = f.preview_asset || f.thumbnail_asset || f;
+    const w = Number(a.image_width || a.width), h = Number(a.image_height || a.height);
+    if (w > 0 && h > 0) return Math.min(IMAGE_TOKENS, Math.ceil((w * h) / 750));
+    return IMAGE_TOKENS;
+  }
+  if (kind.includes("document") || kind.includes("pdf")) {
+    const d = f.document_asset || f;
+    const pages = Number(d.page_count || d.num_pages);
+    return pages > 0 ? pages * PDF_PAGE_TOKENS : 0;
+  }
+  return 0;
+}
+
+// The branch the user is actually looking at. `tree=True` returns every edit
+// and retry, so summing all messages would count abandoned branches too.
+function activeBranch(data) {
+  const msgs = Array.isArray(data && data.chat_messages) ? data.chat_messages : [];
+  if (!msgs.length) return [];
+  const byId = new Map();
+  for (const m of msgs) if (m && m.uuid) byId.set(m.uuid, m);
+  const leaf = data.current_leaf_message_uuid;
+  if (leaf && byId.has(leaf)) {
+    const chain = [];
+    const seen = new Set();
+    let cur = byId.get(leaf);
+    while (cur && !seen.has(cur.uuid)) {
+      seen.add(cur.uuid);
+      chain.push(cur);
+      const parent = cur.parent_message_uuid;
+      if (!parent || parent === ROOT_PARENT) break;
+      cur = byId.get(parent);
+    }
+    return chain.reverse();
+  }
+  // No usable leaf: keep the newest message at each index.
+  const byIndex = new Map();
+  for (const m of msgs) {
+    const i = Number(m && m.index);
+    if (!Number.isFinite(i)) continue;
+    const prev = byIndex.get(i);
+    if (!prev || String(m.created_at || "") > String(prev.created_at || "")) byIndex.set(i, m);
+  }
+  return [...byIndex.keys()].sort((a, b) => a - b).map((i) => byIndex.get(i));
+}
+
+function measureConversation(data) {
+  const branch = activeBranch(data);
+  let you = 0, claude = 0, files = 0;
+  for (const m of branch) {
+    let t = 0;
+    if (Array.isArray(m.content) && m.content.length) {
+      for (const b of m.content) t += blockTokens(b);
+    } else if (typeof m.text === "string") {
+      t += estimateTokens(m.text);
+    }
+    for (const a of (Array.isArray(m.attachments) ? m.attachments : [])) {
+      files += estimateTokens(a && a.extracted_content);
+    }
+    const fl = Array.isArray(m.files_v2) ? m.files_v2 : (Array.isArray(m.files) ? m.files : []);
+    for (const f of fl) files += fileTokens(f);
+    if (m.sender === "human") you += t; else claude += t;
+  }
+  return { tokens: you + claude + files, you, claude, files, messages: branch.length };
+}
+
+async function fetchConversationFor(orgId, uuid) {
+  return fetch(
+    `https://claude.ai/api/organizations/${orgId}/chat_conversations/${uuid}` +
+    `?tree=True&rendering_mode=messages&render_all_tools=true`,
+    { credentials: "include", headers: { accept: "application/json", "X-Organization-UUID": orgId } }
+  );
+}
+
+async function loadChatTokens(uuid, force) {
+  if (!/^[0-9a-f-]{36}$/i.test(String(uuid || ""))) return { ok: false, error: "bad_uuid" };
+  const hit = chatTokensCache.get(uuid);
+  if (!force && hit && Date.now() - hit.at < CHAT_TOKENS_TTL_MS) {
+    return { ok: true, uuid, ...hit.result, cached: true };
+  }
+
+  const candidates = [];
+  const cookieOrg = await getActiveOrgFromCookie();
+  if (cookieOrg) candidates.push(cookieOrg);
+  if (!candidates.length) {
+    try { const id = await getOrgId(); if (id) candidates.push(id); } catch (_) {}
+  }
+  if (!candidates.length) return { ok: false, error: "no_org" };
+
+  let lastStatus = null;
+  for (const orgId of candidates) {
+    let resp;
+    try { resp = await fetchConversationFor(orgId, uuid); } catch (_) { continue; }
+    lastStatus = resp.status;
+    if (resp.status === 401 || resp.status === 403) return { ok: false, error: "not_signed_in" };
+    if (!resp.ok) continue;
+    let data = null;
+    try { data = await resp.json(); } catch (_) { continue; }
+    if (!data || data.type === "error") continue;
+    const result = measureConversation(data);
+    chatTokensCache.set(uuid, { orgId, result, at: Date.now() });
+    while (chatTokensCache.size > CHAT_TOKENS_CACHE_MAX) {
+      const oldest = chatTokensCache.keys().next().value;
+      if (oldest === undefined) break;
+      chatTokensCache.delete(oldest);
+    }
+    return { ok: true, uuid, ...result };
+  }
+  return { ok: false, error: lastStatus ? `chat_http_${lastStatus}` : "no_chat_response" };
+}
+
 // ---------- message router ----------
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
@@ -2102,6 +2314,18 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     return true;
   }
 
+  // v1.3.6: size of one conversation's active branch, for the strip.
+  if (msg.type === "get-chat-tokens") {
+    (async () => {
+      try {
+        sendResponse(await loadChatTokens(msg.uuid, !!msg.force));
+      } catch (err) {
+        sendResponse({ ok: false, error: (err && err.message) || "chat_tokens_failed" });
+      }
+    })();
+    return true;
+  }
+
   if (msg.type === "force-refresh") {
     (async () => { await pollUsage(); sendResponse({ ok: true }); })();
     return true;
@@ -2185,6 +2409,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       });
       clearProjectsCache();
       clearConvosCache();
+      clearChatTokensCache();
       try { await chrome.action.setBadgeText({ text: "" }); } catch (_) {}
       pollUsage();
       sendResponse({ ok: true });

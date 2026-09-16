@@ -46,6 +46,20 @@ Cookies are sent automatically because `manifest.json` declares `host_permission
 
 The content script finds the contenteditable input, walks up to the composer wrapper (`<fieldset>` typically), and inserts the strip as the wrapper's first child. A MutationObserver keeps it remounted across React rerenders and chat navigations. Click × to hide for 12 hours.
 
+## Chat tokens (v1.3.6)
+
+The strip shows the size of the chat you're in — **Chat ~36.9K tokens** — after the meters. Claude re-reads the whole active branch of a chat with every reply, so this is roughly what each new message there costs against your limits, and the one usage number you can act on: start a new chat.
+
+It's measured in `background.js` (`loadChatTokens()`) from `GET /api/organizations/{id}/chat_conversations/{uuid}?tree=True&rendering_mode=messages&render_all_tools=true`, **once when a chat opens and once after each reply finishes** (the injector posts `completion_done` when a stream closes; the content script waits 1.5s for the message to be persisted). Never on a timer. Cached per chat for 20 seconds and dropped on any account or org switch.
+
+Only the **active branch** is counted — `tree=True` returns every edit and retry, so the code walks `parent_message_uuid` back from `current_leaf_message_uuid`. Counted: text from both sides, tool inputs and tool results (web search results and artifacts live there), attachment text, and images/PDFs at a flat estimate (≤1,600 per image, 1,500 per PDF page). Thinking blocks are skipped, since prior-turn thinking is stripped from context. Project knowledge and the system prompt aren't visible in that response and aren't included — the tooltip says so.
+
+The count is an **estimate** (hence `~`): Claude's tokenizer isn't public, so `estimateTokens()` counts word and symbol pieces, which tracks it far better than chars/4 on code and non-Latin scripts. The number is neutral, turning amber at 100K and orange at 150K. The tooltip carries the breakdown (You · Claude · Files).
+
+**Collapsed and narrow.** The chat size is never dropped for width. The collapsed pill has a matching chip after the meter rings — a speech-bubble glyph and the number, same colours, same tooltip. In the expanded strip the "tokens" word goes first (fit level 1, or below 640px), then the segment switches to that same compact form, glyph instead of the "Chat" label (fit level 4, or below 480px). If the fully shed expanded strip *still* doesn't fit, it **auto-collapses**: `fitStrip()` shows the collapsed pill (all numbers, chat size included) for as long as the width stays short, and returns to the expanded view when room comes back. That is a layout state, not a preference — the stored collapse setting is untouched and the expand button hides meanwhile. Horizontal scroll remains the last resort after that. Toggle: **Chat tokens** in the strip's gear and the popup panel.
+
+Not included on purpose: a "cost in credits" figure (claude.ai publishes no such unit, so any number would be invented) and a prompt-cache countdown (the cache lifetime isn't published for claude.ai either).
+
 ## Projects button (v1.3.1)
 
 A **Projects** button sits in the composer footer, right after the Chat / Cowork control, and drops the account's project list: type to filter, arrow keys to move, Enter to open, and the projects you open most pinned to the top under **Recent** (recorded locally, in `chrome.storage.local`). Selecting one navigates to `/project/{uuid}`; Cmd/Ctrl-click opens it in a new tab.

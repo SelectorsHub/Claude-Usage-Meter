@@ -1,4 +1,29 @@
 // content-script.js (isolated world, v1.29)
+// - v1.3.6: CHAT SIZE. "Chat ~36.9K tokens" in the strip, after the meters —
+//   the answer to "how much does this chat take?". claude.ai re-sends the whole
+//   active branch with every reply, so this is roughly what each new message in
+//   this chat costs, and the one usage number a user can act on (start a new
+//   chat). Estimated in background.js (loadChatTokens) from the conversation
+//   endpoint: once when a chat is opened, once after each reply finishes
+//   (page-injector posts completion_done), never on a timer. Shown only on
+//   /chat/<uuid> pages and only once it has a number for THAT chat — a
+//   previous chat's figure never lingers after navigation. Neutral by default;
+//   the number turns amber at 100K and orange at 150K, where a new chat
+//   genuinely starts to matter. The breakdown (you / Claude / files) and the
+//   "estimate" caveat live in the tooltip. Expanded view only; sheds at fit
+//   level 5 with the messages counter, its "tokens" word at level 1.
+//   New stripFields.chatTokens toggle (gear popover + popup panel).
+//   Collapsed pill and narrow windows: the chat size is never dropped for
+//   width. The collapsed pill carries a matching chip (bubble glyph + number,
+//   sitting after the meter rings), and when the expanded strip runs short of
+//   room the segment switches to that same compact form — the "Chat" label
+//   becomes the bubble glyph and "tokens" goes — rather than disappearing.
+//   AUTO-COLLAPSE: when even the fully shed expanded strip can't fit (small
+//   windows, split panes), fitStrip() switches to the collapsed pill for as
+//   long as the width stays that short, and back when room returns. It is a
+//   layout state, not a preference: `collapsed` and its stored key are never
+//   touched, and the collapse button is hidden meanwhile (expanding would only
+//   overflow again). Horizontal scroll remains the last resort after that.
 // - v1.3.1: PROJECTS QUICK-PICKER. A "Projects" button in claude.ai's composer
 //   footer, immediately after the Chat/Cowork control, that drops the account's
 //   full project list: type to filter, arrow keys to move, Enter to open, and
@@ -275,6 +300,12 @@
     if (event.source !== window) return;
     const data = event.data;
     if (!data || data.source !== "claude-usage-meter") return;
+    // v1.3.6: a reply finished streaming — re-measure that chat. Handled here,
+    // not forwarded: background's message_limit path has no use for it.
+    if (data.payload && data.payload.kind === "completion_done") {
+      onCompletionDone(data.payload.uuid);
+      return;
+    }
     try {
       // v1.2.9: same opt-in trace as the injector, so a break in the relay
       // (page world -> content -> background) is visible rather than silent.
@@ -634,6 +665,9 @@
   let donateVisible = true;
   let shared = false;
   let collapsed = false;
+  // v1.3.6: true while fitStrip() is showing the collapsed pill because the
+  // expanded strip can't fit. Never persisted.
+  let autoCollapsed = false;
   // v1.2.6: whether the Fable segment currently has data (drives the F key in
   // the collapse tooltip). Set by applyFableVisibility() on every render.
   let fableVisible = false;
@@ -646,7 +680,8 @@
     fable: true,
     resetTimeSession: true,
     resetTimeWeekly: true,
-    forecast: true
+    forecast: true,
+    chatTokens: true
   };
   function fieldOn(name) {
     return stripFields[name] !== false;
@@ -664,13 +699,18 @@
     if (fieldOn("session")) keys.push("S = session");
     if (fieldOn("weekly")) keys.push("W = weekly");
     if (fableVisible) keys.push("F = Fable");
+    if (fieldOn("chatTokens") && chatTokens && chatTokens.uuid === currentChatId()) {
+      keys.push("bubble = this chat's tokens");
+    }
     const legend = keys.length ? ` (${keys.join(", ")})` : "";
     return `Collapse the strip to a compact view${legend}. Click again anytime to expand.`;
   }
 
   function applyCollapsed(root) {
     if (!root) return;
-    root.classList.toggle("cut-collapsed", collapsed);
+    // v1.3.6: autoCollapsed is fitStrip()'s narrow-window state; keep it.
+    root.classList.toggle("cut-collapsed", collapsed || autoCollapsed);
+    root.classList.toggle("cut-auto-collapsed", autoCollapsed && !collapsed);
     // v1.2.9: the gear is expanded-mode only (CSS hides it when collapsed), so
     // its popover must not be left floating with no visible anchor.
     if (collapsed && settingsPopOpen) closeSettingsPop(root);
@@ -1217,6 +1257,13 @@
           <span class="cut-sep">·</span>
           <span class="cut-meta" data-cut-meta>—</span>
         </div>
+        <div class="cut-divider cut-chat-divider" data-cut="chat-divider" style="display:none"></div>
+        <span class="cut-chat" data-cut="chat" tabindex="0" style="display:none">
+          <svg class="cut-chat-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>
+          <span class="cut-label cut-chat-label">Chat</span>
+          <span class="cut-chat-val" data-cut="chat-val">—</span>
+          <span class="cut-chat-word">tokens</span>
+        </span>
         <div class="cut-compact" data-cut="compact">
           <span class="cut-cwrap" data-cut="c-session-wrap">
             <span class="cut-cval" tabindex="0"><span class="cut-cring"><svg class="cut-cring-svg" viewBox="0 0 24 24" aria-hidden="true"><circle class="cut-cring-track" cx="12" cy="12" r="10"></circle><circle class="cut-cring-fill" data-cut="ring-session" cx="12" cy="12" r="10"></circle></svg><span class="cut-clabel">S</span></span> <span class="cut-cpct" data-cut="c-session">—</span><span class="cut-creset" data-cut="c-session-reset"><svg class="cut-creset-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20.5 13.5a8.5 8.5 0 1 1-2.2-6.4"></path><polyline points="20.5 3 20.5 8 15.5 8"></polyline></svg><span class="cut-creset-txt" data-cut="c-session-rt">—</span></span><span class="cut-cfc" data-cut="c-session-fc" style="display:none"><svg class="cut-cfc-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 2h12M6 22h12M6 2v5l6 5 6-5V2M6 22v-5l6-5 6 5v5"></path></svg><span class="cut-cfc-txt" data-cut="c-session-fct">—</span></span></span>
@@ -1231,6 +1278,11 @@
           <span class="cut-cwrap" data-cut="c-fable-wrap" style="display:none">
             <span class="cut-cval" tabindex="0"><span class="cut-cring"><svg class="cut-cring-svg" viewBox="0 0 24 24" aria-hidden="true"><circle class="cut-cring-track" cx="12" cy="12" r="10"></circle><circle class="cut-cring-fill" data-cut="ring-fable" cx="12" cy="12" r="10"></circle></svg><span class="cut-clabel">F</span></span> <span class="cut-cpct" data-cut="c-fable">—</span><span class="cut-creset" data-cut="c-fable-reset"><svg class="cut-creset-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20.5 13.5a8.5 8.5 0 1 1-2.2-6.4"></path><polyline points="20.5 3 20.5 8 15.5 8"></polyline></svg><span class="cut-creset-txt" data-cut="c-fable-rt">—</span></span></span>
             <span class="cut-ctip" data-cut="c-fable-tip" aria-hidden="true">Waiting for data</span>
+          </span>
+          <span class="cut-cdivider" data-cut="c-chat-divider" aria-hidden="true" style="display:none"></span>
+          <span class="cut-cwrap cut-cchat" data-cut="c-chat-wrap" style="display:none">
+            <span class="cut-cval" tabindex="0"><svg class="cut-chat-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg><span class="cut-cpct cut-chat-val" data-cut="c-chat">—</span></span>
+            <span class="cut-ctip" data-cut="c-chat-tip" aria-hidden="true"></span>
           </span>
         </div>
         <div class="cut-divider cut-msgs-divider" data-cut="msgs-divider" hidden></div>
@@ -1272,6 +1324,7 @@
             <label class="cut-sp-row"><input type="checkbox" data-sp="resetTimeSession" /><span>Session reset time</span></label>
             <label class="cut-sp-row"><input type="checkbox" data-sp="resetTimeWeekly" /><span>Weekly reset time</span></label>
             <label class="cut-sp-row"><input type="checkbox" data-sp="forecast" /><span>Limit forecast</span></label>
+            <label class="cut-sp-row"><input type="checkbox" data-sp="chatTokens" /><span>Chat tokens</span></label>
             <div class="cut-sp-sep"></div>
             <div class="cut-sp-title cut-sp-title-sub">In Claude&rsquo;s chat box</div>
             <label class="cut-sp-row" data-cut="sp-projects-row"><input type="checkbox" data-sp-top="projectsButton" /><span>Projects button</span></label>
@@ -1458,6 +1511,8 @@
       });
     }
     srcHtml(".cut-close-wrap", ".cut-close-tooltip");
+    const chatEl = root.querySelector('[data-cut="chat"]');
+    if (chatEl) attachTip(chatEl, () => chatEl.dataset.cutTip || "");
     root.querySelectorAll(".cut-cwrap").forEach((w) => {
       attachTip(w, () => {
         const t = w.querySelector(".cut-ctip");
@@ -1956,6 +2011,7 @@
     // Apply locally right away for a snappy strip update; the storage.onChanged
     // round-trip lands the same values, so the double render is idempotent.
     stripFields = { ...stripFields, ...sf };
+    if (sf.chatTokens) requestChatTokens(false);
     syncSettingsPop(pop);
     renderInto(document.getElementById(OVERLAY_ID));
     try {
@@ -2287,17 +2343,37 @@
     if (!s.width) return 0;
     return last.getBoundingClientRect().right + STRIP_PAD_RIGHT - s.right;
   }
+  function setAutoCollapsed(root, on) {
+    autoCollapsed = on;
+    root.classList.toggle("cut-auto-collapsed", on);
+    root.classList.toggle("cut-collapsed", collapsed || on);
+  }
+  // Sheds levels until the row fits. true = it fits.
+  function shedToFit(root) {
+    setFitLevel(root, 0);
+    if (stripOverflowPx(root) <= 0.5) return true;
+    for (let n = 1; n <= FIT_LEVELS; n++) {
+      setFitLevel(root, n);
+      if (stripOverflowPx(root) <= 0.5) return true;
+    }
+    return false;
+  }
   function fitStrip(root) {
     root = root || document.getElementById(OVERLAY_ID);
     if (!root || !root.isConnected) return;
     // Always start from the top: space can be given back as well as taken away
     // (preview panel closed, window widened), and the strip should recover.
+    // All of this runs inside one frame, so trying the expanded view again
+    // while auto-collapsed never paints.
     root.classList.remove("cut-fit-scroll");
-    setFitLevel(root, 0);
-    if (stripOverflowPx(root) <= 0.5) return;
-    for (let n = 1; n <= FIT_LEVELS; n++) {
-      setFitLevel(root, n);
-      if (stripOverflowPx(root) <= 0.5) return;
+    if (autoCollapsed && !collapsed) setAutoCollapsed(root, false);
+    if (shedToFit(root)) return;
+    // v1.3.6: the expanded strip can't fit even fully shed — show the collapsed
+    // pill instead, which keeps every number (chat size included).
+    if (!collapsed) {
+      if (settingsPopOpen) closeSettingsPop(root);
+      setAutoCollapsed(root, true);
+      if (shedToFit(root)) return;
     }
     // Everything optional is gone and it still doesn't fit. Scroll is the least
     // bad ending: it clips the tooltips, but it beats silently swallowing the
@@ -2405,6 +2481,8 @@
     applyDonateVisibility(root);
     if (!sharePopOpen) applyShareVisibility(root);
 
+    renderChatTokens(root);
+
     const msgsEl  = root.querySelector('[data-cut="msgs"]');
     const msgsDiv = root.querySelector('[data-cut="msgs-divider"]');
     // v1.2.13: no user toggle — the counter auto-appears whenever the API's
@@ -2443,6 +2521,120 @@
     scheduleFit(root);
   }
 
+
+  // ===== v1.3.6: chat size ("Chat ~36.9K tokens") =====
+  //
+  // State is keyed to the conversation it describes. On navigation the old
+  // figure is dropped immediately, before the new one is asked for, so a
+  // number is never shown against the wrong chat.
+  let chatTokens = null;       // last good answer: { uuid, tokens, you, claude, files, messages }
+  let chatTokensRoute = null;  // chat id the route watcher last saw
+  let chatReqSeq = 0;
+  let chatDoneTimer = null;
+
+  function currentChatId() {
+    const m = /^\/chat\/([0-9a-f-]{36})/i.exec(location.pathname || "");
+    return m ? m[1].toLowerCase() : null;
+  }
+
+  function fmtTokens(n) {
+    n = Math.max(0, Math.round(Number(n) || 0));
+    if (n < 1000) return String(n);
+    if (n < 100000) return (n / 1000).toFixed(1).replace(/\.0$/, "") + "K";
+    if (n < 1000000) return Math.round(n / 1000) + "K";
+    return (n / 1000000).toFixed(1).replace(/\.0$/, "") + "M";
+  }
+
+  function requestChatTokens(force) {
+    const uuid = currentChatId();
+    if (!uuid || !fieldOn("chatTokens")) return;
+    const seq = ++chatReqSeq;
+    try {
+      chrome.runtime.sendMessage({ type: "get-chat-tokens", uuid, force: !!force }, (resp) => {
+        void chrome.runtime.lastError;
+        // A newer request, or the user has moved on: this answer is stale.
+        if (seq !== chatReqSeq || currentChatId() !== uuid) return;
+        if (!resp || !resp.ok) return;   // keep whatever is showing; say nothing
+        chatTokens = { ...resp, uuid };
+        renderChatTokens(document.getElementById(OVERLAY_ID));
+      });
+    } catch (_) {}
+  }
+
+  // Called from the mutation observer / boot loop: cheap unless the chat id
+  // actually changed.
+  function watchChatRoute() {
+    const id = currentChatId();
+    if (id === chatTokensRoute) return;
+    chatTokensRoute = id;
+    if (!chatTokens || chatTokens.uuid !== id) {
+      chatTokens = null;
+      renderChatTokens(document.getElementById(OVERLAY_ID));
+    }
+    if (id) requestChatTokens(false);
+  }
+
+  // The server writes the finished message a beat after the stream closes, so
+  // wait before asking; a burst of completions (retry, continue) collapses into
+  // one request.
+  function onCompletionDone(uuid) {
+    if (chatDoneTimer) clearTimeout(chatDoneTimer);
+    chatDoneTimer = setTimeout(() => {
+      chatDoneTimer = null;
+      const id = currentChatId();
+      if (!id) return;
+      if (uuid && String(uuid).toLowerCase() !== id) return;
+      requestChatTokens(true);
+    }, 1500);
+  }
+
+  function renderChatTokens(root) {
+    if (!root) return;
+    const el = root.querySelector('[data-cut="chat"]');
+    const div = root.querySelector('[data-cut="chat-divider"]');
+    // Collapsed pill's chip and its leading divider.
+    const cWrap = root.querySelector('[data-cut="c-chat-wrap"]');
+    const cDiv = root.querySelector('[data-cut="c-chat-divider"]');
+    const cTip = root.querySelector('[data-cut="c-chat-tip"]');
+    if (!el || !div) return;
+    const id = currentChatId();
+    const on = fieldOn("chatTokens") && !!id && !!chatTokens && chatTokens.uuid === id;
+    for (const node of [el, div, cWrap, cDiv]) {
+      if (node) node.style.display = on ? "" : "none";
+    }
+    if (!on) {
+      delete el.dataset.cutTip;
+      if (cTip) cTip.innerHTML = "";
+      return;
+    }
+
+    const n = Number(chatTokens.tokens) || 0;
+    // Same number and colour in both views.
+    root.querySelectorAll('[data-cut="chat-val"], [data-cut="c-chat"]').forEach((val) => {
+      val.textContent = "~" + fmtTokens(n);
+      val.classList.toggle("cut-chat-long", n >= 100000 && n < 150000);
+      val.classList.toggle("cut-chat-huge", n >= 150000);
+    });
+
+    const parts = [`You ${fmtTokens(chatTokens.you)}`, `Claude ${fmtTokens(chatTokens.claude)}`];
+    if (Number(chatTokens.files) > 0) parts.push(`Files ${fmtTokens(chatTokens.files)}`);
+    const advice = n >= 100000
+      ? "This chat is getting long. Starting a new chat makes each message use less of your limit."
+      : "Claude re-reads the whole chat with every message, so longer chats use your limit faster.";
+    el.dataset.cutTip =
+      `<b>This chat: ~${n.toLocaleString()} tokens</b><br>` +
+      `${parts.join(" \u00b7 ")}<br>` +
+      `${advice}<br>` +
+      `<span style="opacity:.7">Estimate. Excludes project files and Claude\u2019s system prompt.</span>`;
+    if (cTip) cTip.innerHTML = el.dataset.cutTip;
+    // The collapse button's legend names the bubble only while it's on screen.
+    if (!collapsed) {
+      const ct = root.querySelector('[data-cut="collapse-tip"]');
+      if (ct) ct.textContent = collapseHintText();
+    }
+    el.setAttribute("aria-label",
+      `This chat is about ${n.toLocaleString()} tokens. ${advice}`);
+  }
 
   // ===== sidebar link to the desktop app (v1.3.0) =====
   //
@@ -4136,6 +4328,7 @@
     ensureDesktopLink();
     ensureProjectsButton();
     ensureChatSearch();
+    watchChatRoute();
     reportModelIfChanged();
     scanLockoutBanner();
     if (++bootAttempts >= 30) clearInterval(bootTimer);
@@ -4151,6 +4344,7 @@
       ensureDesktopLink();
       ensureProjectsButton();
       ensureChatSearch();
+      watchChatRoute();
       reportModelIfChanged();
       scanLockoutBanner();
     }, 400);
@@ -4268,6 +4462,8 @@
       ensureMounted();
       ensureProjectsButton();
       ensureChatSearch();
+      // v1.3.6: the route watcher may have fired before settings arrived.
+      if (!chatTokens) requestChatTokens(false);
       // v1.2.14: the initial render above used STORED state, which right after
       // an account switch is the previous account's numbers. Kick a poll now so
       // the fresh account's data lands and re-broadcasts within a second or two
@@ -4290,6 +4486,7 @@
       if (nv.pollMinutes) pollMinutes = Number(nv.pollMinutes) || 1;
       if (sf) {
         stripFields = { ...stripFields, ...sf };
+        if (sf.chatTokens && !chatTokens) requestChatTokens(false);
       }
       if (sf || nv.pollMinutes) renderInto(document.getElementById(OVERLAY_ID));
       // v1.3.1: switching the Projects button off on the options page takes it
@@ -4398,6 +4595,9 @@
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "visible") {
       try { chrome.runtime.sendMessage({ type: "force-refresh" }); } catch (_) {}
+      // v1.3.6: another tab may have added to this chat. Cached for 20s in
+      // background, so flicking between tabs doesn't refetch.
+      requestChatTokens(false);
       // v1.2.16: maybeShowNudge() refuses to fire on a hidden tab, so re-arm it
       // the moment this one is actually being looked at.
       scheduleNudge();

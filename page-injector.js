@@ -11,6 +11,10 @@
 //   of the body (page keeps the original), pull a reset time from the body or
 //   the Retry-After header, and emit reached=true so the session pins to 100%.
 //   Also broadened the SSE "reached" hints (rate_limit / usage_limit / too_many).
+//
+// v1.3.6: when a reply stream ENDS, post { kind: "completion_done", uuid } so
+//   the strip can re-measure that chat's size. The content script handles it
+//   locally — it is not forwarded to background as a message_limit payload.
 
 (function () {
   if (window.__claudeUsageMeterInjected) return;
@@ -212,7 +216,13 @@
     } catch (_) { /* not JSON or partial */ }
   }
 
-  async function teeAndScanSSE(stream) {
+  // v1.3.6: /chat_conversations/<uuid>/completion -> <uuid>
+  function conversationIdFrom(url) {
+    const m = /\/chat_conversations\/([0-9a-f-]{36})\//i.exec(url || "");
+    return m ? m[1] : null;
+  }
+
+  async function teeAndScanSSE(stream, convoId) {
     const reader = stream.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
@@ -238,6 +248,8 @@
         }
       }
     } catch (_) { /* stream cancelled or aborted — fine */ }
+    // Stopped or finished, the branch changed either way.
+    postToContent({ kind: "completion_done", uuid: convoId, ts: Date.now() });
   }
 
   window.fetch = async function patchedFetch(input, init) {
@@ -309,7 +321,7 @@
 
       // Tee the body so the page gets one branch and we scan the other.
       const [forPage, forScan] = response.body.tee();
-      teeAndScanSSE(forScan);
+      teeAndScanSSE(forScan, conversationIdFrom(url));
 
       // Re-wrap with the page-bound stream. Preserve all other response metadata.
       const wrapped = new Response(forPage, {

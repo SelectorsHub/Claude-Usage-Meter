@@ -411,6 +411,43 @@
   font-weight: 700;
 }
 
+/* v1.3.6: chat size — "Chat ~36.9K tokens". Same label treatment as the
+   meters so it reads as one of them; the number stays neutral (it isn't a
+   quota) until the chat is long enough for a new one to matter. */
+#claude-usage-overlay .cut-chat {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+  cursor: help;
+  outline: none;
+}
+#claude-usage-overlay .cut-chat-val {
+  font-weight: 600;
+  font-size: 12px;
+}
+#claude-usage-overlay .cut-chat-word {
+  font-size: 11px;
+  opacity: 0.62;
+}
+/* The bubble glyph stands in for the "Chat" label wherever space is short —
+   in the collapsed pill always, in the expanded strip only in its compact form
+   (see the width tiers and fit level 4 below). */
+#claude-usage-overlay .cut-chat-ic {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+  opacity: 0.7;
+}
+#claude-usage-overlay .cut-chat .cut-chat-ic { display: none; }
+#claude-usage-overlay .cut-cchat .cut-cval { gap: 4px; cursor: help; }
+#claude-usage-overlay .cut-chat-val.cut-chat-long { color: #f59e0b; }
+#claude-usage-overlay .cut-chat-val.cut-chat-huge { color: #f97316; }
+#claude-usage-overlay .cut-chat:focus-visible {
+  border-radius: 4px;
+  box-shadow: 0 0 0 2px rgba(217, 119, 87, 0.45);
+}
+
 #claude-usage-overlay .cut-msgs {
   color: #d97757;
   font-weight: 500;
@@ -733,7 +770,8 @@
    click away in the popup. */
 @container cut-overlay (max-width: 640px) {
   #claude-usage-overlay .cut-meta,
-  #claude-usage-overlay .cut-sep {
+  #claude-usage-overlay .cut-sep,
+  #claude-usage-overlay .cut-chat-word {
     display: none;
   }
 }
@@ -804,6 +842,11 @@
   #claude-usage-overlay .cut-donate .cut-donate-txt { display: none; }
   #claude-usage-overlay .cut-donate { padding: 2px 3px; }
   #claude-usage-overlay .cut-share { padding: 2px 3px; }
+  /* v1.3.6: chat size goes to its collapsed-pill form — glyph + number. */
+  #claude-usage-overlay .cut-chat { gap: 4px; }
+  #claude-usage-overlay .cut-chat .cut-chat-label,
+  #claude-usage-overlay .cut-chat .cut-chat-word { display: none; }
+  #claude-usage-overlay .cut-chat .cut-chat-ic { display: inline-block; }
 }
 
 /* Tier 3 (< 400px): drop the "N left" messages counter and legacy donate
@@ -936,7 +979,8 @@
    styles set by the JS visibility functions. */
 #claude-usage-overlay.cut-collapsed .cut-seg,
 #claude-usage-overlay.cut-collapsed .cut-divider:not(.cut-rate-divider):not(.cut-share-divider),
-#claude-usage-overlay.cut-collapsed .cut-msgs {
+#claude-usage-overlay.cut-collapsed .cut-msgs,
+#claude-usage-overlay.cut-collapsed .cut-chat {
   display: none !important;
 }
 
@@ -1641,7 +1685,8 @@
    has to be able to override them. */
 
 /* 1. The trailing "left" after the forecast time. Costs nothing to lose. */
-#claude-usage-overlay.cut-fit-1 .cut-fc-word { display: none !important; }
+#claude-usage-overlay.cut-fit-1 .cut-fc-word,
+#claude-usage-overlay.cut-fit-1 .cut-chat-word { display: none !important; }
 
 /* 2. Inline reset times, both views. Still on the segment tooltips and in the
       popup, so this is a relocation rather than a loss. Biggest single saving
@@ -1659,6 +1704,12 @@
 #claude-usage-overlay.cut-fit-4 .cut-donate .cut-donate-txt { display: none !important; }
 #claude-usage-overlay.cut-fit-4 .cut-rate,
 #claude-usage-overlay.cut-fit-4 .cut-donate { padding: 2px 3px; }
+/*    v1.3.6: …and the chat size takes its collapsed-pill form. It is never
+      shed outright — the glyph + number costs about as much as a meter. */
+#claude-usage-overlay.cut-fit-4 .cut-chat { gap: 4px; }
+#claude-usage-overlay.cut-fit-4 .cut-chat .cut-chat-label,
+#claude-usage-overlay.cut-fit-4 .cut-chat .cut-chat-word { display: none !important; }
+#claude-usage-overlay.cut-fit-4 .cut-chat .cut-chat-ic { display: inline-block !important; }
 
 /* 5. The messages counter. */
 #claude-usage-overlay.cut-fit-5 .cut-msgs,
@@ -1672,6 +1723,10 @@
 /* Final fallback, set only when all six levels weren't enough. Scrolling clips
    the tooltips that hang above the strip, which is why it isn't used earlier —
    but an unreachable close button is worse. */
+/* v1.3.6: auto-collapsed (narrow window) — the expand button would only
+   overflow again, so it steps aside until the width comes back. */
+#claude-usage-overlay.cut-auto-collapsed .cut-collapse-wrap { display: none !important; }
+
 #claude-usage-overlay.cut-fit-scroll .cut-strip {
   overflow-x: auto;
   scrollbar-width: none;
