@@ -1,4 +1,16 @@
 // content-script.js (isolated world, v1.29)
+// - v1.3.7: SELECTORSHUB DISCOVERY, three quiet surfaces. (a) A "by
+//   SelectorsHub" byline beside the logo (expanded view only; first to shed).
+//   (b) The logo opens a menu of 12 free SelectorsHub tools instead of linking
+//   straight to the product page — a stray click near the composer no longer
+//   throws a new tab; Ctrl/Cmd/middle click still opens the product page. Tip:
+//   "offered by SelectorsHub · Click to try more free tools from us."
+//   (c) Limit-reached line: at 100% Session/Weekly the strip shows "Meanwhile,
+//   try <tool> →" with an ×; clicking or dismissing hides it until the NEXT
+//   reset (keyed to resetsAt, synced across tabs). TEST_BUILD shows it at any
+//   % and rolls it every 45s. All links carry UTM (logo-menu, logo-menu-all,
+//   logo-menu-about, limit-reached). Also fixes a stray second divider before
+//   Rate us (the hidden messages-left divider was still displayed).
 // - v1.3.6: CHAT SIZE. "Chat ~36.9K tokens" in the strip, after the meters —
 //   the answer to "how much does this chat take?". claude.ai re-sends the whole
 //   active branch with every reply, so this is roughly what each new message in
@@ -598,7 +610,7 @@
 
   // Each tool holds the second line for 3 days. Flip TEST_BUILD to true to run
   // the rotation on a 45-second clock and watch the whole cycle in one sitting.
-  const TEST_BUILD = false;
+  const TEST_BUILD = true;  // TEST BUILD — set back to false before shipping
   const TOOLS_ROTATE_MS = TEST_BUILD ? 45 * 1000 : 3 * 24 * 60 * 60 * 1000;
 
   // Deliberately NOT the full catalogue. The sidebar reaches people who came to
@@ -620,6 +632,41 @@
     return url + sep +
       "utm_source=claude-usage-meter&utm_medium=" + medium + "&utm_campaign=more-tools";
   }
+
+  // ===== v1.3.7: logo menu + "by SelectorsHub" byline + limit-reached line =====
+  // The strip's logo used to link straight to the product page. It now opens a
+  // small menu of SelectorsHub tools (a plain click inside the strip must never
+  // throw the user into a new tab mid-chat); modified clicks still open the
+  // product page through the <a>'s own href. Order is Sanjay's pick.
+  const SH_ALL_TOOLS_URL = "https://selectorshub.com/";
+  const LOGO_MENU_TOOLS = [
+    { icon: "screenshot-with-url", name: "Screenshot with URL", desc: "Screenshots with the URL bar",  url: "https://selectorshub.com/screenshot-with-url/" },
+    { icon: "testcase-studio", name: "TestCase Studio",     desc: "Record test steps as you go",   url: "https://selectorshub.com/testcase-studio/" },
+    { icon: "check-my-links", name: "Check My Links",      desc: "Find broken links in 1 click",  url: "https://selectorshub.com/checkmylinks/" },
+    { icon: "page-load-timer", name: "Page Load Timer",     desc: "Page load time, automatically", url: "https://selectorshub.com/page-load-timer/" },
+    { icon: "selectorshub", name: "SelectorsHub",        desc: "XPath & Playwright locators",   url: "https://selectorshub.com/selectorshub/" },
+    { icon: "cssviewer", name: "CSSViewer",           desc: "See any element's CSS on hover", url: "https://chromewebstore.google.com/detail/cssviewer/plnialnlnbaodbmoedcppffmgfmmghbj" },
+    { icon: "clearcache", name: "ClearCache",          desc: "Clear cache in one click",      url: "https://chromewebstore.google.com/detail/clear-cache/epompmcepniobjioaagepjacapcoofof" },
+    { icon: "auto-data-filler", name: "Auto Data Filler",    desc: "Fill forms in one click",       url: "https://selectorshub.com/auto-data-filler/" },
+    { icon: "modify-header",    name: "Modify Header",       desc: "Edit request & response headers", url: "https://selectorshub.com/modify-header/" },
+    { icon: "anyformat",        name: "AnyFormat",           desc: "Save images in any format",     url: "https://www.selectorshub.com/anyformat/" },
+    { icon: "bookmarks-finder", name: "Bookmarks Finder",    desc: "Find any bookmark by typing",   url: "https://www.selectorshub.com/bookmarks-finder/" },
+    { icon: "testing-daily",    name: "Testing Daily",       desc: "Daily testing news & updates",  url: "https://selectorshub.com/testing-daily/" },
+  ];
+
+  // Limit-reached line: when Session or Weekly hits the limit, the strip offers
+  // ONE tool while the user waits for the reset. Dismissing it (or clicking it)
+  // hides it until the NEXT reset — the dismissal is keyed to that reset time,
+  // so it never nags twice about the same lockout. The tool is derived from the
+  // reset key, so every tab shows the same one and it changes each lockout.
+  // TEST_BUILD: shown at any usage level, and the key rolls every 45s, so the
+  // whole rotation (and dismiss → comes back) can be watched without being
+  // locked out for real.
+  const LIMIT_PROMO_AT = TEST_BUILD ? 0 : 100;
+  const LIMIT_PROMO_WINDOW_MS = 45 * 1000;
+  const LIMIT_PROMO_KEY = "limit_promo_dismissed";
+  let limitPromoDismissed = null;   // reset key last dismissed/clicked; null = not loaded yet
+  let limitPromoKey = null;         // reset key of the line currently showing
   const RATE_KEY = "rate_us_clicked";
   // v1.2.3: timestamp of the Rate us click. The Share button used to appear the
   // instant someone rated, which reads as "thanks — now do one more thing for
@@ -1219,18 +1266,23 @@
   function buildOverlay() {
     const root = document.createElement("div");
     root.id = OVERLAY_ID;
-    const tooltipText =
-      "Claude Usage Meter — shows your Claude.ai session and weekly usage. " +
-      "The gauge sweeps each time fresh numbers arrive. " +
-      "Click the logo to learn more, or the extension icon in the toolbar " +
-      "for full details and settings.";
+    // v1.3.7: the logo is now the door to the SelectorsHub tools menu. The tip
+    // says who makes the meter and that the logo is clickable — two short lines,
+    // then the live "updated …" line that was always here.
+    const tooltipHtml =
+      "<b>Claude Usage Meter</b> \u00b7 offered by <b>SelectorsHub</b><br>" +
+      "Click to try more free tools from us.";
+    const ariaText =
+      "Claude Usage Meter, offered by SelectorsHub. Click to try more free tools from us.";
     const logoSvg = meterLogoSvg(16, "cut-logo");
     root.innerHTML = `
       <div class="cut-strip" role="status">
-        <a class="cut-logo-wrap" href="${PRODUCT_URL}" target="_blank" rel="noopener noreferrer"
-           aria-label="${tooltipText.replace(/"/g, '&quot;')}">
+        <a class="cut-logo-wrap" data-cut="logo" href="${PRODUCT_URL}" target="_blank" rel="noopener noreferrer"
+           role="button" aria-haspopup="menu" aria-expanded="false"
+           aria-label="${ariaText}">
           ${logoSvg}
-          <span class="cut-tooltip" aria-hidden="true">${tooltipText}<span class="cut-tip-live" data-cut="tip-live"></span></span>
+          <span class="cut-byline" aria-hidden="true">by SelectorsHub</span>
+          <span class="cut-tooltip" aria-hidden="true">${tooltipHtml}<span class="cut-tip-live" data-cut="tip-live"></span></span>
         </a>
         <div class="cut-divider" data-cut="session-divider"></div>
         <div class="cut-seg" data-cut="session">
@@ -1285,6 +1337,14 @@
             <span class="cut-ctip" data-cut="c-chat-tip" aria-hidden="true"></span>
           </span>
         </div>
+        <div class="cut-divider cut-lp-divider" data-cut="lp-divider" hidden></div>
+        <span class="cut-lp-wrap" data-cut="lp-wrap" hidden>
+          <a class="cut-lp" data-cut="lp" href="#" target="_blank" rel="noopener noreferrer">
+            <span class="cut-lp-lead">Meanwhile, try</span><span class="cut-lp-short">Try</span> <span class="cut-lp-name" data-cut="lp-name"></span> <span class="cut-lp-arrow" aria-hidden="true">\u2192</span>
+          </a>
+          <button class="cut-lp-x" type="button" data-cut="lp-x" aria-label="Hide until the next reset">\u00d7</button>
+          <span class="cut-lp-tooltip" data-cut="lp-tip" aria-hidden="true"></span>
+        </span>
         <div class="cut-divider cut-msgs-divider" data-cut="msgs-divider" hidden></div>
         <span class="cut-msgs" data-cut="msgs" hidden></span>
         <div class="cut-divider cut-rate-divider" data-cut="rate-divider" style="display:none"></div>
@@ -1350,6 +1410,7 @@
       // v1.2.16: the nudge is anchored to a button inside the strip — it can't
       // outlive it, or it floats over the page pointing at nothing.
       closeNudge(root);
+      closeLogoMenu();
       await dismissForHours(12);
       const el = document.getElementById(OVERLAY_ID);
       if (el) el.remove();
@@ -1417,6 +1478,35 @@
         collapsed = !collapsed;
         try { chrome.storage.local.set({ [COLLAPSE_KEY]: collapsed }); } catch (_) {}
         applyCollapsed(root);
+      });
+    }
+    // v1.3.7: logo → tools menu. A plain click opens the menu; Ctrl/Cmd/Shift or
+    // middle click falls through to the href (the product page), as a link should.
+    const logoEl = root.querySelector('[data-cut="logo"]');
+    if (logoEl) {
+      logoEl.addEventListener("click", (e) => {
+        if (e.metaKey || e.ctrlKey || e.shiftKey || e.button === 1) return;
+        e.preventDefault(); e.stopPropagation();
+        if (logoMenuOpen) closeLogoMenu();
+        else openLogoMenu(root);
+      });
+      logoEl.addEventListener("keydown", (e) => {
+        if (e.key === " " || e.key === "Spacebar") {
+          e.preventDefault();
+          if (logoMenuOpen) closeLogoMenu(); else openLogoMenu(root);
+        }
+      });
+    }
+    const lpLink = root.querySelector('[data-cut="lp"]');
+    if (lpLink) {
+      // Let the link open normally; a click counts as "seen" for this reset.
+      lpLink.addEventListener("click", () => dismissLimitPromo(root));
+    }
+    const lpX = root.querySelector('[data-cut="lp-x"]');
+    if (lpX) {
+      lpX.addEventListener("click", (e) => {
+        e.preventDefault(); e.stopPropagation();
+        dismissLimitPromo(root);
       });
     }
     applyRateVisibility(root);
@@ -1496,7 +1586,22 @@
         return t ? t.innerHTML : "";
       });
     };
-    srcHtml(".cut-logo-wrap", ".cut-tooltip");
+    // v1.3.7: the logo tip steps aside while its menu is open.
+    const lw = root.querySelector(".cut-logo-wrap");
+    if (lw) {
+      attachTip(lw, () => {
+        if (logoMenuOpen) return "";
+        const t = lw.querySelector(".cut-tooltip");
+        return t ? t.innerHTML : "";
+      });
+    }
+    const lpw = root.querySelector('[data-cut="lp-wrap"]');
+    if (lpw) {
+      attachTip(lpw, () => {
+        const t = lpw.querySelector('[data-cut="lp-tip"]');
+        return t ? t.innerHTML : "";
+      });
+    }
     srcHtml(".cut-rate-wrap", ".cut-rate-tooltip");
     srcHtml('[data-cut="share-wrap"]', ".cut-share-tooltip");
     srcHtml(".cut-collapse-wrap", ".cut-collapse-tooltip");
@@ -1646,7 +1751,7 @@
     // slot, so wait for the tab to actually be looked at.
     if (document.hidden) return;
     // Never stack on top of another popover.
-    if (settingsPopOpen || sharePopOpen) return;
+    if (settingsPopOpen || sharePopOpen || logoMenuOpen) return;
     const root = document.getElementById(OVERLAY_ID);
     if (!root) return;
     const wrap = root.querySelector('[data-cut="rate-wrap"]');
@@ -2095,6 +2200,296 @@
     void wrap;
   }
 
+  // ===== v1.3.7: logo → SelectorsHub tools menu =====
+  // Built on open, portaled to <body> like the gear popover (the overlay is a
+  // size container and would clip it), follows the logo while open, closes on
+  // outside click, Esc, or picking a tool. Nothing is added to the DOM for the
+  // majority who never open it.
+  let logoMenuOpen = false;
+  let logoMenuEl = null;
+  let logoMenuOutsideHandler = null;
+  let logoMenuFollowHandler = null;
+  let logoMenuKeyHandler = null;
+
+  function positionLogoMenu() {
+    const pop = logoMenuEl;
+    const root = document.getElementById(OVERLAY_ID);
+    const anchor = root && root.querySelector(".cut-logo");
+    if (!pop || !anchor || !pop.isConnected || !logoMenuOpen) return;
+    const br = anchor.getBoundingClientRect();
+    const margin = 8;
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    // Height is capped to whichever side has more room, so on a short window
+    // the list scrolls inside the menu instead of running off-screen.
+    const above = br.top - 14 - margin;
+    const below = vh - br.bottom - 14 - margin;
+    const placeAbove = above >= below;
+    pop.style.maxHeight = Math.max(160, placeAbove ? above : below) + "px";
+    const pr = pop.getBoundingClientRect();
+    // Left-aligned to the logo (it sits at the strip's left edge), clamped.
+    let left = br.left - 10;
+    left = Math.max(margin, Math.min(left, vw - pr.width - margin));
+    let top;
+    if (placeAbove) {
+      top = br.top - pr.height - 10;
+      pop.classList.remove("cut-pop-below");
+    } else {
+      top = br.bottom + 10;
+      pop.classList.add("cut-pop-below");
+    }
+    const arrowX = Math.max(12, Math.min(br.left + br.width / 2 - left, pr.width - 12));
+    pop.style.setProperty("--cut-arrow-x", arrowX + "px");
+    pop.style.left = left + "px";
+    pop.style.top = Math.max(margin, top) + "px";
+  }
+
+  function buildLogoMenu() {
+    const pop = document.createElement("div");
+    pop.className = "cut-lm";
+    pop.setAttribute("role", "menu");
+    pop.setAttribute("aria-label", "More free tools from SelectorsHub");
+
+    const head = document.createElement("div");
+    head.className = "cut-lm-head";
+    const brand = document.createElement("div");
+    brand.className = "cut-lm-brand";
+    brand.textContent = "SelectorsHub";
+    const sub = document.createElement("div");
+    sub.className = "cut-lm-sub";
+    sub.textContent = "Free tools from the maker of Claude Usage Meter";
+    head.appendChild(brand);
+    head.appendChild(sub);
+    pop.appendChild(head);
+
+    const grid = document.createElement("div");
+    grid.className = "cut-lm-grid";
+    for (const t of LOGO_MENU_TOOLS) {
+      const a = document.createElement("a");
+      a.className = "cut-lm-item";
+      a.setAttribute("role", "menuitem");
+      a.href = utm(t.url, "logo-menu");
+      a.target = "_blank";
+      a.rel = "noopener noreferrer";
+      const badge = document.createElement("span");
+      badge.className = "cut-lm-badge";
+      badge.setAttribute("aria-hidden", "true");
+      badge.textContent = t.name.charAt(0);
+      paintToolIcon(badge, t.icon);
+      const txt = document.createElement("span");
+      txt.className = "cut-lm-txt";
+      const nm = document.createElement("span");
+      nm.className = "cut-lm-name";
+      nm.textContent = t.name;
+      const ds = document.createElement("span");
+      ds.className = "cut-lm-desc";
+      ds.textContent = t.desc;
+      txt.appendChild(nm);
+      txt.appendChild(ds);
+      a.appendChild(badge);
+      a.appendChild(txt);
+      a.addEventListener("click", () => setTimeout(closeLogoMenu, 0));
+      grid.appendChild(a);
+    }
+    pop.appendChild(grid);
+
+    const foot = document.createElement("div");
+    foot.className = "cut-lm-foot";
+    const about = document.createElement("a");
+    about.className = "cut-lm-about";
+    about.href = utm(PRODUCT_URL, "logo-menu-about");
+    about.target = "_blank";
+    about.rel = "noopener noreferrer";
+    about.textContent = "About this meter";
+    const all = document.createElement("a");
+    all.className = "cut-lm-all";
+    all.setAttribute("role", "menuitem");
+    all.href = utm(SH_ALL_TOOLS_URL, "logo-menu-all");
+    all.target = "_blank";
+    all.rel = "noopener noreferrer";
+    all.textContent = "See all 15+ free tools →";
+    about.addEventListener("click", () => setTimeout(closeLogoMenu, 0));
+    all.addEventListener("click", () => setTimeout(closeLogoMenu, 0));
+    foot.appendChild(about);
+    foot.appendChild(all);
+    pop.appendChild(foot);
+
+    // Keep clicks inside from reaching the strip's handlers / outside closer.
+    pop.addEventListener("click", (e) => e.stopPropagation());
+    return pop;
+  }
+
+  // Tool icons: icons/tools/<slug>.png. claude.ai's CSP has no
+  // chrome-extension: (or data:) in img-src, so an <img> would come up blank —
+  // the same wall the meter logo hit. A content-script fetch is privileged and
+  // never meets the page CSP, and a <canvas> isn't an image load at all, so the
+  // PNG is decoded here and painted. A missing file keeps the letter badge.
+  const toolIconCache = new Map();   // slug -> Promise<ImageBitmap|null>
+  function loadToolIcon(slug) {
+    if (!slug) return Promise.resolve(null);
+    if (toolIconCache.has(slug)) return toolIconCache.get(slug);
+    let url = "";
+    try { url = chrome.runtime.getURL("icons/tools/" + slug + ".png"); } catch (_) {}
+    const p = !url ? Promise.resolve(null) : fetch(url)
+      .then((r) => (r.ok ? r.blob() : null))
+      .then((b) => (b && typeof createImageBitmap === "function" ? createImageBitmap(b) : null))
+      .catch(() => null);
+    toolIconCache.set(slug, p);
+    return p;
+  }
+  function paintToolIcon(badge, slug) {
+    loadToolIcon(slug).then((bmp) => {
+      if (!bmp || !badge.isConnected) return;
+      const css = 26;
+      const dpr = Math.min(3, window.devicePixelRatio || 1);
+      const c = document.createElement("canvas");
+      c.width = Math.round(css * dpr);
+      c.height = Math.round(css * dpr);
+      c.className = "cut-lm-icon";
+      const ctx = c.getContext("2d");
+      if (!ctx) return;
+      ctx.imageSmoothingQuality = "high";
+      // Contain, centred: icons aren't all square.
+      const k = Math.min(c.width / bmp.width, c.height / bmp.height);
+      const w = bmp.width * k, h = bmp.height * k;
+      ctx.drawImage(bmp, (c.width - w) / 2, (c.height - h) / 2, w, h);
+      badge.textContent = "";
+      badge.classList.add("cut-lm-badge-img");
+      badge.appendChild(c);
+    });
+  }
+
+  function openLogoMenu(root) {
+    if (logoMenuOpen || !root) return;
+    const logo = root.querySelector('[data-cut="logo"]');
+    if (!logo) return;
+    // One popover at a time.
+    if (settingsPopOpen) closeSettingsPop(root);
+    if (sharePopOpen) closeSharePop(root);
+    hidePortalTip();
+    logoMenuOpen = true;
+    logo.setAttribute("aria-expanded", "true");
+    const pop = buildLogoMenu();
+    pop.classList.toggle("cut-pop-dark", root.classList.contains("cut-theme-dark"));
+    pop.style.visibility = "hidden";
+    document.body.appendChild(pop);
+    logoMenuEl = pop;
+    positionLogoMenu();
+    pop.style.visibility = "";
+
+    let queued = false;
+    logoMenuFollowHandler = (ev) => {
+      // Scrolling the menu's own list must not re-run layout on every frame.
+      if (ev && ev.type === "scroll" && ev.target && pop.contains(ev.target)) return;
+      if (queued) return;
+      queued = true;
+      requestAnimationFrame(() => { queued = false; positionLogoMenu(); });
+    };
+    window.addEventListener("resize", logoMenuFollowHandler);
+    window.addEventListener("scroll", logoMenuFollowHandler, true);
+
+    logoMenuOutsideHandler = (ev) => {
+      if (!pop.contains(ev.target) && !logo.contains(ev.target)) closeLogoMenu();
+    };
+    logoMenuKeyHandler = (ev) => {
+      if (ev.key === "Escape") {
+        closeLogoMenu();
+        try { logo.focus(); } catch (_) {}
+      }
+    };
+    setTimeout(() => {
+      document.addEventListener("click", logoMenuOutsideHandler, true);
+      document.addEventListener("keydown", logoMenuKeyHandler, true);
+    }, 0);
+  }
+
+  function closeLogoMenu() {
+    if (!logoMenuOpen && !logoMenuEl) return;
+    logoMenuOpen = false;
+    if (logoMenuOutsideHandler) {
+      document.removeEventListener("click", logoMenuOutsideHandler, true);
+      logoMenuOutsideHandler = null;
+    }
+    if (logoMenuKeyHandler) {
+      document.removeEventListener("keydown", logoMenuKeyHandler, true);
+      logoMenuKeyHandler = null;
+    }
+    if (logoMenuFollowHandler) {
+      window.removeEventListener("resize", logoMenuFollowHandler);
+      window.removeEventListener("scroll", logoMenuFollowHandler, true);
+      logoMenuFollowHandler = null;
+    }
+    if (logoMenuEl) logoMenuEl.remove();
+    logoMenuEl = null;
+    const root = document.getElementById(OVERLAY_ID);
+    const logo = root && root.querySelector('[data-cut="logo"]');
+    if (logo) logo.setAttribute("aria-expanded", "false");
+  }
+
+  // ===== v1.3.7: limit-reached line =====
+  // Which bucket (if any) is at the limit, and the key that identifies THIS
+  // lockout. Session wins over Weekly: its reset is the one the user is
+  // actually waiting on first.
+  function limitPromoState() {
+    if (!latestUsage || isUnmetered()) return null;
+    for (const scope of ["session", "weekly"]) {
+      const b = latestUsage[scope];
+      if (!b || b.percent == null || Number(b.percent) < LIMIT_PROMO_AT) continue;
+      if (!fieldOn(scope)) continue;   // don't promo off a meter they've hidden
+      const key = TEST_BUILD
+        ? "test-" + Math.floor(Date.now() / LIMIT_PROMO_WINDOW_MS)
+        : scope + ":" + (b.resetsAt || "none");
+      return { scope, key, resetsAt: b.resetsAt };
+    }
+    return null;
+  }
+
+  function limitPromoTool(key) {
+    let h = 0;
+    for (let i = 0; i < key.length; i++) h = (h * 31 + key.charCodeAt(i)) >>> 0;
+    return LOGO_MENU_TOOLS[h % LOGO_MENU_TOOLS.length];
+  }
+
+  function renderLimitPromo(root) {
+    if (!root) return;
+    const wrap = root.querySelector('[data-cut="lp-wrap"]');
+    const div = root.querySelector('[data-cut="lp-divider"]');
+    if (!wrap || !div) return;
+    const st = limitPromoDismissed === null ? null : limitPromoState();
+    const show = !!(st && st.key !== limitPromoDismissed);
+    root.classList.toggle("cut-has-lp", show);
+    wrap.hidden = !show;
+    div.hidden = !show;
+    if (!show) { limitPromoKey = null; return; }
+    limitPromoKey = st.key;
+    const tool = limitPromoTool(st.key);
+    const link = root.querySelector('[data-cut="lp"]');
+    const nameEl = root.querySelector('[data-cut="lp-name"]');
+    const tipEl = root.querySelector('[data-cut="lp-tip"]');
+    if (link) {
+      link.href = utm(tool.url, "limit-reached");
+      link.setAttribute("aria-label", `While you wait for the reset, try ${tool.name}: ${tool.desc}`);
+    }
+    if (nameEl) nameEl.textContent = tool.name;
+    if (tipEl) {
+      const scopeName = st.scope === "session" ? "Session" : "Weekly";
+      const reset = st.resetsAt ? ` — resets in ${fmtReset(st.resetsAt)}` : "";
+      tipEl.innerHTML =
+        `<b>${scopeName} limit reached</b>${reset}.<br>` +
+        `While you wait: <b>${tool.name}</b> — ${tool.desc}. Free, from SelectorsHub.<br>` +
+        `× hides this until the next reset.`;
+    }
+  }
+
+  function dismissLimitPromo(root) {
+    if (!limitPromoKey) return;
+    limitPromoDismissed = limitPromoKey;
+    try { chrome.storage.local.set({ [LIMIT_PROMO_KEY]: limitPromoKey }); } catch (_) {}
+    hidePortalTip();
+    renderLimitPromo(root || document.getElementById(OVERLAY_ID));
+    scheduleFit();
+  }
+
   async function applyDonateVisibility(root) {
     if (!root) return;
     const db = root.querySelector('[data-cut="donate-wrap"]') || root.querySelector('[data-cut="donate"]');
@@ -2497,9 +2892,12 @@
       msgsDiv.hidden = true;
     }
 
+    renderLimitPromo(root);
+
     // v1.2.14: any re-render can change the strip's content width and slide the
     // gear; re-anchor the open settings popover after layout settles.
     if (settingsPopOpen) requestAnimationFrame(positionSettingsPop);
+    if (logoMenuOpen) requestAnimationFrame(positionLogoMenu);
     // v1.2.16: the nudge card is anchored to the Rate us button, which moves for
     // the same reasons — re-anchor it too. When it isn't open, this is the
     // heartbeat that arms it: renderInto runs on mount, on every usage update
@@ -2663,6 +3061,10 @@
     for (const label of SIDEBAR_LABELS) {
       for (const row of rows) {
         if (row.offsetParent === null) continue;
+        // v1.3.7: "Settings"/"Help" also appear in Claude's account dropdown.
+        // Anchoring to a popover item mounts the row INSIDE that floating menu,
+        // over the sidebar — never anchor to anything in a menu or dialog.
+        if (inFloatingUi(row)) continue;
         const text = (row.textContent || "").trim().toLowerCase();
         // Exact-ish match only: a chat titled "how do I customize X" must never
         // be mistaken for the Customize nav row.
@@ -2670,6 +3072,26 @@
       }
     }
     return null;
+  }
+
+  function inFloatingUi(el) {
+    return !!(el && el.closest &&
+      el.closest('[role="menu"], [role="dialog"], [role="listbox"], [data-radix-popper-content-wrapper], [data-radix-menu-content]'));
+  }
+
+  // v1.3.7: the sidebar can be a narrow icon rail, and the bottom rows can sit
+  // in a horizontal flex. A full promo row wedged into either overlaps Claude's
+  // own items, so it only shows where there's a real column to sit in.
+  const PROMO_MIN_WIDTH = 180;
+  function promoFits(parent) {
+    if (!parent) return false;
+    const w = parent.getBoundingClientRect().width;
+    return w >= PROMO_MIN_WIDTH;
+  }
+  function placePromoVisibility(wrap) {
+    if (!wrap) return;
+    const ok = promoFits(wrap.parentElement);
+    wrap.style.display = ok ? "" : "none";
   }
 
   function findSidebarAnchor() {
@@ -2682,7 +3104,7 @@
     const hrefs = ['a[href="/settings"]', 'a[href="/recents"]', 'a[href="/projects"]', 'a[href="/new"]'];
     for (const sel of hrefs) {
       const link = scope.querySelector(sel);
-      if (link && link.offsetParent !== null) return link;
+      if (link && link.offsetParent !== null && !inFloatingUi(link)) return link;
     }
     return null;
   }
@@ -2796,19 +3218,42 @@
     if (link.title !== tip) link.title = tip;
   }
 
-  function mountPromo(wrap) {
+  // v1.3.7: the bottom slot now uses the same stacking climb as the top one.
+  // It used to insert next to anchor.parentElement unconditionally — when
+  // Claude's bottom rows sit in a horizontal flex, that put the full-width
+  // promo BESIDE its nav items, overlapping them.
+  // A slot qualifies only if it stacks vertically AND is a real column (at
+  // least PROMO_MIN_WIDTH wide). A narrow block wrapper around one button is
+  // itself an item of a horizontal row — landing there puts the row beside
+  // Claude's items and makes it overflow the sidebar.
+  function promoInsertionPoint(anchor) {
+    let node = anchor;
+    for (let i = 0; i < 8; i++) {
+      const parent = node.parentElement;
+      if (!parent || parent === document.body) return null;
+      if (inFloatingUi(parent)) return null;
+      if (csStacks(parent) && parent.getBoundingClientRect().width >= PROMO_MIN_WIDTH) {
+        return { parent, before: node };
+      }
+      node = parent;
+    }
+    return null;
+  }
+
+  function findPromoBottomSpot() {
     const anchor = findSidebarAnchor();
-    if (!anchor) return false;
+    if (!anchor) return null;
+    return promoInsertionPoint(anchor);
+  }
 
-    // Sit alongside the nav item, not inside it — appending into the anchor
-    // would put our markup inside Claude's own <a>, which nests interactive
-    // elements and breaks keyboard navigation.
-    const row = anchor.parentElement;
-    const list = row && row.parentElement;
-    if (!row || !list) return false;
-
+  function mountPromo(wrap) {
+    const spot = findPromoBottomSpot();
+    // Nothing in reach stacks vertically: mount nothing rather than wedge a
+    // full-width row into a horizontal one.
+    if (!spot) return false;
     applyTheme(wrap);
-    list.insertBefore(wrap, row.nextSibling);
+    spot.parent.insertBefore(wrap, spot.before.nextSibling);
+    placePromoVisibility(wrap);
     return true;
   }
 
@@ -2829,7 +3274,7 @@
     const scope = nav || document.body;
     const link = scope.querySelector('a[href="/new"]');
     if (!link || link.getClientRects().length === 0) return null;
-    return csInsertionPoint(link);
+    return promoInsertionPoint(link);
   }
 
   function mountPromoTop(wrap) {
@@ -2839,6 +3284,7 @@
     if (!spot) return mountPromo(wrap);
     applyTheme(wrap);
     spot.parent.insertBefore(wrap, spot.before.nextSibling);
+    placePromoVisibility(wrap);
     return true;
   }
 
@@ -2877,6 +3323,7 @@
         if (spot && wrap.parentElement !== spot.parent) {
           spot.parent.insertBefore(wrap, spot.before.nextSibling);
         }
+        placePromoVisibility(wrap);
         return;
       }
       wrap = buildPromoRow({
@@ -2929,6 +3376,15 @@
     // Already mounted: just re-point it if the clock has moved on.
     setPromoTarget(wrap, utm(tool.url, "sidebar"), tool.name,
       tool.name + " \u2014 free, from the Claude Usage Meter team");
+    // v1.3.7: if Claude re-rendered and left us in a floating menu or a
+    // horizontal row, move back to a proper column slot (only when it drifted,
+    // so the MutationObserver isn't fed a needless move).
+    if (inFloatingUi(wrap)) { wrap.remove(); return; }
+    const spot = findPromoBottomSpot();
+    if (spot && wrap.parentElement !== spot.parent) {
+      spot.parent.insertBefore(wrap, spot.before.nextSibling);
+    }
+    placePromoVisibility(wrap);
   }
 
   // Kept as a name so the existing call sites read the same; the slot logic is
@@ -4427,9 +4883,10 @@
       chatSearchSettingsKnown = true;
       try {
         const { [RATE_KEY]: rv, [RATE_AT_KEY]: rav, [SHARE_KEY]: sv, [COLLAPSE_KEY]: cv,
-                [INSTALL_KEY]: iv, [NUDGE_KEY]: nv } =
+                [INSTALL_KEY]: iv, [NUDGE_KEY]: nv, [LIMIT_PROMO_KEY]: lpv } =
           await chrome.storage.local.get([RATE_KEY, RATE_AT_KEY, SHARE_KEY, COLLAPSE_KEY,
-                                          INSTALL_KEY, NUDGE_KEY]);
+                                          INSTALL_KEY, NUDGE_KEY, LIMIT_PROMO_KEY]);
+        limitPromoDismissed = lpv ? String(lpv) : "";
         rated = !!rv;
         ratedAt = Number(rav) || 0;
         shared = !!sv;
@@ -4571,6 +5028,12 @@
     if (changes[DONATE_KEY]) {
       const root = document.getElementById(OVERLAY_ID);
       if (root) applyDonateVisibility(root);
+    }
+    // v1.3.7: the limit-reached line dismissed in one tab goes in all of them.
+    if (changes[LIMIT_PROMO_KEY]) {
+      limitPromoDismissed = String(changes[LIMIT_PROMO_KEY].newValue || "");
+      const root = document.getElementById(OVERLAY_ID);
+      if (root) renderInto(root);
     }
   });
 

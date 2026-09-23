@@ -46,6 +46,13 @@ Cookies are sent automatically because `manifest.json` declares `host_permission
 
 The content script finds the contenteditable input, walks up to the composer wrapper (`<fieldset>` typically), and inserts the strip as the wrapper's first child. A MutationObserver keeps it remounted across React rerenders and chat navigations. Click × to hide for 12 hours.
 
+## SelectorsHub discovery (v1.3.7)
+
+- **Byline** — "by SelectorsHub" next to the strip logo in the expanded view. First thing shed when space is tight; hidden when collapsed.
+- **Logo menu** — hovering the logo says "offered by SelectorsHub · Click to try more free tools from us". Clicking opens a menu of 12 tools with their icons (Screenshot with URL, TestCase Studio, Check My Links, Page Load Timer, SelectorsHub, CSSViewer, ClearCache, Auto Data Filler, Modify Header, AnyFormat, Bookmarks Finder, Testing Daily; icons in icons/tools/) plus "See all 15+ free tools" and "About this meter". Closes on outside click, Esc or a pick. Ctrl/Cmd/middle click on the logo still opens the product page.
+- **Limit-reached line** — when Session or Weekly hits 100%, the strip shows "Meanwhile, try <tool> →" (short form "Try <tool> →" when tight; hidden ≤640px and when collapsed). × or a click hides it until the next reset, across tabs. `TEST_BUILD = true` shows it at any usage and rolls the tool every 45s.
+- UTM mediums: `logo-menu`, `logo-menu-all`, `logo-menu-about`, `limit-reached`.
+
 ## Chat tokens (v1.3.6)
 
 The strip shows the size of the chat you're in — **Chat ~36.9K tokens** — after the meters. Claude re-reads the whole active branch of a chat with every reply, so this is roughly what each new message there costs against your limits, and the one usage number you can act on: start a new chat.
