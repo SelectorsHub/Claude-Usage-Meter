@@ -610,7 +610,7 @@
 
   // Each tool holds the second line for 3 days. Flip TEST_BUILD to true to run
   // the rotation on a 45-second clock and watch the whole cycle in one sitting.
-  const TEST_BUILD = true;  // TEST BUILD — set back to false before shipping
+  const TEST_BUILD = false;
   const TOOLS_ROTATE_MS = TEST_BUILD ? 45 * 1000 : 3 * 24 * 60 * 60 * 1000;
 
   // Deliberately NOT the full catalogue. The sidebar reaches people who came to
