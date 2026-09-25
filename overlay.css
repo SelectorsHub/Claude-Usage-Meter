@@ -1652,6 +1652,25 @@
 }
 .cut-rate-nudge .cut-nudge-later:hover { opacity: 0.9; }
 
+/* v1.3.8: the 👎 answer on the first step. Outlined, so it reads as an equal
+   answer rather than a dismissal, without competing with the coral 👍. */
+.cut-rate-nudge .cut-nudge-alt {
+  appearance: none;
+  background: transparent;
+  color: inherit;
+  border: 1px solid currentColor;
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 600;
+  line-height: 1;
+  padding: 7px 11px;
+  border-radius: 8px;
+  cursor: pointer;
+  opacity: 0.7;
+  transition: opacity 0.15s;
+}
+.cut-rate-nudge .cut-nudge-alt:hover { opacity: 1; }
+
 /* While the card is up, the button it points at pulses — without this the eye
    reads the card as a page element rather than as "this thing, here". */
 #claude-usage-overlay .cut-rate-wrap.cut-rate-pulse .cut-rate {
@@ -1755,13 +1774,20 @@
   margin: 6px 0;
   border-radius: 10px;
   font-family: inherit;
-  background: linear-gradient(135deg, #ca7702 0%, #e89b2d 50%, #d4920a 100%);
-  box-shadow: 0 2px 10px rgba(202, 119, 2, 0.32);
-  padding: 1px;
+  /* v1.3.8: dark card inside a gold outline. White on the old solid gold was
+     ~2.3:1 and the 10px second line was hard to read; white on this card is
+     15:1 and the gold subtitle 7.5:1, and the gold edge keeps it ours. The
+     two-layer background paints the gold only under the transparent border. */
+  background:
+    linear-gradient(#2a2620, #2a2620) padding-box,
+    linear-gradient(135deg, #f0a93a 0%, #e89b2d 50%, #ca7702 100%) border-box;
+  border: 1.5px solid transparent;
+  box-shadow: 0 2px 12px rgba(232, 155, 45, 0.30);
+  padding: 0;
   transition: box-shadow 0.16s ease, transform 0.16s ease;
 }
 .cut-promo-row:hover {
-  box-shadow: 0 4px 16px rgba(202, 119, 2, 0.48);
+  box-shadow: 0 4px 18px rgba(232, 155, 45, 0.48);
   transform: translateY(-1px);
 }
 .cut-promo-row .cut-desktop-link-a {
@@ -1784,19 +1810,19 @@
   min-width: 0;
 }
 .cut-promo-row .cut-desktop-title {
-  font-size: 12.5px;
-  font-weight: 600;
+  font-size: 13px;
+  font-weight: 700;
   line-height: 1.25;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .cut-promo-row .cut-desktop-sub {
-  font-size: 10px;
-  font-weight: 500;
-  line-height: 1.25;
-  letter-spacing: 0.02em;
-  opacity: 0.86;
+  font-size: 11.5px;
+  font-weight: 600;
+  line-height: 1.3;
+  letter-spacing: 0.01em;
+  color: #f0a93a;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1806,16 +1832,16 @@
 .cut-promo-row .cut-desktop-ico {
   display: inline-flex;
   flex: 0 0 auto;
-  color: #fff;
+  color: #f0a93a;
 }
 .cut-promo-row .cut-desktop-ico svg { width: 15px; height: 15px; display: block; }
 .cut-promo-row .cut-desktop-x {
   appearance: none;
-  background: rgba(0, 0, 0, 0.16);
+  background: rgba(255, 255, 255, 0.08);
   border: 0;
   color: #fff;
   cursor: pointer;
-  opacity: 0.66;
+  opacity: 0.7;
   font-size: 15px;
   line-height: 1;
   width: 20px;
@@ -1828,8 +1854,8 @@
   transition: opacity 0.14s ease, background 0.14s ease;
 }
 .cut-promo-row:hover .cut-desktop-x { opacity: 0.85; }
-.cut-promo-row .cut-desktop-x:hover { opacity: 1; background: rgba(0, 0, 0, 0.22); }
-.cut-promo-row .cut-desktop-x:focus-visible { opacity: 1; outline: 2px solid #fff; }
+.cut-promo-row .cut-desktop-x:hover { opacity: 1; background: rgba(255, 255, 255, 0.16); }
+.cut-promo-row .cut-desktop-x:focus-visible { opacity: 1; outline: 2px solid #f0a93a; }
 
 /* A collapsed sidebar shrinks to an icon rail; drop the text so we never force
    it wider than Claude intends. */
@@ -2530,3 +2556,117 @@
 /* v1.3.7: real tool icons (painted to canvas) replace the letter badge. */
 .cut-lm-badge.cut-lm-badge-img { background: transparent; }
 .cut-lm-icon { width: 26px; height: 26px; display: block; border-radius: 6px; }
+
+
+/* ===== v1.3.8: Share popup pulse + "Share my usage" card ===== */
+#claude-usage-overlay .cut-share-wrap.cut-rate-pulse .cut-share {
+  opacity: 1;
+  background: color-mix(in srgb, #d97757 26%, transparent);
+  animation: cut-rate-pulse 1.7s ease-in-out infinite;
+  border-radius: 6px;
+}
+
+.cut-sp-share {
+  appearance: none;
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  color: inherit;
+  font: inherit;
+  font-weight: 600;
+  padding: 6px 4px 2px;
+  cursor: pointer;
+  opacity: 0.9;
+}
+.cut-sp-share:hover { color: #d97757; opacity: 1; }
+
+.cut-sc-panel {
+  position: fixed;
+  z-index: 2147483647;
+  box-sizing: border-box;
+  width: min(480px, calc(100vw - 16px));
+  padding: 16px 16px 14px;
+  background: #1a1a1c;
+  color: #f1f1f2;
+  border-radius: 14px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5), 0 1px 3px rgba(0, 0, 0, 0.25);
+  font: 500 12px/1.45 ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  opacity: 0;
+  transform: translateY(6px);
+  transition: opacity 0.18s ease, transform 0.18s ease;
+}
+.cut-sc-panel.cut-sc-in { opacity: 1; transform: none; }
+.cut-sc-panel.cut-pop-dark {
+  background: #f5f3ef;
+  color: #1a1a1c;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(255, 255, 255, 0.12);
+}
+.cut-sc-panel .cut-sc-x {
+  appearance: none;
+  position: absolute;
+  top: 9px;
+  right: 10px;
+  background: transparent;
+  border: none;
+  color: inherit;
+  opacity: 0.5;
+  cursor: pointer;
+  font: inherit;
+  font-size: 17px;
+  line-height: 1;
+  padding: 2px 5px;
+}
+.cut-sc-panel .cut-sc-x:hover { opacity: 0.95; }
+.cut-sc-panel .cut-sc-title { font-size: 14px; font-weight: 700; margin-bottom: 10px; }
+.cut-sc-panel .cut-sc-frame {
+  aspect-ratio: 1200 / 630;
+  border-radius: 10px;
+  overflow: hidden;
+  background: #1b1917;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.cut-sc-panel .cut-sc-loading { color: #a39c93; font-size: 12px; }
+.cut-sc-panel .cut-sc-canvas { display: block; width: 100%; height: auto; }
+.cut-sc-panel .cut-sc-note { font-size: 11px; opacity: 0.6; margin: 8px 0 10px; }
+.cut-sc-panel .cut-sc-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.cut-sc-panel .cut-sc-btn {
+  appearance: none;
+  border: 1px solid currentColor;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+  padding: 9px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  opacity: 0.8;
+  transition: opacity 0.15s, background 0.15s;
+}
+.cut-sc-panel .cut-sc-btn:hover { opacity: 1; }
+.cut-sc-panel .cut-sc-primary {
+  border-color: #d97757;
+  background: #d97757;
+  color: #fff;
+  opacity: 1;
+}
+.cut-sc-panel .cut-sc-primary:hover { background: #c96846; border-color: #c96846; }
+.cut-sc-panel .cut-sc-toast {
+  margin-top: 10px;
+  padding: 7px 10px;
+  border-radius: 8px;
+  background: color-mix(in srgb, #d97757 22%, transparent);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+.cut-sc-panel .cut-sc-toast[hidden] { display: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  .cut-sc-panel { transition: none; }
+  #claude-usage-overlay .cut-share-wrap.cut-rate-pulse .cut-share { animation: none; }
+}

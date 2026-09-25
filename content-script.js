@@ -1,4 +1,29 @@
 // content-script.js (isolated world, v1.29)
+// - v1.3.8: RATING PROMPT, asked at the right moment. The Rate us card no
+//   longer pops on a timer (5 days, then every 2 days forever). It now asks
+//   right after the meter visibly helped: (a) a session reset after real use
+//   (window peaked ≥ 50%, discontinuity-detected, fresh for 30 min), or (b) 7
+//   distinct days of use. Two steps: "👍 Yes, it helps / 👎 Not really".
+//   👍 → founder-voice ask + stars + Rate us (store review page per browser,
+//   Firefox included). 👎 → "Share feedback" (Chrome store Support tab, else
+//   the product page) with "Rate us anyway" kept, so nobody is gated away from
+//   the store. Caps: 3 days after install, 14 days between asks, never while a
+//   meter is ≥ 90%, and never again after 2 dismissals. Anyone who has EVER
+//   clicked Rate us (strip, card or popup, any version — rate_us_clicked in
+//   chrome.storage.local) never sees it. RATE_TEST (█ revert █) = 0-day gates,
+//   60s repeat, 3s mount delay, staged reset moment on first load.
+// - v1.3.8: SHARE MY USAGE CARD. A 1200×630 image of the user's own meters
+//   (Poppins/Inter bundled in fonts/, drawn on a canvas because claude.ai's
+//   CSP blocks extension/data: images) with a headline picked from the data
+//   ("94% of my weekly Claude limit, gone. and it's only Friday."). Post on X /
+//   LinkedIn (image copied to the clipboard first, then the intent opens with
+//   post text + store link, utm_source=usage-card), Copy image, Download. Only
+//   percentages and reset times are drawn. Open to everyone: gear menu → "Share
+//   my usage card", and a camera icon in the existing Share popover.
+//   SHARE POPUP: for people who have rated, SHARE_DELAY (5 days) after rating,
+//   on a session-reset moment or 14 days of use, 14 days between asks and from
+//   the last rating popup, max 2 dismissals, gone once they share. RATE_TEST
+//   also zeroes SHARE_DELAY and the streak.
 // - v1.3.7: SELECTORSHUB DISCOVERY, three quiet surfaces. (a) A "by
 //   SelectorsHub" byline beside the logo (expanded view only; first to shed).
 //   (b) The logo opens a menu of 12 free SelectorsHub tools instead of linking
@@ -588,16 +613,18 @@
   // every existing install starts this rotation at index 0 on update, which is
   // the announcement worth making now.
   const NEWS_ANCHOR_KEY = "desktop_link_anchor";
+  // v1.3.8: Desktop leads again. A fresh install starts at index 0, and for a
+  // Chrome/Edge user the desktop app is the more useful first thing to see.
   const CUM_NEWS = [
-    {
-      sub: "Now available for Firefox",
-      url: PRODUCT_URL,
-      tip: "Claude Usage Meter \u2014 now on Firefox, alongside Chrome and Edge",
-    },
     {
       sub: "Desktop version available",
       url: DESKTOP_URL,
       tip: "Claude Usage Meter \u2014 desktop app for macOS and Windows",
+    },
+    {
+      sub: "Now available for Firefox",
+      url: PRODUCT_URL,
+      tip: "Claude Usage Meter \u2014 now on Firefox, alongside Chrome and Edge",
     },
   ];
 
@@ -673,39 +700,82 @@
   // me". It now waits SHARE_DELAY after the rating so the two asks are spaced
   // out and the strip stays quiet in between.
   const RATE_AT_KEY = "rate_us_clicked_at";
-  const SHARE_DELAY = 5 * 24 * 60 * 60 * 1000; // 5 days in milliseconds
+  // v1.3.8: RATE_TEST (declared below; hoisting is fine at call time) → 0.
+  const SHARE_DELAY_PROD = 5 * 24 * 60 * 60 * 1000; // 5 days in milliseconds
   // v1.2.4: the Rate us button no longer shows the instant the extension is
   // installed. Asking for a review before the user has actually used the tool
   // reads as pushy and earns worse reviews. We hold it back for RATE_DELAY from
   // the install time (recorded by background.js), so the button appears only
   // once the user has had a couple of days to form an opinion.
+  // v1.3.8: RATE_TEST shortens every rating-prompt clock so the whole flow can
+  // be walked in a couple of minutes (see the v1.3.8 header note).
+  // ██ TEST BUILD — REVERT RATE_TEST to false before store packaging ██
+  const RATE_TEST = false;
+  const DAY_MS = 24 * 60 * 60 * 1000;
+  const SHARE_DELAY = RATE_TEST ? 0 : SHARE_DELAY_PROD;
   const INSTALL_KEY = "install_at";
-  const RATE_DELAY = 2 * 24 * 60 * 60 * 1000; // 2 days in milliseconds
+  const RATE_DELAY = RATE_TEST ? 0 : 2 * DAY_MS; // 2 days in milliseconds
   let installAt = null;  // ms epoch of install; null = not yet loaded, 0 = pre-gate/upgrade user
-  // v1.2.16: the nudge card. NUDGE_FIRST is measured from install (so it lands
-  // 3 days after the button itself appeared); NUDGE_REPEAT is measured from the
-  // last time the card was SHOWN, not dismissed — same thing in practice, and
-  // it means a card left open all day doesn't earn a second one tomorrow.
+  // v1.2.16 → v1.3.8: the nudge card. It used to pop on a timer (5 days, then
+  // every 2 days forever). v1.3.8 asks at a MOMENT instead — right after the
+  // meter visibly did its job — and caps how often and how many times it asks:
+  //   • never, ever, for anyone who has clicked Rate us anywhere (rate_us_clicked,
+  //     chrome.storage.local — survives updates, shared by strip, card, popup)
+  //   • not before NUDGE_FIRST from install, not while any meter is ≥ 90%
+  //   • at least NUDGE_REPEAT between shows
+  //   • at most NUDGE_MAX_DISMISS dismissals, then never again
+  //   • only when a moment is due: a session reset after real use (peak ≥ 50%),
+  //     fresh within MOMENT_TTL, or STREAK_DAYS distinct days of use.
   const NUDGE_KEY = "rate_nudge_at";             // ms epoch the card last appeared
-  const NUDGE_FIRST = 5 * 24 * 60 * 60 * 1000;   // first pop: 5 days after install
-  const NUDGE_REPEAT = 2 * 24 * 60 * 60 * 1000;  // then every 2 days until they rate
-  const NUDGE_MOUNT_DELAY = 10 * 1000;           // let the page settle before popping
+  const NUDGE_FIRST = RATE_TEST ? 0 : 3 * DAY_MS;          // earliest first ask after install
+  const NUDGE_REPEAT = RATE_TEST ? 60 * 1000 : 14 * DAY_MS; // gap between asks
+  const NUDGE_MAX_DISMISS = 2;                   // ask, ask once more, then stop for good
+  const NUDGE_MOUNT_DELAY = RATE_TEST ? 3 * 1000 : 10 * 1000; // let the page settle before popping
+  const NUDGE_DISMISS_KEY = "rate_nudge_dismissals";  // count of "not now"s
+  const NUDGE_FEEDBACK_KEY = "rate_feedback_at";      // ms epoch of a 👎 → feedback click
+  const MOMENT_KEY = "rate_moment";              // { kind: "reset", at: ms }
+  const MOMENT_TTL = 30 * 60 * 1000;             // a reset is "just happened" for 30 min
+  const SESS_TRACK_KEY = "rate_sess_track";      // { r: resetsAt ms, peak: % } of the current window
+  const RESET_MOMENT_PEAK = 50;                  // the window must have been used for real
+  const ACTIVE_DAYS_KEY = "rate_active_days";    // { n: distinct days, last: "YYYY-MM-DD" }
+  const STREAK_DAYS = RATE_TEST ? 1 : 7;
+  const BUSY_PCT = 90;                           // don't ask someone who's about to be locked out
   let nudgeAt = null;    // ms epoch of last show; null = not loaded, 0 = never shown
+  let nudgeDismissals = 0;
+  let rateMoment = null;       // { kind, at } or null
+  let sessTrack = null;        // { r, peak } or null
+  let activeDays = { n: 0, last: "" };
+  let rateStateLoaded = false;
+  // Where a 👎 goes. Chrome's store listing has a Support tab; Edge/Firefox fall
+  // back to the product page.
+  const CHROME_FEEDBACK_URL = "https://chromewebstore.google.com/detail/claude-usage-meter/kgpahkcgadpnklinijdojapiadnfelae/support";
+  const SITE_FEEDBACK_URL = "https://selectorshub.com/claude-usage-meter/?utm_source=claude-usage-meter&utm_medium=extension&utm_campaign=rate-feedback";
+  const FIREFOX_REVIEW_URL = "https://addons.mozilla.org/en-US/firefox/addon/claude-usage-meter-ai/reviews/";
   const DONATE_KEY = "donate_clicked_at";
   const DONATE_LINK = "https://buymeacoffee.com/selectorshub";
   const DONATE_COOLDOWN = 30 * 24 * 60 * 60 * 1000; // 30 days in milliseconds
   const CHROME_REVIEW_URL = "https://chromewebstore.google.com/detail/claude-usage-meter/kgpahkcgadpnklinijdojapiadnfelae/reviews";
   const EDGE_REVIEW_URL = "https://microsoftedge.microsoft.com/addons/detail/claude-usage-meter/anhdhmpfpgbohohjlbgnggnmcmkmmcbn";
   // Used only by the fallback below; the background normally opens the tab.
-  function reviewUrl() {
+  function browserKind() {
+    try {
+      if (/Firefox\//i.test(navigator.userAgent || "")) return "firefox";
+    } catch (_) {}
     try {
       const brands = navigator.userAgentData && navigator.userAgentData.brands;
-      if (Array.isArray(brands) && brands.some((b) => /edge/i.test(b.brand))) return EDGE_REVIEW_URL;
+      if (Array.isArray(brands) && brands.some((b) => /edge/i.test(b.brand))) return "edge";
     } catch (_) {}
     try {
-      if (/Edg(e|A|iOS)?\//i.test(navigator.userAgent || "")) return EDGE_REVIEW_URL;
+      if (/Edg(e|A|iOS)?\//i.test(navigator.userAgent || "")) return "edge";
     } catch (_) {}
-    return CHROME_REVIEW_URL;
+    return "chrome";
+  }
+  function reviewUrl() {
+    const k = browserKind();
+    return k === "firefox" ? FIREFOX_REVIEW_URL : k === "edge" ? EDGE_REVIEW_URL : CHROME_REVIEW_URL;
+  }
+  function feedbackUrl() {
+    return browserKind() === "chrome" ? CHROME_FEEDBACK_URL : SITE_FEEDBACK_URL;
   }
   let rated = false;
   let ratedAt = 0;       // ms epoch of the Rate us click (0 = unknown)
@@ -1362,6 +1432,7 @@
           </button>
           <span class="cut-share-tooltip" aria-hidden="true">Share with friends - this button disappears forever once you share.</span>
           <span class="cut-share-pop" data-cut="share-pop" style="display:none">
+            <button class="cut-share-net" data-net="card" title="Share my usage card" aria-label="Share my usage card"><svg viewBox="0 0 24 24" width="18" height="18"><rect width="24" height="24" rx="5" fill="#d97757"/><path d="M7.5 8.5h1.7l1-1.5h3.6l1 1.5h1.7a1.5 1.5 0 0 1 1.5 1.5v5.5a1.5 1.5 0 0 1-1.5 1.5h-9a1.5 1.5 0 0 1-1.5-1.5V10a1.5 1.5 0 0 1 1.5-1.5z" fill="none" stroke="#fff" stroke-width="1.5" stroke-linejoin="round"/><circle cx="12" cy="12.6" r="2.3" fill="none" stroke="#fff" stroke-width="1.5"/></svg></button>
             <button class="cut-share-net" data-net="linkedin" title="Share on LinkedIn" aria-label="Share on LinkedIn"><svg viewBox="0 0 382 382" width="18" height="18"><path fill="#0077B7" d="M347.445,0H34.555C15.471,0,0,15.471,0,34.555v312.889C0,366.529,15.471,382,34.555,382h312.889 C366.529,382,382,366.529,382,347.444V34.555C382,15.471,366.529,0,347.445,0z M118.207,329.844c0,5.554-4.502,10.056-10.056,10.056 H65.345c-5.554,0-10.056-4.502-10.056-10.056V150.403c0-5.554,4.502-10.056,10.056-10.056h42.806 c5.554,0,10.056,4.502,10.056,10.056V329.844z M86.748,123.432c-22.459,0-40.666-18.207-40.666-40.666S64.289,42.1,86.748,42.1 s40.666,18.207,40.666,40.666S109.208,123.432,86.748,123.432z M341.91,330.654c0,5.106-4.14,9.246-9.246,9.246H286.73 c-5.106,0-9.246-4.14-9.246-9.246v-84.168c0-12.556,3.683-55.021-32.813-55.021c-28.309,0-34.051,29.066-35.204,42.11v97.079 c0,5.106-4.139,9.246-9.246,9.246h-44.426c-5.106,0-9.246-4.14-9.246-9.246V149.593c0-5.106,4.14-9.246,9.246-9.246h44.426 c5.106,0,9.246,4.14,9.246,9.246v15.655c10.497-15.753,26.097-27.912,59.312-27.912c73.552,0,73.131,68.716,73.131,106.472 L341.91,330.654L341.91,330.654z"/></svg></button>
             <button class="cut-share-net" data-net="x" title="Share on X" aria-label="Share on X"><svg viewBox="0 0 24 24" width="18" height="18"><rect width="24" height="24" rx="5" fill="#000"/><path transform="translate(4.8 4.8) scale(0.6)" fill="#fff" d="M18.901 1.153h3.68l-8.04 9.19L24 22.846h-7.406l-5.8 -7.584 -6.638 7.584H0.474l8.6 -9.83L0 1.154h7.594l5.243 6.932ZM17.61 20.644h2.039L6.486 3.24H4.298Z"/></svg></button>
             <button class="cut-share-net" data-net="whatsapp" title="Share on WhatsApp" aria-label="Share on WhatsApp"><svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="20.0 19.1 581.6 581.6" width="18" height="18"><defs><linearGradient x1=".5" y1="0" x2=".5" y2="1" id="cwa-a"><stop stop-color="#20B038" offset="0%"/><stop stop-color="#60D66A" offset="100%"/></linearGradient><linearGradient x1=".5" y1="0" x2=".5" y2="1" id="cwa-b"><stop stop-color="#F9F9F9" offset="0%"/><stop stop-color="#FFF" offset="100%"/></linearGradient><linearGradient xlink:href="#cwa-a" id="cwa-f" x1="270.265" y1="1.184" x2="270.265" y2="541.56" gradientTransform="scale(.99775 1.00225)" gradientUnits="userSpaceOnUse"/><linearGradient xlink:href="#cwa-b" id="cwa-g" x1="279.952" y1=".811" x2="279.952" y2="560.571" gradientTransform="scale(.99777 1.00224)" gradientUnits="userSpaceOnUse"/><filter x="-.056" y="-.062" width="1.112" height="1.11" filterUnits="objectBoundingBox" id="cwa-c"><feGaussianBlur stdDeviation="2" in="SourceGraphic"/></filter><filter x="-.082" y="-.088" width="1.164" height="1.162" filterUnits="objectBoundingBox" id="cwa-d"><feOffset dy="-4" in="SourceAlpha" result="shadowOffsetOuter1"/><feGaussianBlur stdDeviation="12.5" in="shadowOffsetOuter1" result="shadowBlurOuter1"/><feComposite in="shadowBlurOuter1" in2="SourceAlpha" operator="out" result="shadowBlurOuter1"/><feColorMatrix values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0.21 0" in="shadowBlurOuter1"/></filter><path d="M576.337 707.516c-.018-49.17 12.795-97.167 37.15-139.475L574 423.48l147.548 38.792c40.652-22.23 86.423-33.944 133.002-33.962h.12c153.395 0 278.265 125.166 278.33 278.98.025 74.548-28.9 144.642-81.446 197.373C999 957.393 929.12 986.447 854.67 986.48c-153.42 0-278.272-125.146-278.333-278.964z" id="cwa-e"/></defs><g fill="none" fill-rule="evenodd"><g transform="matrix(1 0 0 -1 -542.696 1013.504)" fill="#000" fill-rule="nonzero" filter="url(#cwa-c)"><use filter="url(#cwa-d)" xlink:href="#cwa-e" width="100%" height="100%"/><use fill-opacity=".2" xlink:href="#cwa-e" width="100%" height="100%"/></g><path transform="matrix(1 0 0 -1 41.304 577.504)" fill-rule="nonzero" fill="url(#cwa-f)" d="M2.325 274.421c-.014-47.29 12.342-93.466 35.839-134.166L.077 1.187l142.314 37.316C181.6 17.133 225.745 5.856 270.673 5.84h.12c147.95 0 268.386 120.396 268.447 268.372.03 71.707-27.87 139.132-78.559 189.858-50.68 50.726-118.084 78.676-189.898 78.708-147.968 0-268.398-120.386-268.458-268.358"/><path transform="matrix(1 0 0 -1 31.637 586.837)" fill-rule="nonzero" fill="url(#cwa-g)" d="M2.407 283.847c-.018-48.996 12.784-96.824 37.117-138.983L.072.814l147.419 38.654c40.616-22.15 86.346-33.824 132.885-33.841h.12c153.26 0 278.02 124.724 278.085 277.994.026 74.286-28.874 144.132-81.374 196.678-52.507 52.544-122.326 81.494-196.711 81.528-153.285 0-278.028-124.704-278.09-277.98zm87.789-131.724l-5.503 8.74C61.555 197.653 49.34 240.17 49.36 283.828c.049 127.399 103.73 231.044 231.224 231.044 61.74-.025 119.765-24.09 163.409-67.763 43.639-43.67 67.653-101.726 67.635-163.469-.054-127.403-103.739-231.063-231.131-231.063h-.09c-41.482.022-82.162 11.159-117.642 32.214l-8.444 5.004L66.84 66.86z"/><path d="M242.63 186.78c-5.205-11.57-10.684-11.803-15.636-12.006-4.05-.173-8.687-.162-13.316-.162-4.632 0-12.161 1.74-18.527 8.693-6.37 6.953-24.322 23.761-24.322 57.947 0 34.19 24.901 67.222 28.372 71.862 3.474 4.634 48.07 77.028 118.694 104.88 58.696 23.146 70.64 18.542 83.38 17.384 12.74-1.158 41.11-16.805 46.9-33.03 5.791-16.223 5.791-30.128 4.054-33.035-1.738-2.896-6.37-4.633-13.319-8.108-6.95-3.475-41.11-20.287-47.48-22.603-6.37-2.316-11.003-3.474-15.635 3.482-4.633 6.95-17.94 22.596-21.996 27.23-4.053 4.643-8.106 5.222-15.056 1.747-6.949-3.485-29.328-10.815-55.876-34.485-20.656-18.416-34.6-41.16-38.656-48.116-4.053-6.95-.433-10.714 3.052-14.178 3.12-3.113 6.95-8.11 10.424-12.168 3.467-4.057 4.626-6.953 6.942-11.586 2.316-4.64 1.158-8.698-.579-12.172-1.737-3.475-15.241-37.838-21.42-51.576" fill="#FFF"/></g></svg></button>
@@ -1390,6 +1461,8 @@
             <label class="cut-sp-row" data-cut="sp-projects-row"><input type="checkbox" data-sp-top="projectsButton" /><span>Projects button</span></label>
             <div class="cut-sp-title cut-sp-title-sub">In Claude&rsquo;s sidebar</div>
             <label class="cut-sp-row" data-cut="sp-chatsearch-row"><input type="checkbox" data-sp-top="chatSearch" /><span>Chat history search</span></label>
+            <div class="cut-sp-sep"></div>
+            <button class="cut-sp-share" type="button" data-cut="sp-share">📸 Share my usage card</button>
             <div class="cut-sp-foot" data-cut="sp-foot">Keep at least one meter on.</div>
           </div>
         </span>
@@ -1410,6 +1483,8 @@
       // v1.2.16: the nudge is anchored to a button inside the strip — it can't
       // outlive it, or it floats over the page pointing at nothing.
       closeNudge(root);
+      closeShareNudge(root);
+      closeShareCard();
       closeLogoMenu();
       await dismissForHours(12);
       const el = document.getElementById(OVERLAY_ID);
@@ -1451,6 +1526,13 @@
       // Clicks inside the popover must not bubble to the strip's own click
       // handlers (which drop tooltips) or the document outside-click closer.
       settingsPop.addEventListener("click", (e) => e.stopPropagation());
+      // v1.3.8: "Share my usage card" — open to everyone, rated or not.
+      const spShare = settingsPop.querySelector('[data-cut="sp-share"]');
+      if (spShare) spShare.addEventListener("click", (e) => {
+        e.preventDefault(); e.stopPropagation();
+        closeSettingsPop(root);
+        openShareCard();
+      });
     }
     if (shareBtn) {
       shareBtn.addEventListener("click", (e) => {
@@ -1467,6 +1549,8 @@
       btn.addEventListener("click", (e) => {
         e.preventDefault(); e.stopPropagation();
         const net = btn.getAttribute("data-net");
+        // v1.3.8: the camera opens the "Share my usage" card instead of an intent.
+        if (net === "card") { closeSharePop(root); openShareCard(); return; }
         try { window.open(shareIntentUrl(net), "_blank", "noopener"); } catch (_) {}
         closeSharePop(root);
       });
@@ -1713,25 +1797,97 @@
     }
   }
 
-  // ===== v1.2.16: the Rate us nudge card =====
+  // ===== v1.2.16 / v1.3.8: the Rate us nudge card =====
   let nudgeOpen = false;
   let nudgeEl = null;
   let nudgeTimer = null;
   let nudgeOutsideHandler = null;
   let nudgeFollowHandler = null;
   let nudgeKeyHandler = null;
+  let nudgeResolved = false;   // true once this showing ended in a rate/feedback click
+  let nudgeKind = "streak";    // which moment this showing is for
 
-  // Whether the card is owed right now. Deliberately mirrors rateUnlocked()'s
-  // conventions: a null means "state hasn't loaded yet, stay quiet", and an
-  // installAt of 0 (upgrading user) counts the waiting period as already served
-  // — they've had the extension for weeks, re-gating them for 5 days is silly.
+  function localDay() {
+    const d = new Date();
+    return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+  }
+
+  // v1.3.8: one tick per calendar day on which the strip actually rendered real
+  // numbers. Cheap: compares a string, writes storage at most once a day.
+  function noteActiveDay() {
+    // Counted for raters too: the share popup (v1.3.8) uses the same streak.
+    if (!rateStateLoaded) return;
+    const today = localDay();
+    if (activeDays.last === today) return;
+    activeDays = { n: (activeDays.n || 0) + 1, last: today };
+    try { chrome.storage.local.set({ [ACTIVE_DAYS_KEY]: activeDays }); } catch (_) {}
+  }
+
+  // v1.3.8: session-reset detection for the "reset" moment. claude.ai's rolling
+  // window creeps resets_at forward by seconds on every poll, so change
+  // detection is useless — a reset is a DISCONTINUITY: resetsAt jumps forward
+  // ≥ 30 min, or the % collapses to ≤ 40% of the window's peak. Only a window
+  // that was genuinely used (peak ≥ RESET_MOMENT_PEAK) earns a moment: a reset
+  // from 4% is not a moment anyone felt.
+  function trackRateMoments(usage) {
+    if (!rateStateLoaded) return;
+    const s = usage && usage.session;
+    if (!s || typeof s.percent !== "number" || !isFinite(s.percent)) return;
+    const pct = s.percent;
+    // resetsAt is ms epoch from background.js; accept an ISO string too.
+    const r = Number(s.resetsAt) || (typeof s.resetsAt === "string" ? (Date.parse(s.resetsAt) || 0) : 0);
+    const prev = sessTrack;
+    let next;
+    if (!prev) {
+      next = { r, peak: pct };
+    } else {
+      const jumped = !!(r && prev.r && r - prev.r >= 30 * 60 * 1000);
+      const collapsed = prev.peak >= 20 && pct <= prev.peak * 0.4;
+      if (jumped || collapsed) {
+        if (prev.peak >= RESET_MOMENT_PEAK) {
+          rateMoment = { kind: "reset", at: Date.now() };
+          try { chrome.storage.local.set({ [MOMENT_KEY]: rateMoment }); } catch (_) {}
+        }
+        next = { r, peak: pct };
+      } else {
+        next = { r: r || prev.r, peak: Math.max(prev.peak, pct) };
+      }
+    }
+    // Write only when the peak or window changes, not on every poll's
+    // seconds-level creep of resetsAt.
+    const changed = !prev || next.peak !== prev.peak ||
+      Math.abs((next.r || 0) - (prev.r || 0)) >= 60 * 1000;
+    sessTrack = next;
+    if (changed) {
+      try { chrome.storage.local.set({ [SESS_TRACK_KEY]: next }); } catch (_) {}
+    }
+  }
+
+  function anyMeterBusy() {
+    const u = latestUsage;
+    if (!u) return false;
+    return ["session", "weekly"].some((k) => u[k] && Number(u[k].percent) >= BUSY_PCT);
+  }
+
+  // Which moment (if any) makes asking right now reasonable.
+  function currentMoment() {
+    if (rateMoment && rateMoment.kind === "reset" && Date.now() - rateMoment.at < MOMENT_TTL) return "reset";
+    if ((activeDays.n || 0) >= STREAK_DAYS) return "streak";
+    return null;
+  }
+
+  // Whether the card is owed right now. Conventions match rateUnlocked(): null
+  // means "state hasn't loaded yet, stay quiet"; installAt 0 (upgrading user)
+  // counts the waiting period as already served.
   function nudgeDue() {
-    if (rated) return false;                        // step 1: reviewers never see it
-    if (installAt === null || nudgeAt === null) return false;  // not loaded yet
-    if (!rateUnlocked()) return false;              // steps 2-3: button isn't out yet
-    if (installAt && Date.now() - installAt < NUDGE_FIRST) return false;  // step 4
-    if (!nudgeAt) return true;                      // never shown → first pop
-    return Date.now() - nudgeAt >= NUDGE_REPEAT;    // step 6: 2 days since last pop
+    if (rated) return false;                        // anyone who clicked Rate us: never
+    if (!rateStateLoaded || installAt === null || nudgeAt === null) return false;
+    if (nudgeDismissals >= NUDGE_MAX_DISMISS) return false;  // asked twice, said no twice
+    if (!rateUnlocked()) return false;              // button (the card's anchor) isn't out yet
+    if (installAt && Date.now() - installAt < NUDGE_FIRST) return false;
+    if (nudgeAt && Date.now() - nudgeAt < NUDGE_REPEAT) return false;
+    if (anyMeterBusy()) return false;               // about to be locked out: bad time
+    return currentMoment() !== null;
   }
 
   // Called from renderInto (i.e. on mount, on every usage update and on the 30s
@@ -1747,11 +1903,11 @@
 
   function maybeShowNudge() {
     if (nudgeOpen || !nudgeDue()) return;
-    // A card shown to a background tab is a wasted ask AND burns the 2-day
-    // slot, so wait for the tab to actually be looked at.
+    // A card shown to a background tab is a wasted ask AND burns the slot, so
+    // wait for the tab to actually be looked at.
     if (document.hidden) return;
     // Never stack on top of another popover.
-    if (settingsPopOpen || sharePopOpen || logoMenuOpen) return;
+    if (settingsPopOpen || sharePopOpen || logoMenuOpen || scPanel || shareNudgeEl) return;
     const root = document.getElementById(OVERLAY_ID);
     if (!root) return;
     const wrap = root.querySelector('[data-cut="rate-wrap"]');
@@ -1759,7 +1915,57 @@
     // The anchor has to be genuinely on screen — the strip can be mid-rebuild,
     // hidden by the 12h dismiss, or the button hidden by its own gate.
     if (!wrap || !btn || wrap.style.display === "none" || !btn.getClientRects().length) return;
-    showNudge(root, wrap);
+    showNudge(root, wrap, currentMoment() || "streak");
+  }
+
+  // v1.3.8: two steps. Step "ask" is a yes/no that costs nothing to answer;
+  // only a 👍 leads to the store. A 👎 gets a feedback link — and still a
+  // "rate anyway" link, so nobody is filtered away from the store.
+  function nudgeStepHtml(step) {
+    if (step === "yes") {
+      return `
+        <button class="cut-nudge-x" type="button" data-cut="nudge-close" aria-label="Not now">×</button>
+        <div class="cut-nudge-title">Would you rate it? 🙏🏻</div>
+        <div class="cut-nudge-stars" data-cut="nudge-stars" role="button" tabindex="0"
+             aria-label="Rate Claude Usage Meter">
+          <span>★</span><span>★</span><span>★</span><span>★</span><span>★</span>
+        </div>
+        <div class="cut-nudge-body">
+          I'm Sanjay, I build this solo &amp; free. A quick rating is how other
+          Claude users find it. Takes 10 seconds.
+        </div>
+        <div class="cut-nudge-actions">
+          <button class="cut-nudge-cta" type="button" data-cut="nudge-rate">⭐ Rate us</button>
+          <button class="cut-nudge-later" type="button" data-cut="nudge-later">Maybe later</button>
+        </div>`;
+    }
+    if (step === "no") {
+      return `
+        <button class="cut-nudge-x" type="button" data-cut="nudge-close" aria-label="Close">×</button>
+        <div class="cut-nudge-title">Sorry to hear that</div>
+        <div class="cut-nudge-body">
+          Tell me what's missing or broken and I'll work on it. — Sanjay
+        </div>
+        <div class="cut-nudge-actions">
+          <button class="cut-nudge-cta" type="button" data-cut="nudge-feedback">Share feedback</button>
+          <button class="cut-nudge-later" type="button" data-cut="nudge-rate">Rate us anyway</button>
+        </div>`;
+    }
+    const days = Math.max(activeDays.n || 0, STREAK_DAYS);
+    const title = nudgeKind === "reset"
+      ? "Fresh session unlocked 🎉"
+      : `${days} ${days === 1 ? "day" : "days"} with the meter 🙌`;
+    const body = nudgeKind === "reset"
+      ? "Your Claude session limit just reset. Is the meter helping you plan around your limits?"
+      : "Is Claude Usage Meter making your Claude work easier?";
+    return `
+      <button class="cut-nudge-x" type="button" data-cut="nudge-close" aria-label="Not now">×</button>
+      <div class="cut-nudge-title">${title}</div>
+      <div class="cut-nudge-body">${body}</div>
+      <div class="cut-nudge-actions">
+        <button class="cut-nudge-cta" type="button" data-cut="nudge-yes">👍 Yes, it helps</button>
+        <button class="cut-nudge-alt" type="button" data-cut="nudge-no">👎 Not really</button>
+      </div>`;
   }
 
   function buildNudge() {
@@ -1767,22 +1973,26 @@
     el.className = "cut-rate-nudge";
     el.setAttribute("role", "dialog");
     el.setAttribute("aria-label", "Rate Claude Usage Meter");
-    el.innerHTML = `
-      <button class="cut-nudge-x" type="button" data-cut="nudge-close" aria-label="Not now">×</button>
-      <div class="cut-nudge-title">Enjoying Claude Usage Meter?</div>
-      <div class="cut-nudge-stars" data-cut="nudge-stars" role="button" tabindex="0"
-           aria-label="Leave a 5 star review">
-        <span>★</span><span>★</span><span>★</span><span>★</span><span>★</span>
-      </div>
-      <div class="cut-nudge-body">
-        Pls Rate us &amp; this button disappears forever after you review. 🙏🏻
-      </div>
-      <div class="cut-nudge-actions">
-        <button class="cut-nudge-cta" type="button" data-cut="nudge-rate">Write a review</button>
-        <button class="cut-nudge-later" type="button" data-cut="nudge-later">Maybe later</button>
-      </div>
-    `;
+    el.innerHTML = nudgeStepHtml("ask");
     return el;
+  }
+
+  function setNudgeStep(step) {
+    if (!nudgeEl) return;
+    nudgeEl.innerHTML = nudgeStepHtml(step);
+    nudgeEl.dataset.step = step;
+    // Height changed — keep the arrow on the button.
+    requestAnimationFrame(positionNudge);
+    const stars = nudgeEl.querySelector('[data-cut="nudge-stars"]');
+    if (stars) {
+      stars.addEventListener("keydown", (ev) => {
+        if (ev.key === "Enter" || ev.key === " ") {
+          ev.preventDefault();
+          nudgeResolved = true;
+          doRate(document.getElementById(OVERLAY_ID));
+        }
+      });
+    }
   }
 
   // Same anchoring maths as positionSettingsPop / the share popover: above the
@@ -1812,15 +2022,21 @@
     nudgeEl.style.top = top + "px";
   }
 
-  function showNudge(root, wrap) {
+  function showNudge(root, wrap, kind) {
     nudgeOpen = true;
+    nudgeResolved = false;
+    nudgeKind = kind;
     // Stamp the shown-at time FIRST. Other claude.ai tabs see it through
     // storage.onChanged and cancel their own pending pop, so the user gets one
-    // card, not one per tab — and the 2-day repeat clock starts from now.
+    // card, not one per tab — and the repeat clock starts from now. The reset
+    // moment is spent by being shown.
     nudgeAt = Date.now();
-    try { chrome.storage.local.set({ [NUDGE_KEY]: nudgeAt }); } catch (_) {}
+    const patch = { [NUDGE_KEY]: nudgeAt };
+    if (kind === "reset") { rateMoment = null; patch[MOMENT_KEY] = null; }
+    try { chrome.storage.local.set(patch); } catch (_) {}
 
     nudgeEl = buildNudge();
+    nudgeEl.dataset.step = "ask";
     nudgeEl.classList.toggle("cut-pop-dark", root.classList.contains("cut-theme-dark"));
     document.body.appendChild(nudgeEl);
     nudgeEl.style.visibility = "hidden";
@@ -1841,23 +2057,21 @@
       ev.stopPropagation();
       const t = ev.target.closest("[data-cut]");
       const what = t && t.getAttribute("data-cut");
-      // Both the CTA and the star row are "yes" — the stars are a button in
-      // everything but name, and people click them expecting exactly this.
-      if (what === "nudge-rate" || what === "nudge-stars") doRate(document.getElementById(OVERLAY_ID));
-      else if (what === "nudge-later" || what === "nudge-close") closeNudge(root);
+      if (what === "nudge-yes") setNudgeStep("yes");
+      else if (what === "nudge-no") setNudgeStep("no");
+      else if (what === "nudge-rate" || what === "nudge-stars") {
+        nudgeResolved = true;
+        doRate(document.getElementById(OVERLAY_ID));
+      } else if (what === "nudge-feedback") {
+        // A 👎 with feedback counts toward the cap like a "not now" — they've
+        // told us how they feel; asking them to rate again soon would be deaf.
+        try { chrome.storage.local.set({ [NUDGE_FEEDBACK_KEY]: Date.now() }); } catch (_) {}
+        try { window.open(feedbackUrl(), "_blank", "noopener"); } catch (_) {}
+        closeNudge(root);
+      } else if (what === "nudge-later" || what === "nudge-close") closeNudge(root);
     });
-    const stars = nudgeEl.querySelector('[data-cut="nudge-stars"]');
-    if (stars) {
-      stars.addEventListener("keydown", (ev) => {
-        if (ev.key === "Enter" || ev.key === " ") {
-          ev.preventDefault();
-          doRate(document.getElementById(OVERLAY_ID));
-        }
-      });
-    }
 
-    // Dismissal paths — all of them leave the stamp in place, so the card comes
-    // back in NUDGE_REPEAT days (flow step 6) rather than being lost.
+    // Dismissal paths — each closes the card and counts one dismissal.
     nudgeOutsideHandler = (ev) => {
       if (nudgeEl && !nudgeEl.contains(ev.target)) closeNudge(root);
     };
@@ -1877,10 +2091,20 @@
     window.addEventListener("scroll", nudgeFollowHandler, true);
   }
 
-  function closeNudge(root) {
+  // `silent` = torn down for a reason that isn't the user saying "not now"
+  // (rated elsewhere, strip rebuilt) — don't count a dismissal for it.
+  function closeNudge(root, silent) {
     if (nudgeTimer) { clearTimeout(nudgeTimer); nudgeTimer = null; }
     if (!nudgeOpen && !nudgeEl) return;
+    const wasOpen = nudgeOpen;
     nudgeOpen = false;
+    // "Not now", ×, Esc, click-away and the 👎 → feedback path all count one
+    // toward NUDGE_MAX_DISMISS. A rating sets `rated` first, so it never counts.
+    if (wasOpen && !silent && !rated) {
+      nudgeDismissals += 1;
+      try { chrome.storage.local.set({ [NUDGE_DISMISS_KEY]: nudgeDismissals }); } catch (_) {}
+    }
+    nudgeResolved = false;
     if (nudgeOutsideHandler) {
       document.removeEventListener("click", nudgeOutsideHandler, true);
       nudgeOutsideHandler = null;
@@ -1902,6 +2126,579 @@
     }
     const r = root || document.getElementById(OVERLAY_ID);
     const wrap = r && r.querySelector('[data-cut="rate-wrap"]');
+    if (wrap) wrap.classList.remove("cut-rate-pulse", "cut-pop-open");
+  }
+
+  // ===== v1.3.8: "Share my usage" card =====
+  // A 1200×630 image of the user's own meters (the size X and LinkedIn preview
+  // natively), drawn on a <canvas>. claude.ai's CSP blocks chrome-extension:
+  // and data: images, so the preview IS the canvas, and fonts/logo are fetched
+  // by the content script (privileged, never meets the page CSP) and handed
+  // over as ArrayBuffer / ImageBitmap. Only percentages and reset times go on
+  // the image — no name, email, org or chat content.
+  const SC_W = 1200, SC_H = 630;
+  const SC_FONT_HEAD = "CUM Poppins";
+  const SC_FONT_BODY = "CUM Inter";
+  const SHARE_CARD_UTM = "usage-card";
+  let scFontsP = null;
+
+  function scLoadFonts() {
+    if (scFontsP) return scFontsP;
+    const list = [
+      [SC_FONT_HEAD, "fonts/poppins-latin-800-normal.woff2", "800"],
+      [SC_FONT_BODY, "fonts/inter-latin-500-normal.woff2", "500"],
+      [SC_FONT_BODY, "fonts/inter-latin-600-normal.woff2", "600"],
+      [SC_FONT_BODY, "fonts/inter-latin-700-normal.woff2", "700"]
+    ];
+    scFontsP = Promise.all(list.map(([fam, path, weight]) =>
+      fetch(chrome.runtime.getURL(path))
+        .then((r) => (r.ok ? r.arrayBuffer() : null))
+        .then((buf) => {
+          if (!buf || typeof FontFace !== "function") return;
+          const ff = new FontFace(fam, buf, { weight });
+          return ff.load().then((f) => { document.fonts.add(f); });
+        })
+        .catch(() => {})
+    ));
+    return scFontsP;
+  }
+  function shareCardStoreUrl() {
+    const k = browserKind();
+    if (k === "firefox") return "https://addons.mozilla.org/en-US/firefox/addon/claude-usage-meter-ai/?utm_source=" + SHARE_CARD_UTM;
+    if (k === "edge") return EDGE_STORE_URL;
+    return "https://chromewebstore.google.com/detail/kgpahkcgadpnklinijdojapiadnfelae?utm_source=" + SHARE_CARD_UTM;
+  }
+
+  // The meters that go on the card, in strip order. Respects "Show in strip"
+  // only for Fable; Session/Weekly are the point of the card.
+  function scRows() {
+    const u = latestUsage || {};
+    const rows = [];
+    const add = (name, d) => {
+      if (!d || d.percent == null || !isFinite(Number(d.percent))) return;
+      rows.push({ name, pct: Math.max(0, Math.min(100, Math.round(Number(d.percent)))), resetsAt: Number(d.resetsAt) || 0 });
+    };
+    add("Session", u.session);
+    add("Weekly", u.weekly);
+    const f = fableData();
+    if (f) add(fableLabel(f), f);
+    return rows;
+  }
+
+  // Headline + the post text that goes with it. Picks the most "postable"
+  // truth: a heavy week beats a heavy session beats a calm day.
+  function scStory(rows) {
+    const byName = (n) => rows.find((r) => r.name === n);
+    const w = byName("Weekly"), sess = byName("Session");
+    const day = new Date().toLocaleDateString("en-US", { weekday: "long" });
+    const daysLeft = w && w.resetsAt ? (w.resetsAt - Date.now()) / DAY_MS : 0;
+    if (w && w.pct >= 70) {
+      const tail = daysLeft >= 2 ? `and it's only ${day}.` : "Reset can't come soon enough.";
+      return {
+        l1: `${w.pct}% of my weekly`, l2: `Claude limit, gone.`, sub: tail,
+        post: `I've used ${w.pct}% of my weekly Claude limit, ${tail.replace(/\.$/, "")}. I track it live, right above the chat box, with Claude Usage Meter:`
+      };
+    }
+    if (sess && sess.pct >= 80) {
+      const when = sess.resetsAt ? `Resets in ${fmtReset(sess.resetsAt)}.` : "Deep work mode.";
+      return {
+        l1: `${sess.pct}% of my Claude`, l2: `session, used.`, sub: when,
+        post: `${sess.pct}% of my Claude session used. ${when} I keep an eye on it live with Claude Usage Meter:`
+      };
+    }
+    return {
+      l1: "I always know", l2: "my Claude limits.", sub: "Session and weekly usage, live above the chat box.",
+      post: "I always know how much of my Claude limit is left: session and weekly usage, live above the chat box, with Claude Usage Meter:"
+    };
+  }
+
+  function scRoundRect(ctx, x, y, w, h, r) {
+    r = Math.min(r, h / 2, w / 2);
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r);
+    ctx.arcTo(x, y, x + w, y, r);
+    ctx.closePath();
+  }
+  function scFitFont(ctx, text, weightFam, maxW, start, min) {
+    let size = start;
+    for (; size > min; size -= 2) {
+      ctx.font = `${weightFam.replace("{s}", size)}`;
+      if (ctx.measureText(text).width <= maxW) break;
+    }
+    return size;
+  }
+
+  // The gauge mark, same geometry as icons/usage-meter-logo.svg (24×24 box).
+  function scDrawGauge(ctx, x, y, size) {
+    const k = size / 24;
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.scale(k, k);
+    ctx.lineWidth = 3.66;
+    ctx.strokeStyle = "#a8a8ad";
+    ctx.stroke(new Path2D("M19.78 4.08A14.11 14.11 0 0 0 7.82 10.71"));
+    ctx.strokeStyle = "#d97757";
+    ctx.stroke(new Path2D("M7.82 10.71A14.11 14.11 0 0 0 6.15 21.84"));
+    ctx.fillStyle = "#d97757";
+    ctx.fill(new Path2D("M21.21 16.38 L10.52 10.34 L10.00 11.00 L18.36 19.99 Z"));
+    ctx.beginPath(); ctx.arc(19.78, 18.19, 3.84, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 0.66; ctx.lineCap = "round";
+    ctx.stroke(new Path2D("M19.97 18.21L22.83 18.56M19.93 18.31L22.23 20.04M19.86 18.37L20.98 21.02M19.76 18.38L19.41 21.24M19.66 18.34L17.93 20.64M19.60 18.27L16.95 19.39M19.59 18.17L16.73 17.82M19.63 18.07L17.33 16.34M19.70 18.01L18.58 15.36M19.80 18.00L20.15 15.14M19.90 18.04L21.63 15.74M19.96 18.11L22.61 16.99"));
+    ctx.fillStyle = "#ffffff";
+    ctx.beginPath(); ctx.arc(19.78, 18.19, 0.72, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
+  }
+
+  // Same thresholds as colorClass() / overlay.css .cut-color-*.
+  function scPctColor(p) {
+    if (p >= 90) return "#ef4444";
+    if (p >= 75) return "#f97316";
+    if (p >= 50) return "#f59e0b";
+    return "#10b981";
+  }
+
+  // The usage strip exactly as it sits above Claude's chat box, dark theme,
+  // at 2× so it reads in a feed. Measured first, then scaled down to fit.
+  function scDrawStrip(ctx, x, yBottom, maxW, rows, fonts, chat) {
+    const S = 2;                       // strip px → image px
+    const FS = 12 * S;                 // strip font size (12px in the product)
+    const GAP = 9 * S, PADL = 10 * S, PADR = 12 * S, H = 30 * S;
+    const TXT = "#ece9e3";
+    const items = [];                  // { w, draw(cx, cy) }
+    const text = (str, font, color, alpha) => {
+      ctx.font = font;
+      const w = ctx.measureText(str).width;
+      return { w, draw: (cx, cy) => { ctx.save(); ctx.globalAlpha = alpha == null ? 1 : alpha; ctx.font = font; ctx.fillStyle = color; ctx.textBaseline = "middle"; ctx.fillText(str, cx, cy); ctx.restore(); } };
+    };
+    const group = (parts, gap, wash) => {
+      const w = parts.reduce((a, p) => a + p.w, 0) + gap * (parts.length - 1);
+      return { w, draw: (cx, cy) => {
+        if (wash) {
+          scRoundRect(ctx, cx - 3 * S, cy - 10 * S, w + 6 * S, 20 * S, 6 * S);
+          ctx.fillStyle = "rgba(239,68,68,0.12)"; ctx.fill();
+          ctx.strokeStyle = "rgba(239,68,68,0.35)"; ctx.lineWidth = 1 * S; ctx.stroke();
+        }
+        let px = cx;
+        for (const p of parts) { p.draw(px, cy); px += p.w + gap; }
+      } };
+    };
+    const divider = { w: 1 * S, draw: (cx, cy) => { ctx.fillStyle = "rgba(236,233,227,0.22)"; ctx.fillRect(cx, cy - 6.5 * S, 1 * S, 13 * S); } };
+    const logoSz = 18 * S;
+
+    items.push({ w: logoSz, draw: (cx, cy) => scDrawGauge(ctx, cx, cy - logoSz / 2, logoSz) });
+    rows.forEach((r) => {
+      items.push(divider);
+      const parts = [
+        text(r.name, fonts.body5(FS), TXT, 0.62),
+        text(`${r.pct}%`, (r.pct >= 90 ? fonts.body7 : fonts.body6)(FS), scPctColor(r.pct))
+      ];
+      if (r.resetsAt && (r.name === "Session" || r.name === "Weekly")) {
+        parts.push(text("·", fonts.body5(FS), TXT, 0.45));
+        parts.push(group([
+          text("Reset in", fonts.body5(11 * S), TXT, 0.62),
+          text(fmtReset(r.resetsAt), fonts.body6(11 * S), r.pct >= 90 ? "#ef4444" : TXT, 0.9)
+        ], 4 * S));
+      }
+      items.push(group(parts, 6 * S, r.pct >= 90));
+    });
+
+    // v1.3.8: "Chat ~36.9K tokens", only when the strip itself is showing it
+    // (on a chat page with a number for THAT chat). Same amber/orange steps.
+    if (chat && chat.tokens > 0) {
+      const n = chat.tokens;
+      const col = n >= 150000 ? "#f97316" : n >= 100000 ? "#f59e0b" : TXT;
+      const icSz = 13 * S;
+      items.push(divider);
+      items.push(group([
+        { w: icSz, draw: (cx, cy) => {
+          ctx.save();
+          ctx.translate(cx, cy - icSz / 2); ctx.scale(icSz / 24, icSz / 24);
+          ctx.globalAlpha = 0.62; ctx.strokeStyle = TXT; ctx.lineWidth = 2.2; ctx.lineJoin = "round"; ctx.lineCap = "round";
+          ctx.stroke(new Path2D("M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"));
+          ctx.restore();
+        } },
+        text("Chat", fonts.body5(FS), TXT, 0.62),
+        text("~" + fmtTokens(n), fonts.body6(FS), col),
+        text("tokens", fonts.body5(11 * S), TXT, 0.62)
+      ], 5 * S));
+    }
+    const contentW = items.reduce((a, it) => a + it.w, 0) + GAP * (items.length - 1);
+    const pillW = PADL + contentW + PADR;
+    const k = Math.min(1, maxW / pillW);
+    ctx.save();
+    ctx.translate(x, yBottom - H * k);
+    ctx.scale(k, k);
+    scRoundRect(ctx, 0, 0, pillW, H, H / 2);
+    ctx.fillStyle = "#2a2620"; ctx.fill();
+    ctx.strokeStyle = "rgba(255,255,255,0.10)"; ctx.lineWidth = 1 * S; ctx.stroke();
+    let cx = PADL;
+    for (const it of items) { it.draw(cx, H / 2); cx += it.w + GAP; }
+    ctx.restore();
+    return H * k;
+  }
+
+  // A Claude-style composer (dark), so the strip is seen where it lives.
+  function scDrawComposer(ctx, x, y, w, h, fonts) {
+    ctx.save();
+    ctx.shadowColor = "rgba(0,0,0,0.35)"; ctx.shadowBlur = 24; ctx.shadowOffsetY = 6;
+    scRoundRect(ctx, x, y, w, h, 26);
+    ctx.fillStyle = "#30302e"; ctx.fill();
+    ctx.restore();
+    scRoundRect(ctx, x, y, w, h, 26);
+    ctx.strokeStyle = "rgba(255,255,255,0.09)"; ctx.lineWidth = 1.5; ctx.stroke();
+    ctx.font = fonts.body5(24);
+    ctx.fillStyle = "#8f8b85";
+    ctx.textBaseline = "middle";
+    ctx.fillText("Reply to Claude…", x + 30, y + 36);
+    // "+" button, bottom-left
+    const by = y + h - 42;
+    scRoundRect(ctx, x + 22, by - 18, 36, 36, 10);
+    ctx.strokeStyle = "rgba(255,255,255,0.18)"; ctx.lineWidth = 1.5; ctx.stroke();
+    ctx.strokeStyle = "#bcb8b1"; ctx.lineWidth = 2.2; ctx.lineCap = "round";
+    ctx.beginPath(); ctx.moveTo(x + 40, by - 8); ctx.lineTo(x + 40, by + 8); ctx.moveTo(x + 32, by); ctx.lineTo(x + 48, by); ctx.stroke();
+    // Send button, bottom-right
+    scRoundRect(ctx, x + w - 60, by - 18, 38, 36, 10);
+    ctx.fillStyle = "#d97757"; ctx.fill();
+    ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 2.4; ctx.lineJoin = "round";
+    const sx = x + w - 41;
+    ctx.beginPath(); ctx.moveTo(sx, by + 9); ctx.lineTo(sx, by - 8); ctx.moveTo(sx - 7, by - 1); ctx.lineTo(sx, by - 8); ctx.lineTo(sx + 7, by - 1); ctx.stroke();
+  }
+
+  async function renderShareCanvas() {
+    await Promise.race([scLoadFonts(), new Promise((r) => setTimeout(r, 1500))]);
+    const rows = scRows();
+    const story = scStory(rows);
+    const c = document.createElement("canvas");
+    c.width = SC_W; c.height = SC_H;
+    const ctx = c.getContext("2d");
+    const fam = (weight, family) => (s) => `${weight} ${s}px "${family}", ui-sans-serif, system-ui, sans-serif`;
+    const fonts = {
+      head: fam(800, SC_FONT_HEAD),
+      body5: fam(500, SC_FONT_BODY),
+      body6: fam(600, SC_FONT_BODY),
+      body7: fam(700, SC_FONT_BODY)
+    };
+    const CORAL = "#d97757", INK = "#f4efe8", MUTED = "#a39c93";
+    const X = 72, maxW = SC_W - 2 * X;
+
+    // Background: warm dark with a soft coral glow top-right.
+    ctx.fillStyle = "#1b1917";
+    ctx.fillRect(0, 0, SC_W, SC_H);
+    const g = ctx.createRadialGradient(SC_W - 120, -40, 20, SC_W - 120, -40, 640);
+    g.addColorStop(0, "rgba(217,119,87,0.30)");
+    g.addColorStop(1, "rgba(217,119,87,0)");
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, SC_W, SC_H);
+    ctx.fillStyle = CORAL;
+    ctx.fillRect(0, 0, SC_W, 6);
+
+    // Header: gauge + name, byline right.
+    scDrawGauge(ctx, X, 50, 40);
+    ctx.textBaseline = "middle";
+    ctx.fillStyle = INK;
+    ctx.font = fonts.body6(26);
+    ctx.fillText("Claude Usage Meter", X + 54, 71);
+    ctx.textAlign = "right";
+    ctx.fillStyle = MUTED;
+    ctx.font = fonts.body5(20);
+    ctx.fillText("by SelectorsHub", SC_W - X, 71);
+    ctx.textAlign = "left";
+
+    // Headline, two lines, second in coral. Shrinks to fit.
+    const hs = Math.min(scFitFont(ctx, story.l1, fonts.head("{s}"), maxW, 66, 34),
+                        scFitFont(ctx, story.l2, fonts.head("{s}"), maxW, 66, 34));
+    ctx.textBaseline = "alphabetic";
+    ctx.font = fonts.head(hs);
+    let y = 126 + hs;
+    ctx.fillStyle = INK;
+    ctx.fillText(story.l1, X, y);
+    y += Math.round(hs * 1.1);
+    ctx.fillStyle = CORAL;
+    ctx.fillText(story.l2, X, y);
+    y += 44;
+    ctx.fillStyle = MUTED;
+    ctx.font = fonts.body5(24);
+    ctx.fillText(story.sub, X, y);
+
+    // The product, as it looks: strip riding just above the composer.
+    const compH = 126, compY = SC_H - 72 - compH;
+    scDrawComposer(ctx, X, compY, maxW, compH, fonts);
+    const chatOn = fieldOn("chatTokens") && chatTokens && chatTokens.uuid === currentChatId();
+    if (rows.length) scDrawStrip(ctx, X + 8, compY - 12, maxW - 16, rows, fonts,
+      chatOn ? { tokens: Number(chatTokens.tokens) || 0 } : null);
+
+    // Footer.
+    ctx.textBaseline = "alphabetic";
+    ctx.fillStyle = MUTED;
+    ctx.font = fonts.body5(19);
+    ctx.fillText("Track yours: search “Claude Usage Meter” in your browser's extension store", X, SC_H - 30);
+    return { canvas: c, story };
+  }
+
+  function scBlob(canvas) {
+    return new Promise((res) => {
+      try { canvas.toBlob((b) => res(b), "image/png"); } catch (_) { res(null); }
+    });
+  }
+  async function scCopyImage(canvas) {
+    try {
+      const blob = await scBlob(canvas);
+      if (!blob || !window.ClipboardItem || !navigator.clipboard || !navigator.clipboard.write) return false;
+      await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+      return true;
+    } catch (_) { return false; }
+  }
+  async function scDownload(canvas) {
+    const blob = await scBlob(canvas);
+    if (!blob) return false;
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `claude-usage-${new Date().toISOString().slice(0, 10)}.png`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 4000);
+    return true;
+  }
+  function scPasteKey() {
+    try { return /Mac|iPhone|iPad/i.test(navigator.platform || navigator.userAgent || "") ? "⌘V" : "Ctrl+V"; } catch (_) { return "Ctrl+V"; }
+  }
+  function markShared() {
+    if (shared) return;
+    shared = true;
+    try { chrome.storage.local.set({ [SHARE_KEY]: true }); } catch (_) {}
+    closeShareNudge(null, true);
+    const root = document.getElementById(OVERLAY_ID);
+    if (root && !sharePopOpen) applyShareVisibility(root);
+  }
+
+  let scPanel = null;
+  let scOutside = null;
+  let scKey = null;
+  function closeShareCard() {
+    if (scOutside) { document.removeEventListener("click", scOutside, true); scOutside = null; }
+    if (scKey) { document.removeEventListener("keydown", scKey, true); scKey = null; }
+    if (scPanel) {
+      const el = scPanel; scPanel = null;
+      el.classList.remove("cut-sc-in");
+      setTimeout(() => el.remove(), 180);
+    }
+  }
+  function positionShareCard() {
+    if (!scPanel) return;
+    const root = document.getElementById(OVERLAY_ID);
+    const pr = scPanel.getBoundingClientRect();
+    const vw = window.innerWidth, vh = window.innerHeight;
+    let top = Math.max(8, (vh - pr.height) / 2);
+    if (root) {
+      const sr = root.getBoundingClientRect();
+      if (sr.top - pr.height - 12 >= 8) top = sr.top - pr.height - 12;
+    }
+    scPanel.style.left = Math.max(8, (vw - pr.width) / 2) + "px";
+    scPanel.style.top = top + "px";
+  }
+
+  async function openShareCard() {
+    if (scPanel) return;
+    closeShareNudge(null, true);
+    if (sharePopOpen) closeSharePop(document.getElementById(OVERLAY_ID));
+    const root = document.getElementById(OVERLAY_ID);
+    const el = document.createElement("div");
+    el.className = "cut-sc-panel";
+    el.setAttribute("role", "dialog");
+    el.setAttribute("aria-label", "Share my usage");
+    if (root && root.classList.contains("cut-theme-dark")) el.classList.add("cut-pop-dark");
+    el.innerHTML = `
+      <button class="cut-sc-x" type="button" data-sc="close" aria-label="Close">×</button>
+      <div class="cut-sc-title">Share my usage</div>
+      <div class="cut-sc-frame" data-sc="frame"><div class="cut-sc-loading">Drawing your card…</div></div>
+      <div class="cut-sc-note">Only your usage percentages are on the image. No name, email or chats.</div>
+      <div class="cut-sc-actions">
+        <button class="cut-sc-btn cut-sc-primary" type="button" data-sc="x">Post on X</button>
+        <button class="cut-sc-btn cut-sc-primary" type="button" data-sc="linkedin">Post on LinkedIn</button>
+        <button class="cut-sc-btn" type="button" data-sc="copy">Copy image</button>
+        <button class="cut-sc-btn" type="button" data-sc="download">Download</button>
+      </div>
+      <div class="cut-sc-toast" data-sc="toast" hidden></div>`;
+    scPanel = el;
+    document.body.appendChild(el);
+    positionShareCard();
+    requestAnimationFrame(() => { if (scPanel === el) el.classList.add("cut-sc-in"); });
+
+    let rendered = null;
+    const ready = renderShareCanvas().then((r) => {
+      rendered = r;
+      const frame = el.querySelector('[data-sc="frame"]');
+      if (frame) { frame.textContent = ""; r.canvas.className = "cut-sc-canvas"; frame.appendChild(r.canvas); }
+      requestAnimationFrame(positionShareCard);
+      return r;
+    }).catch(() => null);
+
+    const toast = (msg) => {
+      const t = el.querySelector('[data-sc="toast"]');
+      if (!t) return;
+      t.textContent = msg; t.hidden = false;
+      clearTimeout(t._h); t._h = setTimeout(() => { t.hidden = true; }, 5000);
+    };
+
+    el.addEventListener("click", async (ev) => {
+      ev.stopPropagation();
+      const b = ev.target.closest("[data-sc]");
+      const what = b && b.getAttribute("data-sc");
+      if (!what || what === "frame" || what === "toast") return;
+      if (what === "close") { closeShareCard(); return; }
+      const r = rendered || await ready;
+      if (!r) { toast("Couldn't draw the card. Please try again."); return; }
+      if (what === "copy") {
+        const ok = await scCopyImage(r.canvas);
+        toast(ok ? "Image copied. Paste it anywhere." : "Copy isn't allowed here. Use Download instead.");
+        if (ok) markShared();
+      } else if (what === "download") {
+        const ok = await scDownload(r.canvas);
+        toast(ok ? "Saved to your downloads." : "Download failed. Please try again.");
+        if (ok) markShared();
+      } else if (what === "x" || what === "linkedin") {
+        // Intents can't carry an image, so the image rides on the clipboard.
+        // Copy FIRST: once the new tab takes focus, clipboard writes fail.
+        const ok = await scCopyImage(r.canvas);
+        const link = shareCardStoreUrl();
+        const url = what === "x"
+          ? `https://twitter.com/intent/tweet?text=${encodeURIComponent(r.story.post)}&url=${encodeURIComponent(link)}`
+          : `https://www.linkedin.com/feed/?shareActive=true&text=${encodeURIComponent(r.story.post + " " + link)}`;
+        try { window.open(url, "_blank", "noopener"); } catch (_) {}
+        toast(ok ? `Image copied — press ${scPasteKey()} in the post to add it.` : "Tip: use Download, then attach the image to your post.");
+        markShared();
+      }
+    });
+    // isTrusted: the Download path clicks a synthetic <a> on <body>; that must
+    // not read as "clicked outside".
+    scOutside = (ev) => { if (ev.isTrusted && scPanel && !scPanel.contains(ev.target)) closeShareCard(); };
+    setTimeout(() => document.addEventListener("click", scOutside, true), 0);
+    scKey = (ev) => { if (ev.key === "Escape") closeShareCard(); };
+    document.addEventListener("keydown", scKey, true);
+  }
+
+  // ===== v1.3.8: the Share popup =====
+  // For people who've already rated (happy users) and SHARE_DELAY has passed
+  // since. Same moments and caps as the rating popup, its own counters, and
+  // never within NUDGE_REPEAT of the last rating popup so asks stay spaced.
+  const SHARE_NUDGE_KEY = "share_nudge_at";
+  const SHARE_NUDGE_DISMISS_KEY = "share_nudge_dismissals";
+  const SHARE_STREAK_DAYS = RATE_TEST ? 1 : 14;
+  let shareNudgeAt = null;
+  let shareNudgeDismissals = 0;
+  let shareNudgeEl = null;
+  let shareNudgeTimer = null;
+  let shareNudgeOutside = null;
+  let shareNudgeKey = null;
+  let shareNudgeFollow = null;
+
+  function shareNudgeDue() {
+    if (!rated || shared || !rateStateLoaded || shareNudgeAt === null) return false;
+    if (!shareUnlocked()) return false;
+    if (shareNudgeDismissals >= NUDGE_MAX_DISMISS) return false;
+    if (shareNudgeAt && Date.now() - shareNudgeAt < NUDGE_REPEAT) return false;
+    if (nudgeAt && Date.now() - nudgeAt < NUDGE_REPEAT) return false;
+    if (ratedAt && Date.now() - ratedAt < Math.max(SHARE_DELAY, RATE_TEST ? 30 * 1000 : 0)) return false;
+    if (rateMoment && rateMoment.kind === "reset" && Date.now() - rateMoment.at < MOMENT_TTL) return true;
+    return (activeDays.n || 0) >= SHARE_STREAK_DAYS;
+  }
+  function scheduleShareNudge() {
+    if (shareNudgeTimer || shareNudgeEl || nudgeOpen || !shareNudgeDue()) return;
+    shareNudgeTimer = setTimeout(() => {
+      shareNudgeTimer = null;
+      maybeShowShareNudge();
+    }, NUDGE_MOUNT_DELAY);
+  }
+  function positionShareNudge() {
+    const root = document.getElementById(OVERLAY_ID);
+    const btn = root && root.querySelector('[data-cut="share"]');
+    if (!shareNudgeEl || !btn) return;
+    const br = btn.getBoundingClientRect();
+    const nr = shareNudgeEl.getBoundingClientRect();
+    const vw = window.innerWidth;
+    let left = Math.max(8, Math.min(br.left + br.width / 2 - nr.width / 2, vw - nr.width - 8));
+    let top;
+    if (br.top >= nr.height + 14) { top = br.top - nr.height - 10; shareNudgeEl.classList.remove("cut-pop-below"); }
+    else { top = br.bottom + 10; shareNudgeEl.classList.add("cut-pop-below"); }
+    shareNudgeEl.style.setProperty("--cut-arrow-x", Math.max(14, Math.min(br.left + br.width / 2 - left, nr.width - 14)) + "px");
+    shareNudgeEl.style.left = left + "px";
+    shareNudgeEl.style.top = top + "px";
+  }
+  function maybeShowShareNudge() {
+    if (shareNudgeEl || nudgeOpen || scPanel || !shareNudgeDue() || document.hidden) return;
+    if (settingsPopOpen || sharePopOpen || logoMenuOpen) return;
+    const root = document.getElementById(OVERLAY_ID);
+    const wrap = root && root.querySelector('[data-cut="share-wrap"]');
+    const btn = root && root.querySelector('[data-cut="share"]');
+    if (!wrap || !btn || wrap.style.display === "none" || !btn.getClientRects().length) return;
+
+    shareNudgeAt = Date.now();
+    const patch = { [SHARE_NUDGE_KEY]: shareNudgeAt };
+    const isReset = rateMoment && rateMoment.kind === "reset" && Date.now() - rateMoment.at < MOMENT_TTL;
+    if (isReset) { rateMoment = null; patch[MOMENT_KEY] = null; }
+    try { chrome.storage.local.set(patch); } catch (_) {}
+
+    const el = document.createElement("div");
+    el.className = "cut-rate-nudge cut-share-nudge";
+    el.setAttribute("role", "dialog");
+    el.setAttribute("aria-label", "Share Claude Usage Meter");
+    el.classList.toggle("cut-pop-dark", root.classList.contains("cut-theme-dark"));
+    el.innerHTML = `
+      <button class="cut-nudge-x" type="button" data-cut="snudge-close" aria-label="Not now">×</button>
+      <div class="cut-nudge-title">${isReset ? "Fresh session. Show it off? 📸" : "Know someone who keeps hitting Claude limits?"}</div>
+      <div class="cut-nudge-body">Share a card of your usage, and they'll see how you keep track. Thanks for helping it grow 🙏🏻</div>
+      <div class="cut-nudge-actions">
+        <button class="cut-nudge-cta" type="button" data-cut="snudge-card">📸 Share my usage</button>
+        <button class="cut-nudge-later" type="button" data-cut="snudge-later">Maybe later</button>
+      </div>`;
+    shareNudgeEl = el;
+    document.body.appendChild(el);
+    el.style.visibility = "hidden";
+    positionShareNudge();
+    el.style.visibility = "";
+    requestAnimationFrame(() => el.classList.add("cut-nudge-in"));
+    wrap.classList.add("cut-rate-pulse", "cut-pop-open");
+    hidePortalTip();
+
+    el.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      const t = ev.target.closest("[data-cut]");
+      const what = t && t.getAttribute("data-cut");
+      if (what === "snudge-card") { closeShareNudge(root, true); openShareCard(); }
+      else if (what === "snudge-later" || what === "snudge-close") closeShareNudge(root);
+    });
+    shareNudgeOutside = (ev) => { if (shareNudgeEl && !shareNudgeEl.contains(ev.target)) closeShareNudge(root); };
+    setTimeout(() => document.addEventListener("click", shareNudgeOutside, true), 0);
+    shareNudgeKey = (ev) => { if (ev.key === "Escape") closeShareNudge(root); };
+    document.addEventListener("keydown", shareNudgeKey, true);
+    shareNudgeFollow = () => requestAnimationFrame(positionShareNudge);
+    window.addEventListener("resize", shareNudgeFollow);
+    window.addEventListener("scroll", shareNudgeFollow, true);
+  }
+  function closeShareNudge(root, silent) {
+    if (shareNudgeTimer) { clearTimeout(shareNudgeTimer); shareNudgeTimer = null; }
+    if (!shareNudgeEl) return;
+    if (!silent && !shared) {
+      shareNudgeDismissals += 1;
+      try { chrome.storage.local.set({ [SHARE_NUDGE_DISMISS_KEY]: shareNudgeDismissals }); } catch (_) {}
+    }
+    if (shareNudgeOutside) { document.removeEventListener("click", shareNudgeOutside, true); shareNudgeOutside = null; }
+    if (shareNudgeKey) { document.removeEventListener("keydown", shareNudgeKey, true); shareNudgeKey = null; }
+    if (shareNudgeFollow) {
+      window.removeEventListener("resize", shareNudgeFollow);
+      window.removeEventListener("scroll", shareNudgeFollow, true);
+      shareNudgeFollow = null;
+    }
+    const el = shareNudgeEl; shareNudgeEl = null;
+    el.classList.remove("cut-nudge-in");
+    setTimeout(() => el.remove(), 180);
+    const r = root || document.getElementById(OVERLAY_ID);
+    const wrap = r && r.querySelector('[data-cut="share-wrap"]');
     if (wrap) wrap.classList.remove("cut-rate-pulse", "cut-pop-open");
   }
 
@@ -2875,6 +3672,8 @@
     applyRateVisibility(root);
     applyDonateVisibility(root);
     if (!sharePopOpen) applyShareVisibility(root);
+    // v1.3.8: a day counts toward the rating streak only once real numbers render.
+    if (latestUsage && latestUsage.session) noteActiveDay();
 
     renderChatTokens(root);
 
@@ -2911,6 +3710,14 @@
       requestAnimationFrame(positionNudge);
     } else {
       scheduleNudge();
+    }
+    // v1.3.8: same heartbeat for the Share popup.
+    if (shareNudgeEl) {
+      const sw = root.querySelector('[data-cut="share-wrap"]');
+      if (sw) sw.classList.add("cut-rate-pulse", "cut-pop-open");
+      requestAnimationFrame(positionShareNudge);
+    } else {
+      scheduleShareNudge();
     }
 
     // v1.2.8: content just changed, so the natural width did too — a Fable
@@ -4838,6 +5645,8 @@
     }
     if (msg.type !== "usage-updated") return;
     latestUsage = msg.usage;
+    // v1.3.8: feeds the rating prompt's "session just reset" moment.
+    trackRateMoments(msg.usage);
     if (msg.usage && msg.usage.messagesRemaining != null) {
       latestMsgsRemaining = msg.usage.messagesRemaining;
     }
@@ -4883,9 +5692,21 @@
       chatSearchSettingsKnown = true;
       try {
         const { [RATE_KEY]: rv, [RATE_AT_KEY]: rav, [SHARE_KEY]: sv, [COLLAPSE_KEY]: cv,
-                [INSTALL_KEY]: iv, [NUDGE_KEY]: nv, [LIMIT_PROMO_KEY]: lpv } =
+                [INSTALL_KEY]: iv, [NUDGE_KEY]: nv, [LIMIT_PROMO_KEY]: lpv,
+                [NUDGE_DISMISS_KEY]: ndv, [MOMENT_KEY]: mv, [SESS_TRACK_KEY]: stv,
+                [ACTIVE_DAYS_KEY]: adv, [SHARE_NUDGE_KEY]: snv, [SHARE_NUDGE_DISMISS_KEY]: sndv } =
           await chrome.storage.local.get([RATE_KEY, RATE_AT_KEY, SHARE_KEY, COLLAPSE_KEY,
-                                          INSTALL_KEY, NUDGE_KEY, LIMIT_PROMO_KEY]);
+                                          INSTALL_KEY, NUDGE_KEY, LIMIT_PROMO_KEY,
+                                          NUDGE_DISMISS_KEY, MOMENT_KEY, SESS_TRACK_KEY,
+                                          ACTIVE_DAYS_KEY, SHARE_NUDGE_KEY, SHARE_NUDGE_DISMISS_KEY]);
+        shareNudgeAt = Number(snv) || 0;
+        shareNudgeDismissals = Number(sndv) || 0;
+        // v1.3.8: rating-prompt state. rated (above/below) is the hard stop —
+        // anyone who ever clicked Rate us, on any version, never sees the card.
+        nudgeDismissals = Number(ndv) || 0;
+        rateMoment = (mv && mv.kind && Number(mv.at)) ? { kind: String(mv.kind), at: Number(mv.at) } : null;
+        sessTrack = (stv && typeof stv.peak === "number") ? { r: Number(stv.r) || 0, peak: stv.peak } : null;
+        activeDays = (adv && typeof adv.n === "number") ? { n: adv.n, last: String(adv.last || "") } : { n: 0, last: "" };
         limitPromoDismissed = lpv ? String(lpv) : "";
         rated = !!rv;
         ratedAt = Number(rav) || 0;
@@ -4914,6 +5735,12 @@
         if (rated && !ratedAt) {
           ratedAt = Date.now();
           try { chrome.storage.local.set({ [RATE_AT_KEY]: ratedAt }); } catch (_) {}
+        }
+        rateStateLoaded = true;
+        // ██ TEST BUILD: stage a "session just reset" moment on every page load
+        // so the reset copy can be seen without waiting 5 hours. ██ REVERT with RATE_TEST.
+        if (RATE_TEST && !rated && !rateMoment && !nudgeAt) {
+          rateMoment = { kind: "reset", at: Date.now() };
         }
       } catch (_) {}
       ensureMounted();
@@ -4997,11 +5824,27 @@
       nudgeAt = Number(changes[NUDGE_KEY].newValue) || 0;
       if (!nudgeOpen && nudgeTimer) { clearTimeout(nudgeTimer); nudgeTimer = null; }
     }
+    // v1.3.8: keep the rating-prompt counters in step across tabs.
+    if (changes[NUDGE_DISMISS_KEY]) {
+      nudgeDismissals = Math.max(nudgeDismissals, Number(changes[NUDGE_DISMISS_KEY].newValue) || 0);
+    }
+    if (changes[MOMENT_KEY]) {
+      const mv = changes[MOMENT_KEY].newValue;
+      rateMoment = (mv && mv.kind && Number(mv.at)) ? { kind: String(mv.kind), at: Number(mv.at) } : null;
+    }
+    if (changes[ACTIVE_DAYS_KEY]) {
+      const adv = changes[ACTIVE_DAYS_KEY].newValue;
+      if (adv && typeof adv.n === "number") activeDays = { n: adv.n, last: String(adv.last || "") };
+    }
+    if (changes[SESS_TRACK_KEY]) {
+      const stv = changes[SESS_TRACK_KEY].newValue;
+      if (stv && typeof stv.peak === "number") sessTrack = { r: Number(stv.r) || 0, peak: stv.peak };
+    }
     if (changes[RATE_KEY]) {
       rated = !!changes[RATE_KEY].newValue;
       const root = document.getElementById(OVERLAY_ID);
       // Rated from the popup or another tab: the card must go with the button.
-      if (rated) closeNudge(root);
+      if (rated) closeNudge(root, true);
       applyRateVisibility(root);
       // Donate and Share visibility depend on the rated flag too.
       if (root) {
@@ -5009,8 +5852,16 @@
         applyShareVisibility(root);
       }
     }
+    if (changes[SHARE_NUDGE_KEY]) {
+      shareNudgeAt = Number(changes[SHARE_NUDGE_KEY].newValue) || 0;
+      if (!shareNudgeEl && shareNudgeTimer) { clearTimeout(shareNudgeTimer); shareNudgeTimer = null; }
+    }
+    if (changes[SHARE_NUDGE_DISMISS_KEY]) {
+      shareNudgeDismissals = Math.max(shareNudgeDismissals, Number(changes[SHARE_NUDGE_DISMISS_KEY].newValue) || 0);
+    }
     if (changes[SHARE_KEY]) {
       shared = !!changes[SHARE_KEY].newValue;
+      if (shared) closeShareNudge(null, true);
       const root = document.getElementById(OVERLAY_ID);
       if (root && !sharePopOpen) applyShareVisibility(root);
     }
@@ -5064,6 +5915,7 @@
       // v1.2.16: maybeShowNudge() refuses to fire on a hidden tab, so re-arm it
       // the moment this one is actually being looked at.
       scheduleNudge();
+      scheduleShareNudge();
     }
   });
 

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Claude Usage Meter",
-  "version": "1.3.7",
+  "version": "1.3.8",
   "description": "Real time Claude usage tracker. See your session, weekly and Fable limits, reset times, just above the Claude.ai chatbox.",
   "permissions": [
     "storage",
@@ -62,7 +62,8 @@
         "icons/icon48.png",
         "icons/icon128.png",
         "icons/usage-meter-logo.svg",
-        "icons/tools/*.png"
+        "icons/tools/*.png",
+        "fonts/*.woff2"
       ],
       "matches": [
         "https://claude.ai/*"

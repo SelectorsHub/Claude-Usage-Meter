@@ -47,6 +47,7 @@ const DEFAULT_POLL_MINUTES = 1;
 const ORG_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const CHROME_REVIEW_URL = "https://chromewebstore.google.com/detail/claude-usage-meter/kgpahkcgadpnklinijdojapiadnfelae/reviews";
 const EDGE_REVIEW_URL = "https://microsoftedge.microsoft.com/addons/detail/claude-usage-meter/anhdhmpfpgbohohjlbgnggnmcmkmmcbn";
+const FIREFOX_REVIEW_URL = "https://addons.mozilla.org/en-US/firefox/addon/claude-usage-meter-ai/reviews/";
 const RATE_KEY = "rate_us_clicked";
 // v1.2.3: when the rating happened. The strip's Share button waits 5 days from
 // this timestamp (see shareUnlocked() in content-script.js). Written with a
@@ -80,6 +81,8 @@ function isEdgeBrowser() {
 }
 
 function getReviewUrl() {
+  // v1.3.8: Firefox too, so a shared source tree sends each browser to its own store.
+  try { if (/Firefox\//i.test(navigator.userAgent || "")) return FIREFOX_REVIEW_URL; } catch (_) {}
   return isEdgeBrowser() ? EDGE_REVIEW_URL : CHROME_REVIEW_URL;
 }
 
