@@ -1,4 +1,15 @@
 // content-script.js (isolated world, v1.29)
+// - v1.3.9: DONATE / SUPPORT (Stripe, pay what you want). Two always-there,
+//   opt-in entry points: the popup button (was Buy Me a Coffee) and a new
+//   "❤️ Donate to support" item in the ⚙ menu. Plus ONE founder-voice card for
+//   EVERY long-time user, rated or not: 30+ days after install, on a session
+//   reset moment or 7 days of use, ≥ 14 days from any other ask, never at ≥ 90%,
+//   never in the collapsed pill. The rating ask (and, for raters, the share
+//   ask) gets its first turn before it. At most 2 showings, 60 days apart;
+//   gone forever after any donate click (any surface, any version —
+//   donate_clicked_at). Title counts real days since install. It points at
+//   the ⚙ gear, where the option stays. RATE_TEST shrinks these clocks too.
+//   All links carry utm_medium = popup / gear-menu / support-card.
 // - v1.3.8: RATING PROMPT, asked at the right moment. The Rate us card no
 //   longer pops on a timer (5 days, then every 2 days forever). It now asks
 //   right after the meter visibly helped: (a) a session reset after real use
@@ -751,8 +762,16 @@
   const CHROME_FEEDBACK_URL = "https://chromewebstore.google.com/detail/claude-usage-meter/kgpahkcgadpnklinijdojapiadnfelae/support";
   const SITE_FEEDBACK_URL = "https://selectorshub.com/claude-usage-meter/?utm_source=claude-usage-meter&utm_medium=extension&utm_campaign=rate-feedback";
   const FIREFOX_REVIEW_URL = "https://addons.mozilla.org/en-US/firefox/addon/claude-usage-meter-ai/reviews/";
+  // v1.3.9: donate_clicked_at is now "has ever clicked Support" — written by the
+  // popup button, the gear-menu item and the support card alike. Anyone with it
+  // set never sees the support card (old Buy Me a Coffee clickers included).
   const DONATE_KEY = "donate_clicked_at";
-  const DONATE_LINK = "https://buymeacoffee.com/selectorshub";
+  const DONATE_LINK = "https://buy.stripe.com/bJefZi0yR5Gh41pfzS0kE1a";
+  // Stripe Payment Links pass utm_* through to the payment's metadata, so the
+  // dashboard shows which surface each contribution came from.
+  function supportUrl(medium) {
+    return DONATE_LINK + "?utm_source=claude-usage-meter&utm_medium=" + medium + "&utm_campaign=support";
+  }
   const DONATE_COOLDOWN = 30 * 24 * 60 * 60 * 1000; // 30 days in milliseconds
   const CHROME_REVIEW_URL = "https://chromewebstore.google.com/detail/claude-usage-meter/kgpahkcgadpnklinijdojapiadnfelae/reviews";
   const EDGE_REVIEW_URL = "https://microsoftedge.microsoft.com/addons/detail/claude-usage-meter/anhdhmpfpgbohohjlbgnggnmcmkmmcbn";
@@ -1463,6 +1482,7 @@
             <label class="cut-sp-row" data-cut="sp-chatsearch-row"><input type="checkbox" data-sp-top="chatSearch" /><span>Chat history search</span></label>
             <div class="cut-sp-sep"></div>
             <button class="cut-sp-share" type="button" data-cut="sp-share">📸 Share my usage card</button>
+            <button class="cut-sp-share cut-sp-support" type="button" data-cut="sp-support">❤️ Donate to support</button>
             <div class="cut-sp-foot" data-cut="sp-foot">Keep at least one meter on.</div>
           </div>
         </span>
@@ -1484,6 +1504,7 @@
       // outlive it, or it floats over the page pointing at nothing.
       closeNudge(root);
       closeShareNudge(root);
+      closeSupportNudge(root, true);
       closeShareCard();
       closeLogoMenu();
       await dismissForHours(12);
@@ -1532,6 +1553,13 @@
         e.preventDefault(); e.stopPropagation();
         closeSettingsPop(root);
         openShareCard();
+      });
+      // v1.3.9: the always-there, never-pushed way to support. Opt-in only.
+      const spSupport = settingsPop.querySelector('[data-cut="sp-support"]');
+      if (spSupport) spSupport.addEventListener("click", (e) => {
+        e.preventDefault(); e.stopPropagation();
+        closeSettingsPop(root);
+        openSupport("gear-menu");
       });
     }
     if (shareBtn) {
@@ -1907,7 +1935,7 @@
     // wait for the tab to actually be looked at.
     if (document.hidden) return;
     // Never stack on top of another popover.
-    if (settingsPopOpen || sharePopOpen || logoMenuOpen || scPanel || shareNudgeEl) return;
+    if (settingsPopOpen || sharePopOpen || logoMenuOpen || scPanel || shareNudgeEl || supportNudgeEl) return;
     const root = document.getElementById(OVERLAY_ID);
     if (!root) return;
     const wrap = root.querySelector('[data-cut="rate-wrap"]');
@@ -2504,6 +2532,7 @@
 
   async function openShareCard() {
     if (scPanel) return;
+    closeSupportNudge(null, true);
     closeShareNudge(null, true);
     if (sharePopOpen) closeSharePop(document.getElementById(OVERLAY_ID));
     const root = document.getElementById(OVERLAY_ID);
@@ -2630,7 +2659,7 @@
     shareNudgeEl.style.top = top + "px";
   }
   function maybeShowShareNudge() {
-    if (shareNudgeEl || nudgeOpen || scPanel || !shareNudgeDue() || document.hidden) return;
+    if (shareNudgeEl || nudgeOpen || supportNudgeEl || scPanel || !shareNudgeDue() || document.hidden) return;
     if (settingsPopOpen || sharePopOpen || logoMenuOpen) return;
     const root = document.getElementById(OVERLAY_ID);
     const wrap = root && root.querySelector('[data-cut="share-wrap"]');
@@ -2699,6 +2728,180 @@
     setTimeout(() => el.remove(), 180);
     const r = root || document.getElementById(OVERLAY_ID);
     const wrap = r && r.querySelector('[data-cut="share-wrap"]');
+    if (wrap) wrap.classList.remove("cut-rate-pulse", "cut-pop-open");
+  }
+
+  // ===== v1.3.9: the Support card =====
+  // One quiet, founder-voice ask for money, built so existing users barely
+  // notice it exists. It reaches EVERY long-time user, rated or not — plenty
+  // of people use it daily without ever rating, and they may be the most
+  // willing to donate. Rules, all of which must hold:
+  //   • installed ≥ SUPPORT_FIRST (upgraders with no install stamp count as old)
+  //   • never clicked Donate anywhere (popup, gear menu, this card — any version)
+  //   • the rating ask (non-raters) and the share ask (raters) each get their
+  //     FIRST turn before this; after that no other ask in the last NUDGE_REPEAT
+  //   • raters: SUPPORT_AFTER_RATE since the rating, so thanks isn't met by a bill
+  //   • SUPPORT_REPEAT between shows, SUPPORT_MAX_SHOWS shows in a lifetime
+  //   • a good moment: a session reset after real use, or SUPPORT_STREAK_DAYS
+  //     days of use; never while a meter is ≥ 90%, never on a hidden tab,
+  //     never over another popover, never in the collapsed pill
+  // It points at the ⚙ gear, where "Donate to support" lives permanently —
+  // so "Maybe later" never feels like losing the option.
+  const SUPPORT_NUDGE_KEY = "support_nudge_at";
+  const SUPPORT_NUDGE_DISMISS_KEY = "support_nudge_dismissals";
+  const SUPPORT_FIRST = RATE_TEST ? 0 : 30 * DAY_MS;
+  const SUPPORT_AFTER_RATE = RATE_TEST ? 30 * 1000 : 10 * DAY_MS;
+  const SUPPORT_REPEAT = RATE_TEST ? 90 * 1000 : 60 * DAY_MS;
+  const SUPPORT_MAX_SHOWS = 2;
+  const SUPPORT_STREAK_DAYS = RATE_TEST ? 1 : 7;
+  let supportNudgeAt = null;      // null = not loaded, 0 = never shown
+  let supportNudgeDismissals = 0;
+  let supported = false;          // any Support click, ever
+  let supportNudgeEl = null;
+  let supportNudgeTimer = null;
+  let supportNudgeOutside = null;
+  let supportNudgeKey = null;
+  let supportNudgeFollow = null;
+
+  function openSupport(medium) {
+    supported = true;
+    try { chrome.storage.local.set({ [DONATE_KEY]: Date.now() }); } catch (_) {}
+    try { window.open(supportUrl(medium), "_blank", "noopener"); } catch (_) {}
+  }
+
+  function supportNudgeDue() {
+    if (supported || !rateStateLoaded || supportNudgeAt === null || installAt === null || nudgeAt === null) return false;
+    if (supportNudgeDismissals >= SUPPORT_MAX_SHOWS) return false;
+    const now = Date.now();
+    if (installAt && now - installAt < SUPPORT_FIRST) return false;
+    if (rated && ratedAt && now - ratedAt < SUPPORT_AFTER_RATE) return false;
+    if (supportNudgeAt && now - supportNudgeAt < SUPPORT_REPEAT) return false;
+    if (nudgeAt && now - nudgeAt < NUDGE_REPEAT) return false;
+    if (shareNudgeAt && now - shareNudgeAt < NUDGE_REPEAT) return false;
+    // Sharing is asked first — but only once. After that the two just share
+    // the NUDGE_REPEAT spacing, so a skipped share ask can't hold support off.
+    if (!shareNudgeAt && shareNudgeDue()) return false;
+    // Same for the rating ask: a non-rater is asked to rate once before being
+    // asked to donate. nudgeDue() is false for raters, so this never blocks them.
+    // Only while the rating card can actually appear (its button on screen);
+    // otherwise a squeezed strip that sheds Rate us would hold this off forever.
+    if (!nudgeAt && nudgeDue()) {
+      const rb = document.querySelector('#' + OVERLAY_ID + ' [data-cut="rate"]');
+      if (rb && rb.getClientRects().length) return false;
+    }
+    if (anyMeterBusy()) return false;
+    if (rateMoment && rateMoment.kind === "reset" && now - rateMoment.at < MOMENT_TTL) return true;
+    return (activeDays.n || 0) >= SUPPORT_STREAK_DAYS;
+  }
+  function scheduleSupportNudge() {
+    if (supportNudgeTimer || supportNudgeEl || nudgeOpen || shareNudgeEl || !supportNudgeDue()) return;
+    supportNudgeTimer = setTimeout(() => {
+      supportNudgeTimer = null;
+      maybeShowSupportNudge();
+    }, NUDGE_MOUNT_DELAY);
+  }
+  function positionSupportNudge() {
+    const root = document.getElementById(OVERLAY_ID);
+    const btn = root && root.querySelector('[data-cut="settings"]');
+    if (!supportNudgeEl || !btn) return;
+    const br = btn.getBoundingClientRect();
+    const nr = supportNudgeEl.getBoundingClientRect();
+    const vw = window.innerWidth;
+    const left = Math.max(8, Math.min(br.left + br.width / 2 - nr.width / 2, vw - nr.width - 8));
+    let top;
+    if (br.top >= nr.height + 14) { top = br.top - nr.height - 10; supportNudgeEl.classList.remove("cut-pop-below"); }
+    else { top = br.bottom + 10; supportNudgeEl.classList.add("cut-pop-below"); }
+    supportNudgeEl.style.setProperty("--cut-arrow-x", Math.max(14, Math.min(br.left + br.width / 2 - left, nr.width - 14)) + "px");
+    supportNudgeEl.style.left = left + "px";
+    supportNudgeEl.style.top = top + "px";
+  }
+  function maybeShowSupportNudge() {
+    if (supportNudgeEl || nudgeOpen || shareNudgeEl || scPanel || !supportNudgeDue() || document.hidden) return;
+    if (settingsPopOpen || sharePopOpen || logoMenuOpen) return;
+    const root = document.getElementById(OVERLAY_ID);
+    const wrap = root && root.querySelector('[data-cut="settings-wrap"]');
+    const btn = root && root.querySelector('[data-cut="settings"]');
+    // Collapsed pill hides the gear: someone who chose the minimal view isn't asked.
+    if (!wrap || !btn || !btn.getClientRects().length) return;
+
+    const isReset = !!(rateMoment && rateMoment.kind === "reset" && Date.now() - rateMoment.at < MOMENT_TTL);
+    // Stamp first so other tabs stand down (storage.onChanged) and the repeat
+    // clock starts now. A reset moment is spent by being used.
+    supportNudgeAt = Date.now();
+    const patch = { [SUPPORT_NUDGE_KEY]: supportNudgeAt };
+    if (isReset) { rateMoment = null; patch[MOMENT_KEY] = null; }
+    try { chrome.storage.local.set(patch); } catch (_) {}
+
+    // Real days since install when we know it; upgraders from before install
+    // stamps (installAt 0) get a count-free title rather than a wrong number.
+    const days = installAt ? Math.floor((Date.now() - installAt) / DAY_MS) : 0;
+    const title = isReset ? "Fresh session unlocked ☕"
+      : days >= 2 ? `${days} days with the meter ❤️`
+      : "Thanks for using the meter ❤️";
+    const el = document.createElement("div");
+    el.className = "cut-rate-nudge cut-support-nudge";
+    el.setAttribute("role", "dialog");
+    el.setAttribute("aria-label", "Support Claude Usage Meter");
+    el.classList.toggle("cut-pop-dark", root.classList.contains("cut-theme-dark"));
+    el.innerHTML = `
+      <button class="cut-nudge-x" type="button" data-cut="unudge-close" aria-label="Not now">×</button>
+      <div class="cut-nudge-title">${title}</div>
+      <div class="cut-nudge-body">I'm Sanjay, I build this meter on my own. If it saves you time, please support it with a small donation, any amount you like. It keeps the meter free and working as Claude changes.</div>
+      <div class="cut-nudge-actions">
+        <button class="cut-nudge-cta" type="button" data-cut="unudge-go">❤️ Donate</button>
+        <button class="cut-nudge-later" type="button" data-cut="unudge-later">Maybe later</button>
+      </div>
+      <div class="cut-nudge-fine">Always free, nothing is locked. You can donate anytime from ⚙.</div>`;
+    supportNudgeEl = el;
+    document.body.appendChild(el);
+    el.style.visibility = "hidden";
+    positionSupportNudge();
+    el.style.visibility = "";
+    requestAnimationFrame(() => el.classList.add("cut-nudge-in"));
+    wrap.classList.add("cut-rate-pulse", "cut-pop-open");
+    hidePortalTip();
+
+    el.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      const t = ev.target.closest("[data-cut]");
+      const what = t && t.getAttribute("data-cut");
+      if (what === "unudge-go") { openSupport("support-card"); closeSupportNudge(root, true); }
+      else if (what === "unudge-later" || what === "unudge-close") closeSupportNudge(root);
+    });
+    supportNudgeOutside = (ev) => {
+      if (!supportNudgeEl || supportNudgeEl.contains(ev.target)) return;
+      // Clicking the ⚙ the card points at is following it, not saying no.
+      const onGear = !!(ev.target && ev.target.closest && ev.target.closest('[data-cut="settings-wrap"]'));
+      closeSupportNudge(root, onGear);
+    };
+    setTimeout(() => document.addEventListener("click", supportNudgeOutside, true), 0);
+    supportNudgeKey = (ev) => { if (ev.key === "Escape") closeSupportNudge(root); };
+    document.addEventListener("keydown", supportNudgeKey, true);
+    supportNudgeFollow = () => requestAnimationFrame(positionSupportNudge);
+    window.addEventListener("resize", supportNudgeFollow);
+    window.addEventListener("scroll", supportNudgeFollow, true);
+  }
+  // `silent` = closed for a reason other than "not now" (supported, strip
+  // hidden, another card took over) — it doesn't count toward the cap.
+  function closeSupportNudge(root, silent) {
+    if (supportNudgeTimer) { clearTimeout(supportNudgeTimer); supportNudgeTimer = null; }
+    if (!supportNudgeEl) return;
+    if (!silent && !supported) {
+      supportNudgeDismissals += 1;
+      try { chrome.storage.local.set({ [SUPPORT_NUDGE_DISMISS_KEY]: supportNudgeDismissals }); } catch (_) {}
+    }
+    if (supportNudgeOutside) { document.removeEventListener("click", supportNudgeOutside, true); supportNudgeOutside = null; }
+    if (supportNudgeKey) { document.removeEventListener("keydown", supportNudgeKey, true); supportNudgeKey = null; }
+    if (supportNudgeFollow) {
+      window.removeEventListener("resize", supportNudgeFollow);
+      window.removeEventListener("scroll", supportNudgeFollow, true);
+      supportNudgeFollow = null;
+    }
+    const el = supportNudgeEl; supportNudgeEl = null;
+    el.classList.remove("cut-nudge-in");
+    setTimeout(() => el.remove(), 180);
+    const r = root || document.getElementById(OVERLAY_ID);
+    const wrap = r && r.querySelector('[data-cut="settings-wrap"]');
     if (wrap) wrap.classList.remove("cut-rate-pulse", "cut-pop-open");
   }
 
@@ -3710,6 +3913,16 @@
       requestAnimationFrame(positionNudge);
     } else {
       scheduleNudge();
+    }
+    // v1.3.9: Support is armed BEFORE Share, so once Share has had its turn a
+    // tie goes to Support (its first-ask guard lives in supportNudgeDue).
+    if (supportNudgeEl) {
+      const gw = root.querySelector('[data-cut="settings-wrap"]');
+      if (gw) gw.classList.add("cut-rate-pulse", "cut-pop-open");
+      if (root.classList.contains("cut-collapsed")) closeSupportNudge(root, true);
+      else requestAnimationFrame(positionSupportNudge);
+    } else {
+      scheduleSupportNudge();
     }
     // v1.3.8: same heartbeat for the Share popup.
     if (shareNudgeEl) {
@@ -5694,12 +5907,17 @@
         const { [RATE_KEY]: rv, [RATE_AT_KEY]: rav, [SHARE_KEY]: sv, [COLLAPSE_KEY]: cv,
                 [INSTALL_KEY]: iv, [NUDGE_KEY]: nv, [LIMIT_PROMO_KEY]: lpv,
                 [NUDGE_DISMISS_KEY]: ndv, [MOMENT_KEY]: mv, [SESS_TRACK_KEY]: stv,
-                [ACTIVE_DAYS_KEY]: adv, [SHARE_NUDGE_KEY]: snv, [SHARE_NUDGE_DISMISS_KEY]: sndv } =
+                [ACTIVE_DAYS_KEY]: adv, [SHARE_NUDGE_KEY]: snv, [SHARE_NUDGE_DISMISS_KEY]: sndv,
+                [SUPPORT_NUDGE_KEY]: unv, [SUPPORT_NUDGE_DISMISS_KEY]: undv, [DONATE_KEY]: dkv } =
           await chrome.storage.local.get([RATE_KEY, RATE_AT_KEY, SHARE_KEY, COLLAPSE_KEY,
                                           INSTALL_KEY, NUDGE_KEY, LIMIT_PROMO_KEY,
                                           NUDGE_DISMISS_KEY, MOMENT_KEY, SESS_TRACK_KEY,
-                                          ACTIVE_DAYS_KEY, SHARE_NUDGE_KEY, SHARE_NUDGE_DISMISS_KEY]);
+                                          ACTIVE_DAYS_KEY, SHARE_NUDGE_KEY, SHARE_NUDGE_DISMISS_KEY,
+                                          SUPPORT_NUDGE_KEY, SUPPORT_NUDGE_DISMISS_KEY, DONATE_KEY]);
         shareNudgeAt = Number(snv) || 0;
+        supportNudgeAt = Number(unv) || 0;
+        supportNudgeDismissals = Number(undv) || 0;
+        supported = !!dkv;
         shareNudgeDismissals = Number(sndv) || 0;
         // v1.3.8: rating-prompt state. rated (above/below) is the hard stop —
         // anyone who ever clicked Rate us, on any version, never sees the card.
@@ -5876,7 +6094,16 @@
       collapsed = !!changes[COLLAPSE_KEY].newValue;
       applyCollapsed(document.getElementById(OVERLAY_ID));
     }
+    if (changes[SUPPORT_NUDGE_KEY]) {
+      supportNudgeAt = Number(changes[SUPPORT_NUDGE_KEY].newValue) || 0;
+      if (!supportNudgeEl && supportNudgeTimer) { clearTimeout(supportNudgeTimer); supportNudgeTimer = null; }
+    }
+    if (changes[SUPPORT_NUDGE_DISMISS_KEY]) {
+      supportNudgeDismissals = Math.max(supportNudgeDismissals, Number(changes[SUPPORT_NUDGE_DISMISS_KEY].newValue) || 0);
+    }
     if (changes[DONATE_KEY]) {
+      // Supported from the popup or another tab: the card goes, for good.
+      if (changes[DONATE_KEY].newValue) { supported = true; closeSupportNudge(null, true); }
       const root = document.getElementById(OVERLAY_ID);
       if (root) applyDonateVisibility(root);
     }
@@ -5915,6 +6142,7 @@
       // v1.2.16: maybeShowNudge() refuses to fire on a hidden tab, so re-arm it
       // the moment this one is actually being looked at.
       scheduleNudge();
+      scheduleSupportNudge();
       scheduleShareNudge();
     }
   });

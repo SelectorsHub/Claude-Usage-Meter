@@ -2670,3 +2670,21 @@
   .cut-sc-panel { transition: none; }
   #claude-usage-overlay .cut-share-wrap.cut-rate-pulse .cut-share { animation: none; }
 }
+
+/* ===== v1.3.9: Support card + gear pulse + ⚙ menu item ===== */
+/* The card points at the gear, where "Support this project" always lives. */
+#claude-usage-overlay .cut-settings-wrap.cut-rate-pulse .cut-settings {
+  opacity: 1;
+  color: #d97757;
+  background: color-mix(in srgb, #d97757 22%, transparent);
+  animation: cut-rate-pulse 1.7s ease-in-out infinite;
+  border-radius: 6px;
+}
+/* The reassurance line: small, quiet, but readable. */
+.cut-rate-nudge .cut-nudge-fine {
+  margin-top: 9px;
+  font-size: 10.5px;
+  line-height: 1.4;
+  opacity: 0.55;
+}
+.cut-sp-support { padding-top: 2px; }

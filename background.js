@@ -1515,7 +1515,21 @@ if (chrome.cookies && chrome.cookies.onChanged) {
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === POLL_ALARM) pollUsage();
 });
+// ██ TEST BUILD — REVERT PROMPT_TEST to false before store packaging ██
+// Wipes the rating / share / support prompt state on every install, update or
+// "Reload" in chrome://extensions, so the whole sequence can be replayed from
+// the start. Pair with RATE_TEST = true in content-script.js.
+const PROMPT_TEST = false;
+const PROMPT_TEST_KEYS = [
+  "rate_us_clicked", "rate_us_clicked_at", "share_clicked",
+  "rate_nudge_at", "rate_nudge_dismissals", "rate_feedback_at", "rate_moment",
+  "rate_active_days", "share_nudge_at", "share_nudge_dismissals",
+  "support_nudge_at", "support_nudge_dismissals", "donate_clicked_at",
+];
 chrome.runtime.onInstalled.addListener(async (details) => {
+  if (PROMPT_TEST) {
+    try { await chrome.storage.local.remove(PROMPT_TEST_KEYS); } catch (_) {}
+  }
   // Record the install time FIRST — before any other await that could throw or
   // be interrupted — so the "Rate us" gate (extension v1.2.4) always has an
   // authoritative value. A fresh install starts the 2-day clock now; an
