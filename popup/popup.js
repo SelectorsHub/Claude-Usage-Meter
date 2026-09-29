@@ -528,12 +528,22 @@ function getStoreUrl() {
 const SHARE_TEXT = "Claude Usage Meter - see your Claude session & weekly usage limits live above the claude chat box. Free extension:";
 const LINKEDIN_TEXT = "Claude Usage Meter - see your Claude usage above chat";
 
+// v1.4.0: X posts tag the extension's account, right after the product name.
+const X_HANDLE = "@claudeusagemtr";
+function withXHandle(text) {
+  if (!text || text.includes(X_HANDLE)) return text;
+  const i = text.indexOf("Claude Usage Meter");
+  if (i < 0) return text + " " + X_HANDLE;
+  const j = i + "Claude Usage Meter".length;
+  return text.slice(0, j) + " " + X_HANDLE + text.slice(j);
+}
+
 function shareIntentUrl(net) {
   const url = encodeURIComponent(getStoreUrl());
   const text = encodeURIComponent(SHARE_TEXT);
   switch (net) {
     case "linkedin": return `https://www.linkedin.com/feed/?shareActive=true&text=${encodeURIComponent(LINKEDIN_TEXT + " " + getStoreUrl())}`;
-    case "x": return `https://twitter.com/intent/tweet?text=${text}&url=${url}`;
+    case "x": return `https://twitter.com/intent/tweet?text=${encodeURIComponent(withXHandle(SHARE_TEXT))}&url=${url}`;
     case "whatsapp": return `https://api.whatsapp.com/send?text=${text}%20${url}`;
     case "reddit": return `https://www.reddit.com/submit?url=${url}&title=${text}`;
     case "facebook": return `https://www.facebook.com/sharer/sharer.php?u=${url}&quote=${text}`;

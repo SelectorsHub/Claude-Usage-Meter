@@ -1,4 +1,5 @@
 // content-script.js (isolated world, v1.29)
+// - v1.4.0: X shares tag @claudeusagemtr (withXHandle) — popup share + share card.
 // - v1.3.9: DONATE / SUPPORT (Stripe, pay what you want). Two always-there,
 //   opt-in entry points: the popup button (was Buy Me a Coffee) and a new
 //   "❤️ Donate to support" item in the ⚙ menu. Plus ONE founder-voice card for
@@ -883,12 +884,22 @@
   }
   const SHARE_TEXT = "Claude Usage Meter - see your Claude session & weekly usage limits live above the claude chat box. Free extension:";
   const LINKEDIN_TEXT = "Claude Usage Meter - see your Claude usage above chat";
+  // v1.4.0: every X post tags the extension's account. The handle goes right
+  // after the first "Claude Usage Meter" so it reads naturally; appended otherwise.
+  const X_HANDLE = "@claudeusagemtr";
+  function withXHandle(text) {
+    if (!text || text.includes(X_HANDLE)) return text;
+    const i = text.indexOf("Claude Usage Meter");
+    if (i < 0) return text + " " + X_HANDLE;
+    const j = i + "Claude Usage Meter".length;
+    return text.slice(0, j) + " " + X_HANDLE + text.slice(j);
+  }
   function shareIntentUrl(net) {
     const u = encodeURIComponent(storeUrl());
     const t = encodeURIComponent(SHARE_TEXT);
     switch (net) {
       case "linkedin": return `https://www.linkedin.com/feed/?shareActive=true&text=${encodeURIComponent(LINKEDIN_TEXT + " " + storeUrl())}`;
-      case "x": return `https://twitter.com/intent/tweet?text=${t}&url=${u}`;
+      case "x": return `https://twitter.com/intent/tweet?text=${encodeURIComponent(withXHandle(SHARE_TEXT))}&url=${u}`;
       case "whatsapp": return `https://api.whatsapp.com/send?text=${t}%20${u}`;
       case "reddit": return `https://www.reddit.com/submit?url=${u}&title=${t}`;
       case "facebook": return `https://www.facebook.com/sharer/sharer.php?u=${u}&quote=${t}`;
@@ -2596,7 +2607,7 @@
         const ok = await scCopyImage(r.canvas);
         const link = shareCardStoreUrl();
         const url = what === "x"
-          ? `https://twitter.com/intent/tweet?text=${encodeURIComponent(r.story.post)}&url=${encodeURIComponent(link)}`
+          ? `https://twitter.com/intent/tweet?text=${encodeURIComponent(withXHandle(r.story.post))}&url=${encodeURIComponent(link)}`
           : `https://www.linkedin.com/feed/?shareActive=true&text=${encodeURIComponent(r.story.post + " " + link)}`;
         try { window.open(url, "_blank", "noopener"); } catch (_) {}
         toast(ok ? `Image copied — press ${scPasteKey()} in the post to add it.` : "Tip: use Download, then attach the image to your post.");
