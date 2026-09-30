@@ -1,4 +1,12 @@
 // content-script.js (isolated world, v1.29)
+// - v1.4.1: RATING PROMPT BACK TO THE v1.2.16 FLOW (the 1.3.8 two-step,
+//   moment-gated card cut reviews). One-step card: founder ask + stars + ⭐ Rate
+//   us. Timeline: +2d RATE_DELAY button appears, +3d NUDGE_FIRST card pops,
+//   then every 2 days (NUDGE_REPEAT) until Rate us is clicked — no dismissal
+//   cap, no moment/streak/busy gating. Rated → button and card gone for good.
+//   Copy is the 1.3.7 card ("Rate us & this button disappears forever") plus a
+//   "Thank you ~ Sanjay, Creator" sign-off, Sanjay linking to his LinkedIn.
+//   Share/Support asks keep their own 14-day spacing (ASK_SPACING).
 // - v1.4.0: X shares tag @claudeusagemtr (withXHandle) — popup share + share card.
 // - v1.3.9: DONATE / SUPPORT (Stripe, pay what you want). Two always-there,
 //   opt-in entry points: the popup button (was Buy Me a Coffee) and a new
@@ -740,7 +748,8 @@
   //     fresh within MOMENT_TTL, or STREAK_DAYS distinct days of use.
   const NUDGE_KEY = "rate_nudge_at";             // ms epoch the card last appeared
   const NUDGE_FIRST = RATE_TEST ? 0 : 3 * DAY_MS;          // earliest first ask after install
-  const NUDGE_REPEAT = RATE_TEST ? 60 * 1000 : 14 * DAY_MS; // gap between asks
+  const NUDGE_REPEAT = RATE_TEST ? 60 * 1000 : 2 * DAY_MS;  // v1.4.1: rate card returns every 2 days until rated
+  const ASK_SPACING = RATE_TEST ? 60 * 1000 : 14 * DAY_MS;  // share/support asks: spacing between asks (unchanged)
   const NUDGE_MAX_DISMISS = 2;                   // ask, ask once more, then stop for good
   const NUDGE_MOUNT_DELAY = RATE_TEST ? 3 * 1000 : 10 * 1000; // let the page settle before popping
   const NUDGE_DISMISS_KEY = "rate_nudge_dismissals";  // count of "not now"s
@@ -1921,12 +1930,11 @@
   function nudgeDue() {
     if (rated) return false;                        // anyone who clicked Rate us: never
     if (!rateStateLoaded || installAt === null || nudgeAt === null) return false;
-    if (nudgeDismissals >= NUDGE_MAX_DISMISS) return false;  // asked twice, said no twice
+    // v1.4.1: back to the plain timer — no dismissal cap, no moment gating.
     if (!rateUnlocked()) return false;              // button (the card's anchor) isn't out yet
     if (installAt && Date.now() - installAt < NUDGE_FIRST) return false;
     if (nudgeAt && Date.now() - nudgeAt < NUDGE_REPEAT) return false;
-    if (anyMeterBusy()) return false;               // about to be locked out: bad time
-    return currentMoment() !== null;
+    return true;
   }
 
   // Called from renderInto (i.e. on mount, on every usage update and on the 30s
@@ -1954,7 +1962,7 @@
     // The anchor has to be genuinely on screen — the strip can be mid-rebuild,
     // hidden by the 12h dismiss, or the button hidden by its own gate.
     if (!wrap || !btn || wrap.style.display === "none" || !btn.getClientRects().length) return;
-    showNudge(root, wrap, currentMoment() || "streak");
+    showNudge(root, wrap, "timer");
   }
 
   // v1.3.8: two steps. Step "ask" is a yes/no that costs nothing to answer;
@@ -1964,17 +1972,17 @@
     if (step === "yes") {
       return `
         <button class="cut-nudge-x" type="button" data-cut="nudge-close" aria-label="Not now">×</button>
-        <div class="cut-nudge-title">Would you rate it? 🙏🏻</div>
+        <div class="cut-nudge-title">Is Claude Usage Meter helping you?</div>
         <div class="cut-nudge-stars" data-cut="nudge-stars" role="button" tabindex="0"
-             aria-label="Rate Claude Usage Meter">
+             aria-label="Leave a 5 star review">
           <span>★</span><span>★</span><span>★</span><span>★</span><span>★</span>
         </div>
         <div class="cut-nudge-body">
-          I'm Sanjay, I build this solo &amp; free. A quick rating is how other
-          Claude users find it. Takes 10 seconds.
+          Pls Rate us &amp; this button disappears forever after you review. 🙏🏻
+          <span class="cut-nudge-by">Thank you ~ <a href="https://www.linkedin.com/in/creator-sanjaykumar/" target="_blank" rel="noopener noreferrer">Sanjay</a>, Creator</span>
         </div>
         <div class="cut-nudge-actions">
-          <button class="cut-nudge-cta" type="button" data-cut="nudge-rate">⭐ Rate us</button>
+          <button class="cut-nudge-cta" type="button" data-cut="nudge-rate">Write a review</button>
           <button class="cut-nudge-later" type="button" data-cut="nudge-later">Maybe later</button>
         </div>`;
     }
@@ -2009,10 +2017,10 @@
 
   function buildNudge() {
     const el = document.createElement("div");
-    el.className = "cut-rate-nudge";
+    el.className = "cut-rate-nudge cut-rate-card";
     el.setAttribute("role", "dialog");
     el.setAttribute("aria-label", "Rate Claude Usage Meter");
-    el.innerHTML = nudgeStepHtml("ask");
+    el.innerHTML = nudgeStepHtml("yes");  // v1.4.1: single step — straight to the rating ask
     return el;
   }
 
@@ -2075,9 +2083,9 @@
     try { chrome.storage.local.set(patch); } catch (_) {}
 
     nudgeEl = buildNudge();
-    nudgeEl.dataset.step = "ask";
     nudgeEl.classList.toggle("cut-pop-dark", root.classList.contains("cut-theme-dark"));
     document.body.appendChild(nudgeEl);
+    setNudgeStep("yes");  // wires the stars' keyboard handler
     nudgeEl.style.visibility = "hidden";
     positionNudge();
     nudgeEl.style.visibility = "";
@@ -2641,8 +2649,8 @@
     if (!rated || shared || !rateStateLoaded || shareNudgeAt === null) return false;
     if (!shareUnlocked()) return false;
     if (shareNudgeDismissals >= NUDGE_MAX_DISMISS) return false;
-    if (shareNudgeAt && Date.now() - shareNudgeAt < NUDGE_REPEAT) return false;
-    if (nudgeAt && Date.now() - nudgeAt < NUDGE_REPEAT) return false;
+    if (shareNudgeAt && Date.now() - shareNudgeAt < ASK_SPACING) return false;
+    if (nudgeAt && Date.now() - nudgeAt < ASK_SPACING) return false;
     if (ratedAt && Date.now() - ratedAt < Math.max(SHARE_DELAY, RATE_TEST ? 30 * 1000 : 0)) return false;
     if (rateMoment && rateMoment.kind === "reset" && Date.now() - rateMoment.at < MOMENT_TTL) return true;
     return (activeDays.n || 0) >= SHARE_STREAK_DAYS;
@@ -2787,8 +2795,8 @@
     if (installAt && now - installAt < SUPPORT_FIRST) return false;
     if (rated && ratedAt && now - ratedAt < SUPPORT_AFTER_RATE) return false;
     if (supportNudgeAt && now - supportNudgeAt < SUPPORT_REPEAT) return false;
-    if (nudgeAt && now - nudgeAt < NUDGE_REPEAT) return false;
-    if (shareNudgeAt && now - shareNudgeAt < NUDGE_REPEAT) return false;
+    if (nudgeAt && now - nudgeAt < ASK_SPACING) return false;
+    if (shareNudgeAt && now - shareNudgeAt < ASK_SPACING) return false;
     // Sharing is asked first — but only once. After that the two just share
     // the NUDGE_REPEAT spacing, so a skipped share ask can't hold support off.
     if (!shareNudgeAt && shareNudgeDue()) return false;
