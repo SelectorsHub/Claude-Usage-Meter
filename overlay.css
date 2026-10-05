@@ -2709,3 +2709,17 @@
   opacity: 0.55;
 }
 .cut-sp-support { padding-top: 2px; }
+
+/* ===== v1.4.2: "Explore more tools" card + logo pulse ===== */
+/* The card points at the logo, which opens the tools menu. */
+#claude-usage-overlay .cut-logo-wrap.cut-rate-pulse {
+  background: color-mix(in srgb, #d97757 22%, transparent);
+  border-radius: 6px;
+  animation: cut-rate-pulse 1.7s ease-in-out infinite;
+}
+#claude-usage-overlay .cut-logo-wrap.cut-rate-pulse .cut-logo { color: #d97757; opacity: 1; }
+/* The card already says what the logo does: no hover tooltip on top of it. */
+#claude-usage-overlay .cut-logo-wrap.cut-pop-open .cut-tooltip { opacity: 0 !important; visibility: hidden !important; }
+@media (prefers-reduced-motion: reduce) {
+  #claude-usage-overlay .cut-logo-wrap.cut-rate-pulse { animation: none; }
+}

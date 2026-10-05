@@ -1525,6 +1525,7 @@ const PROMPT_TEST_KEYS = [
   "rate_nudge_at", "rate_nudge_dismissals", "rate_feedback_at", "rate_moment",
   "rate_active_days", "share_nudge_at", "share_nudge_dismissals",
   "support_nudge_at", "support_nudge_dismissals", "donate_clicked_at",
+  "tools_nudge_at", "tools_nudge_dismissals", "logo_menu_opened_at",
 ];
 chrome.runtime.onInstalled.addListener(async (details) => {
   if (PROMPT_TEST) {
