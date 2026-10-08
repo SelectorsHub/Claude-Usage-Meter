@@ -25,11 +25,17 @@
   <main>
     <div id="error-banner" class="error-banner hidden"></div>
 
-    <button id="show-strip-btn" class="btn-strip-cta">
-      <span class="btn-strip-cta-glow"></span>
-      <svg class="btn-strip-cta-ic" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="9" x2="21" y2="9"></line><rect x="3" y="4" width="18" height="16" rx="2"></rect></svg>
-      <span class="btn-strip-cta-txt">Show Usage Strip above Chat</span>
-    </button>
+    <!-- v1.4.4: a real on/off switch replaces the pink/green CTA button. -->
+    <div class="strip-toggle-row" id="strip-toggle-row">
+      <div class="strip-toggle-text">
+        <label class="strip-toggle-lbl" for="show-strip-toggle">Show Usage Strip above Chat</label>
+        <div class="strip-toggle-sub" id="strip-toggle-sub">&nbsp;</div>
+      </div>
+      <label class="switch" title="Show or hide the usage strip on claude.ai">
+        <input type="checkbox" id="show-strip-toggle" role="switch" aria-describedby="strip-toggle-sub" />
+        <span class="switch-track"><span class="switch-thumb"></span></span>
+      </label>
+    </div>
 
     <section class="card" id="session-card">
       <div class="row">

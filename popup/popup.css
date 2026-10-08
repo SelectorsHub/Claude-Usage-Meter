@@ -101,7 +101,66 @@ html, body {
 
 main { padding: 12px; }
 
-/* ── Prominent "Show Usage Strip" CTA ── */
+/* ── v1.4.4: "Show Usage Strip" on/off switch ── */
+.strip-toggle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  background: var(--bg-elev);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  transition: border-color 0.15s;
+}
+.strip-toggle-row.is-on { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
+.strip-toggle-text { min-width: 0; }
+.strip-toggle-lbl {
+  display: block;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+  cursor: pointer;
+}
+.strip-toggle-sub {
+  margin-top: 3px;
+  font-size: 11px;
+  color: var(--text-mute);
+  line-height: 1.35;
+}
+.strip-toggle-sub a { color: var(--accent); text-decoration: none; font-weight: 600; }
+.strip-toggle-sub a:hover { text-decoration: underline; }
+
+.switch { position: relative; flex-shrink: 0; width: 40px; height: 22px; cursor: pointer; }
+.switch input {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  margin: 0; opacity: 0; cursor: pointer;
+}
+.switch-track {
+  position: absolute; inset: 0;
+  background: var(--bg-elev-2);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  transition: background 0.18s, border-color 0.18s;
+  pointer-events: none;
+}
+.switch-thumb {
+  position: absolute; top: 2px; left: 2px;
+  width: 16px; height: 16px;
+  background: var(--text-dim);
+  border-radius: 50%;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+  transition: transform 0.18s ease, background 0.18s;
+}
+.switch input:checked + .switch-track { background: var(--accent); border-color: var(--accent); }
+.switch input:checked + .switch-track .switch-thumb { transform: translateX(18px); background: #fff; }
+.switch input:focus-visible + .switch-track { outline: 2px solid var(--accent); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) {
+  .switch-track, .switch-thumb { transition: none; }
+}
+
+/* ── Prominent "Show Usage Strip" CTA (pre-1.4.4, no longer in the popup) ── */
 .btn-strip-cta {
   position: relative;
   display: flex;

@@ -1,4 +1,11 @@
 // content-script.js (isolated world, v1.29)
+// - v1.4.4: the strip's × now asks first ("Hide the usage strip?"), lets the
+//   user pick 1 hour (default) / 2 hours / until turned back on (was a fixed
+//   12 hours), and says how to bring it back from the toolbar popup. The
+//   popup's on/off switch writes overlay_dismissed_until; storage.onChanged applies it in every open tab.
+// - v1.4.3 (claude.ai/code): the strip mounted INSIDE the Code composer box
+//   (no <fieldset>/<form> there) and covered the placeholder. findMountTarget()
+//   now climbs to the bordered chatbox and mounts above it, as on claude.ai.
 // - v1.4.2 (tools card): an "Explore more tools" card pointing at the logo,
 //   because almost nobody discovers that the logo opens the tools menu.
 //   "Show me" opens that menu. From TOOLS_FIRST (10d) after install, every
@@ -1030,6 +1037,115 @@
     await chrome.storage.local.set({ [DISMISS_KEY]: Date.now() + hours * 3600 * 1000 });
   }
 
+  // v1.4.4: one place that takes the strip off the page. Used by the × confirm
+  // and by the popup's toggle (via storage.onChanged), so every open tab hides.
+  function hideStripNow() {
+    closeHideConfirm();
+    const el = document.getElementById(OVERLAY_ID);
+    // v1.2.16: the nudges are anchored to buttons inside the strip — they
+    // can't outlive it, or they float over the page pointing at nothing.
+    try { closeNudge(el); } catch (_) {}
+    try { closeShareNudge(el); } catch (_) {}
+    try { closeSupportNudge(el, true); } catch (_) {}
+    try { closeShareCard(); } catch (_) {}
+    try { closeLogoMenu(); } catch (_) {}
+    if (el) el.remove();
+  }
+
+  // v1.4.4: "Are you sure?" card for the strip's × button.
+  let hcPanel = null;
+  let hcOutside = null;
+  let hcKey = null;
+  function closeHideConfirm() {
+    if (hcOutside) { document.removeEventListener("click", hcOutside, true); hcOutside = null; }
+    if (hcKey) { document.removeEventListener("keydown", hcKey, true); hcKey = null; }
+    if (hcPanel) {
+      const el = hcPanel; hcPanel = null;
+      el.classList.remove("cut-hc-in");
+      setTimeout(() => el.remove(), 180);
+    }
+  }
+  function positionHideConfirm() {
+    if (!hcPanel) return;
+    const root = document.getElementById(OVERLAY_ID);
+    const pr = hcPanel.getBoundingClientRect();
+    const vw = window.innerWidth, vh = window.innerHeight;
+    let left = (vw - pr.width) / 2;
+    let top = (vh - pr.height) / 2;
+    const btn = root && root.querySelector(".cut-close");
+    if (btn) {
+      const br = btn.getBoundingClientRect();
+      // Sit just above the ×, right-aligned to it, kept on screen.
+      left = br.right - pr.width + 8;
+      top = br.top - pr.height - 10;
+      if (top < 8) top = br.bottom + 10;
+    }
+    hcPanel.style.left = Math.min(Math.max(8, left), vw - pr.width - 8) + "px";
+    hcPanel.style.top = Math.min(Math.max(8, top), vh - pr.height - 8) + "px";
+  }
+  function openHideConfirm(root) {
+    if (hcPanel) { closeHideConfirm(); return; }
+    const el = document.createElement("div");
+    el.className = "cut-hc-panel";
+    el.setAttribute("role", "alertdialog");
+    el.setAttribute("aria-modal", "false");
+    el.setAttribute("aria-labelledby", "cut-hc-title");
+    if (root && root.classList.contains("cut-theme-dark")) el.classList.add("cut-pop-dark");
+    el.innerHTML = `
+      <div class="cut-hc-head">
+        <span class="cut-hc-ic" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg></span>
+        <div class="cut-hc-title" id="cut-hc-title">Hide the usage strip?</div>
+      </div>
+      <div class="cut-hc-dur" role="radiogroup" aria-label="Hide for">
+        <label class="cut-hc-opt"><input type="radio" name="cut-hc-dur" value="1" checked><span>1 hour</span></label>
+        <label class="cut-hc-opt"><input type="radio" name="cut-hc-dur" value="2"><span>2 hours</span></label>
+        <label class="cut-hc-opt"><input type="radio" name="cut-hc-dur" value="on"><span>Until I turn it on</span></label>
+      </div>
+      <div class="cut-hc-tip">To get it back, click the logo in your browser toolbar and turn on <strong>Show Usage Strip</strong>.</div>
+      <div class="cut-hc-actions">
+        <button class="cut-hc-btn cut-hc-danger" type="button" data-hc="hide">Hide strip</button>
+        <button class="cut-hc-btn cut-hc-keep" type="button" data-hc="cancel">Keep it</button>
+      </div>`;
+    const durValue = () => {
+      const r = el.querySelector('input[name="cut-hc-dur"]:checked');
+      return r ? r.value : "1";
+    };
+
+    hcPanel = el;
+    document.body.appendChild(el);
+    positionHideConfirm();
+    requestAnimationFrame(() => { if (hcPanel === el) el.classList.add("cut-hc-in"); });
+    // v1.4.4: "Keep it" is the default — focused, so Enter/Space keeps the
+    // strip. Re-applied a frame later in case claude.ai pulls focus back to
+    // its composer on the same click.
+    const keepBtn = el.querySelector('[data-hc="cancel"]');
+    const focusKeep = () => { try { if (hcPanel === el && keepBtn) keepBtn.focus({ preventScroll: true }); } catch (_) {} };
+    focusKeep();
+    requestAnimationFrame(focusKeep);
+    setTimeout(focusKeep, 60);
+
+    el.addEventListener("click", async (ev) => {
+      ev.stopPropagation();
+      const b = ev.target.closest("[data-hc]");
+      const what = b && b.getAttribute("data-hc");
+      if (what === "cancel") { closeHideConfirm(); return; }
+      if (what === "hide") {
+        const v = durValue();
+        if (v === "on") {
+          // Same "until switched back on" value the popup's switch writes.
+          await chrome.storage.local.set({ [DISMISS_KEY]: Number.MAX_SAFE_INTEGER });
+        } else {
+          await dismissForHours(Number(v) || 1);
+        }
+        hideStripNow();
+      }
+    });
+    hcOutside = (ev) => { if (ev.isTrusted && hcPanel && !hcPanel.contains(ev.target)) closeHideConfirm(); };
+    setTimeout(() => document.addEventListener("click", hcOutside, true), 0);
+    hcKey = (ev) => { if (ev.key === "Escape") { ev.stopPropagation(); closeHideConfirm(); } };
+    document.addEventListener("keydown", hcKey, true);
+  }
+
   function fmtReset(ts) {
     if (!ts) return "—";
     const ms = ts - Date.now();
@@ -1535,23 +1651,16 @@
           <span class="cut-collapse-tooltip" data-cut="collapse-tip" aria-hidden="true">Collapse the strip to a compact view (S = session, W = weekly). Click again anytime to expand.</span>
         </span>
         <span class="cut-close-wrap">
-          <button class="cut-close" type="button" aria-label="Hide the strip for 12 hours">×</button>
-          <span class="cut-close-tooltip" aria-hidden="true">Hides the strip for 12 hours.<br><strong>To bring it back sooner:</strong> click the Claude Usage Meter icon in your browser toolbar, then click <strong>"Show Usage Strip above Chat"</strong>.</span>
+          <button class="cut-close" type="button" aria-label="Hide the usage strip">×</button>
+          <span class="cut-close-tooltip" aria-hidden="true">Hide the strip for 1 hour, 2 hours, or until you turn it back on.<br><strong>To bring it back:</strong> click the Claude Usage Meter icon in your browser toolbar, then turn on <strong>"Show Usage Strip above Chat"</strong>.</span>
         </span>
       </div>
     `;
-    root.querySelector(".cut-close").addEventListener("click", async (e) => {
+    root.querySelector(".cut-close").addEventListener("click", (e) => {
       e.preventDefault(); e.stopPropagation();
-      // v1.2.16: the nudge is anchored to a button inside the strip — it can't
-      // outlive it, or it floats over the page pointing at nothing.
-      closeNudge(root);
-      closeShareNudge(root);
-      closeSupportNudge(root, true);
-      closeShareCard();
-      closeLogoMenu();
-      await dismissForHours(12);
-      const el = document.getElementById(OVERLAY_ID);
-      if (el) el.remove();
+      // v1.4.4: confirm first. A stray click on × used to make the strip vanish
+      // with no hint of how to get it back.
+      openHideConfirm(root);
     });
     const rateBtn = root.querySelector(".cut-rate");
     if (rateBtn) {
@@ -5961,7 +6070,38 @@
       if (el.tagName === "FORM")     { wrapper = el; break; }
     }
     if (!wrapper) wrapper = editor.parentElement;
-    return wrapper ? { wrapper, editor } : null;
+    if (!wrapper) return null;
+
+    // v1.4.3: claude.ai/code's composer has no <fieldset>/<form> around its
+    // input box, so the fallback above landed INSIDE the bordered box and the
+    // strip rode on top of the placeholder text. If the wrapper we picked sits
+    // inside the visible composer box, mount before the box instead — the same
+    // "just above the chatbox" spot the strip has on claude.ai. On claude.ai
+    // the box is inside the fieldset, so this never fires there.
+    const box = findComposerBox(editor);
+    if (box && box !== wrapper && box.contains(wrapper)) wrapper = box;
+    return { wrapper, editor };
+  }
+
+  // The nearest ancestor of the editor that LOOKS like the chatbox: rounded,
+  // with a visible border or shadow, and holding a button (send/attach).
+  // Style-based rather than class-based so it survives claude.ai deploys.
+  function findComposerBox(editor) {
+    let el = editor.parentElement;
+    for (let i = 0; i < 10 && el && el !== document.body; i++, el = el.parentElement) {
+      const cs = getComputedStyle(el);
+      const radius = parseFloat(cs.borderTopLeftRadius) || 0;
+      if (radius < 6) continue;
+      const bordered =
+        (parseFloat(cs.borderTopWidth) || 0) > 0 &&
+        cs.borderTopStyle !== "none" &&
+        !/rgba\([^)]*,\s*0\)|transparent/.test(cs.borderTopColor);
+      const shadowed = cs.boxShadow && cs.boxShadow !== "none";
+      if (!bordered && !shadowed) continue;
+      if (!el.querySelector("button")) continue;
+      return el;
+    }
+    return null;
   }
 
   async function ensureMounted() {
@@ -6244,6 +6384,13 @@
       }
       promoStateKnown = true;
       ensureSidebarPromo();
+    }
+    // v1.4.4: the popup's "Show Usage Strip" toggle writes DISMISS_KEY; apply it
+    // in every open claude.ai tab right away (on → mount, off → remove).
+    if (changes[DISMISS_KEY]) {
+      const until = changes[DISMISS_KEY].newValue;
+      if (typeof until === "number" && until > Date.now()) hideStripNow();
+      else ensureMounted();
     }
     if (changes[RATE_AT_KEY]) {
       ratedAt = Number(changes[RATE_AT_KEY].newValue) || 0;

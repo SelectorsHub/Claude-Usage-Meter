@@ -2723,3 +2723,124 @@
 @media (prefers-reduced-motion: reduce) {
   #claude-usage-overlay .cut-logo-wrap.cut-rate-pulse { animation: none; }
 }
+
+/* ===== v1.4.4: "Hide the usage strip?" confirm card for the × button =====
+   Styled as a red warning. "Keep it" is the filled, focused default; "Hide
+   strip" is the red outlined secondary. Light card on dark pages (as the
+   share card), dark card on light pages. */
+.cut-hc-panel {
+  position: fixed;
+  z-index: 2147483647;
+  box-sizing: border-box;
+  width: min(300px, calc(100vw - 16px));
+  padding: 14px 14px 12px;
+  background: #1a1a1c;
+  color: #f1f1f2;
+  border: 1px solid rgba(239, 68, 68, 0.55);
+  border-top: 4px solid #ef4444;
+  border-radius: 12px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5), 0 0 0 4px rgba(239, 68, 68, 0.12);
+  font: 500 12px/1.45 ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  text-align: left;
+  opacity: 0;
+  transform: translateY(6px);
+  transition: opacity 0.18s ease, transform 0.18s ease;
+}
+.cut-hc-panel.cut-hc-in { opacity: 1; transform: none; }
+.cut-hc-panel.cut-pop-dark {
+  background: #fdf6f5;
+  color: #1a1a1c;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.55), 0 0 0 4px rgba(239, 68, 68, 0.18);
+}
+.cut-hc-panel .cut-hc-head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+.cut-hc-panel .cut-hc-ic {
+  display: inline-flex; align-items: center; justify-content: center;
+  flex-shrink: 0; width: 26px; height: 26px; border-radius: 50%;
+  background: rgba(239, 68, 68, 0.16); color: #ef4444;
+}
+.cut-hc-panel.cut-pop-dark .cut-hc-ic { color: #dc2626; background: rgba(220, 38, 38, 0.12); }
+.cut-hc-panel .cut-hc-title { font-size: 14px; font-weight: 700; color: #f87171; }
+.cut-hc-panel.cut-pop-dark .cut-hc-title { color: #b91c1c; }
+.cut-hc-panel .cut-hc-body { opacity: 0.88; margin-bottom: 10px; }
+.cut-hc-panel .cut-hc-dur-lbl {
+  font-size: 10.5px; font-weight: 700; letter-spacing: 0.06em;
+  text-transform: uppercase; opacity: 0.6; margin-bottom: 5px;
+}
+.cut-hc-panel .cut-hc-dur {
+  display: flex; gap: 4px; padding: 3px; margin-bottom: 10px;
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+}
+.cut-hc-panel.cut-pop-dark .cut-hc-dur {
+  background: rgba(0, 0, 0, 0.04);
+  border-color: rgba(0, 0, 0, 0.10);
+}
+.cut-hc-panel .cut-hc-opt { position: relative; flex: 1 1 auto; cursor: pointer; }
+.cut-hc-panel .cut-hc-opt input {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  margin: 0; opacity: 0; cursor: pointer;
+}
+.cut-hc-panel .cut-hc-opt span {
+  display: block; padding: 6px 6px; border-radius: 6px;
+  text-align: center; white-space: nowrap;
+  font-size: 11.5px; font-weight: 600; opacity: 0.75;
+  transition: background 0.15s, color 0.15s, opacity 0.15s;
+}
+.cut-hc-panel .cut-hc-opt:hover span { opacity: 1; }
+.cut-hc-panel .cut-hc-opt input:checked + span {
+  opacity: 1; background: #45454c; color: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.45), inset 0 0 0 1px rgba(255, 255, 255, 0.14);
+}
+.cut-hc-panel.cut-pop-dark .cut-hc-opt input:checked + span {
+  background: #fff; color: #1a1a1c;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
+}
+.cut-hc-panel .cut-hc-opt input:focus-visible + span { outline: 2px solid #d97757; outline-offset: 1px; }
+.cut-hc-panel .cut-hc-tip {
+  padding: 8px 10px;
+  border-radius: 8px;
+  border-left: 3px solid #ef4444;
+  background: rgba(239, 68, 68, 0.12);
+  font-size: 11.5px;
+  margin-bottom: 12px;
+}
+.cut-hc-panel .cut-hc-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.cut-hc-panel .cut-hc-btn {
+  appearance: none;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+  padding: 9px 14px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s, box-shadow 0.15s;
+}
+/* Secondary, destructive: red text/outline, fills red on hover. */
+.cut-hc-panel .cut-hc-danger {
+  border: 1px solid #ef4444;
+  background: transparent;
+  color: #f87171;
+}
+.cut-hc-panel.cut-pop-dark .cut-hc-danger { color: #dc2626; border-color: #dc2626; }
+.cut-hc-panel .cut-hc-danger:hover { background: #dc2626; border-color: #dc2626; color: #fff; }
+/* Primary, default: the one we want them to press. */
+.cut-hc-panel .cut-hc-keep {
+  border: 1px solid #d97757;
+  background: #d97757;
+  color: #fff;
+  min-width: 84px;
+}
+.cut-hc-panel .cut-hc-keep:hover { background: #c96846; border-color: #c96846; }
+/* :focus (not only :focus-visible) so the default ring shows after a mouse
+   click on × — that's when it's focused programmatically. */
+.cut-hc-panel .cut-hc-keep:focus {
+  outline: 2px solid #d97757;
+  outline-offset: 3px;
+  box-shadow: 0 0 16px rgba(217, 119, 87, 0.55);
+}
+.cut-hc-panel .cut-hc-danger:focus-visible { outline: 2px solid #ef4444; outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) {
+  .cut-hc-panel { transition: none; }
+}

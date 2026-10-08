@@ -1,4 +1,6 @@
 // popup.js (v1.6)
+// - v1.4.4: "Show Usage Strip above Chat" is an on/off switch instead of the
+//   pink/green CTA button. OFF hides the strip until switched back on.
 // - v1.2.17: projected-pace line under each meter. The popup has room the strip
 //   doesn\'t, so unlike the strip chip (which only appears when you\'re on track
 //   to run out) this states the case either way, including "resets before you\'d
@@ -382,35 +384,16 @@ document.getElementById("reset-btn").addEventListener("click", async () => {
   refresh({ forceFetch: true });
 });
 
-// ── Strip CTA: reflects whether the on-page strip is already visible ──
-const STRIP_ICON_STRIP =
-  '<svg class="btn-strip-cta-ic" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="9" x2="21" y2="9"></line><rect x="3" y="4" width="18" height="16" rx="2"></rect></svg>';
-const STRIP_ICON_CHECK =
-  '<svg class="btn-strip-cta-ic" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>';
-const STRIP_ICON_OPEN =
-  '<svg class="btn-strip-cta-ic" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>';
-
-function setStripButton(state) {
-  const btn = document.getElementById("show-strip-btn");
-  if (!btn) return;
-  btn.dataset.state = state;
-  if (state === "visible") {
-    btn.classList.add("is-visible");
-    btn.innerHTML =
-      '<span class="btn-strip-cta-glow"></span>' + STRIP_ICON_CHECK +
-      '<span class="btn-strip-cta-txt">Usage strip is visible on claude.ai</span>';
-  } else if (state === "open") {
-    btn.classList.remove("is-visible");
-    btn.innerHTML =
-      '<span class="btn-strip-cta-glow"></span>' + STRIP_ICON_OPEN +
-      '<span class="btn-strip-cta-txt">Open claude.ai to see the strip</span>';
-  } else {
-    btn.classList.remove("is-visible");
-    btn.innerHTML =
-      '<span class="btn-strip-cta-glow"></span>' + STRIP_ICON_STRIP +
-      '<span class="btn-strip-cta-txt">Show Usage Strip above Chat</span>';
-  }
-}
+// ── v1.4.4: "Show Usage Strip above Chat" on/off switch ──
+// Replaces the pink/green CTA button, whose two colours read as two different
+// buttons. The switch mirrors overlay_dismissed_until in storage: ON = not
+// dismissed. content-script.js watches that key, so flipping the switch shows
+// or hides the strip in every open claude.ai tab at once.
+//   • Switch OFF here → hidden until switched back on.
+//   • × on the strip  → after a confirm: 1 hour, 2 hours, or until switched
+//     back on. The switch shows OFF meanwhile, with the time it comes back.
+const STRIP_DISMISS_KEY = "overlay_dismissed_until";
+const STRIP_HIDE_UNTIL_ON = Number.MAX_SAFE_INTEGER;
 
 async function getActiveTab() {
   try {
@@ -424,12 +407,6 @@ function isClaudeTab(tab) {
 }
 
 async function focusOrOpenClaude() {
-  const tab = await getActiveTab();
-  if (isClaudeTab(tab)) {
-    // Already the active tab — just close the popup so the strip is in view.
-    window.close();
-    return;
-  }
   try {
     const claudeTabs = await chrome.tabs.query({ url: "https://claude.ai/*" });
     if (claudeTabs && claudeTabs.length) {
@@ -445,43 +422,71 @@ async function focusOrOpenClaude() {
   window.close();
 }
 
+function setStripSub(html) {
+  const sub = document.getElementById("strip-toggle-sub");
+  if (!sub) return;
+  if (sub.innerHTML !== html) sub.innerHTML = html;
+  const link = sub.querySelector("[data-open-claude]");
+  if (link && !link._wired) {
+    link._wired = true;
+    link.addEventListener("click", (e) => { e.preventDefault(); focusOrOpenClaude(); });
+  }
+}
+
+async function readStripDismissedUntil() {
+  try {
+    const { [STRIP_DISMISS_KEY]: until } = await chrome.storage.local.get(STRIP_DISMISS_KEY);
+    return typeof until === "number" && until > Date.now() ? until : 0;
+  } catch (_) { return 0; }
+}
+
 async function refreshStripButtonState() {
+  const toggle = document.getElementById("show-strip-toggle");
+  const row = document.getElementById("strip-toggle-row");
+  if (!toggle) return;
+  const until = await readStripDismissedUntil();
+  const on = !until;
+  toggle.checked = on;
+  toggle.setAttribute("aria-checked", on ? "true" : "false");
+  if (row) row.classList.toggle("is-on", on);
+
+  if (!on) {
+    if (until >= STRIP_HIDE_UNTIL_ON / 2) {
+      setStripSub("Hidden. Turn on to show it again.");
+    } else {
+      const t = new Date(until).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+      setStripSub(`Hidden until ${t}. Turn on to show it now.`);
+    }
+    return;
+  }
+
   const tab = await getActiveTab();
-  if (!isClaudeTab(tab)) { setStripButton("open"); return; }
+  if (!isClaudeTab(tab)) {
+    setStripSub('Shows above the chat on claude.ai. <a href="#" data-open-claude>Open claude.ai \u2192</a>');
+    return;
+  }
   let visible = false;
   try {
     const resp = await chrome.tabs.sendMessage(tab.id, { type: "query-strip-visible" });
     visible = !!(resp && resp.visible);
-  } catch (_) {
-    // Content script not ready / not responding — treat as not visible.
-    visible = false;
-  }
-  setStripButton(visible ? "visible" : "show");
+  } catch (_) { visible = false; }
+  setStripSub(visible ? "Showing above your chat." : "Shows above the chat box when you open a chat.");
 }
 
-document.getElementById("show-strip-btn").addEventListener("click", async () => {
-  const btn = document.getElementById("show-strip-btn");
-  const state = btn ? btn.dataset.state : "show";
-
-  // When the strip is already visible, or we're not on claude.ai, the action
-  // is simply to take the user to claude.ai so they can see it.
-  if (state === "visible" || state === "open") {
-    await focusOrOpenClaude();
-    return;
+document.getElementById("show-strip-toggle").addEventListener("change", async (e) => {
+  const on = e.target.checked;
+  await chrome.storage.local.set({ [STRIP_DISMISS_KEY]: on ? 0 : STRIP_HIDE_UNTIL_ON });
+  if (on) {
+    // Belt and braces: storage.onChanged already re-mounts the strip, but a tab
+    // whose listener hasn't attached yet still gets told directly.
+    try {
+      const tab = await getActiveTab();
+      if (isClaudeTab(tab)) await chrome.tabs.sendMessage(tab.id, { type: "restore-strip" });
+    } catch (_) {}
   }
-
-  // Default "show" path: clear the dismissal and ask the content script to mount.
-  await chrome.storage.local.set({ overlay_dismissed_until: 0 });
-  try {
-    const tab = await getActiveTab();
-    if (isClaudeTab(tab)) {
-      await chrome.tabs.sendMessage(tab.id, { type: "restore-strip" });
-      setStripButton("visible");
-      setTestResult("Strip is now showing on claude.ai.", "info");
-      return;
-    }
-  } catch (_) {}
-  setTestResult("Strip will appear next time you open claude.ai.", "info");
+  // Give the content script a beat to mount/unmount before reading it back.
+  setTimeout(() => refreshStripButtonState(), 250);
+  refreshStripButtonState();
 });
 
 // ── Rate us: shown until the user clicks it once, then hidden forever ──
