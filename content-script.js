@@ -1,4 +1,22 @@
 // content-script.js (isolated world, v1.29)
+// - v1.4.5: USAGE BARS. Each meter gets a small bar beside its label (fill =
+//   % used, same colours as the number). The tooltip adds pace ("Ahead of
+//   pace: 62% used, 40% of the window gone"). An on-bar pace tick was tried
+//   and dropped: it followed the clock, not usage, so it looked frozen. New stripFields.usageBars,
+//   on by default, in the gear popover and the popup panel. Shed for width
+//   right after the reset times (fit level 2, and the 640px container tier);
+//   the collapsed pill keeps its rings.
+// - v1.4.5 (claude.ai/code): CODE SESSION TOKENS. On a Claude Code session
+//   page the chat-size segment becomes "Code 2.4M tokens  in 12K · out 48K ·
+//   cache 2.3M": exact counts from Claude Code's own per-message usage blocks
+//   (page-injector.js finds them in the page's traffic), one entry per message
+//   id so nothing counts twice, summed per session and kept in
+//   chrome.storage.local (code_usage_<sid>, newest 30 sessions). Tooltip has
+//   the full input / output / cache read / cache write split, reply count,
+//   cache hit rate and current context size. Shown only once real numbers
+//   exist for THAT session; rides the existing "Chat tokens" toggle. The
+//   in/out/cache detail is the first thing shed for width (fit level 1);
+//   narrow and collapsed views show a terminal glyph + total.
 // - v1.4.4: the strip's × now asks first ("Hide the usage strip?"), lets the
 //   user pick 1 hour (default) / 2 hours / until turned back on (was a fixed
 //   12 hours), and says how to bring it back from the toolbar popup. The
@@ -390,6 +408,11 @@
     // not forwarded: background's message_limit path has no use for it.
     if (data.payload && data.payload.kind === "completion_done") {
       onCompletionDone(data.payload.uuid);
+      return;
+    }
+    // v1.4.5: Claude Code per-message token usage — handled here too.
+    if (data.payload && data.payload.kind === "code_usage") {
+      onCodeUsage(data.payload.records);
       return;
     }
     try {
@@ -856,7 +879,8 @@
     resetTimeSession: true,
     resetTimeWeekly: true,
     forecast: true,
-    chatTokens: true
+    chatTokens: true,
+    usageBars: true
   };
   function fieldOn(name) {
     return stripFields[name] !== false;
@@ -1325,6 +1349,8 @@
 
   function applyFieldVisibility(root, fable) {
     if (!root) return;
+    // v1.4.5: one class, so the fit levels and container tiers keep control.
+    root.classList.toggle("cut-no-bars", !fieldOn("usageBars"));
     fableVisible = !!fable;
     // Lets overlay.css widen the "drop the reset text" breakpoint — three
     // segments need more room on one line than two.
@@ -1534,6 +1560,7 @@
         <div class="cut-divider" data-cut="session-divider"></div>
         <div class="cut-seg" data-cut="session">
           <span class="cut-label" data-cut-label>Session</span>
+          <span class="cut-bar" data-cut-bar aria-hidden="true"><span class="cut-bar-fill" data-cut-bar-fill></span></span>
           <span class="cut-pct" data-cut-pct>—</span>
           <span class="cut-sep">·</span>
           <span class="cut-meta" data-cut-meta>waiting…</span>
@@ -1545,6 +1572,7 @@
         <div class="cut-divider" data-cut="weekly-divider"></div>
         <div class="cut-seg" data-cut="weekly">
           <span class="cut-label" data-cut-label>Weekly</span>
+          <span class="cut-bar" data-cut-bar aria-hidden="true"><span class="cut-bar-fill" data-cut-bar-fill></span></span>
           <span class="cut-pct" data-cut-pct>—</span>
           <span class="cut-sep">·</span>
           <span class="cut-meta" data-cut-meta>—</span>
@@ -1552,6 +1580,7 @@
         <div class="cut-divider" data-cut="fable-divider" style="display:none"></div>
         <div class="cut-seg" data-cut="fable" style="display:none">
           <span class="cut-label" data-cut-label>Fable</span>
+          <span class="cut-bar" data-cut-bar aria-hidden="true"><span class="cut-bar-fill" data-cut-bar-fill></span></span>
           <span class="cut-pct" data-cut-pct>—</span>
           <span class="cut-sep">·</span>
           <span class="cut-meta" data-cut-meta>—</span>
@@ -1559,9 +1588,11 @@
         <div class="cut-divider cut-chat-divider" data-cut="chat-divider" style="display:none"></div>
         <span class="cut-chat" data-cut="chat" tabindex="0" style="display:none">
           <svg class="cut-chat-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>
+          <svg class="cut-code-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line></svg>
           <span class="cut-label cut-chat-label">Chat</span>
           <span class="cut-chat-val" data-cut="chat-val">—</span>
           <span class="cut-chat-word">tokens</span>
+          <span class="cut-chat-detail" data-cut="chat-detail"></span>
         </span>
         <div class="cut-compact" data-cut="compact">
           <span class="cut-cwrap" data-cut="c-session-wrap">
@@ -1580,7 +1611,7 @@
           </span>
           <span class="cut-cdivider" data-cut="c-chat-divider" aria-hidden="true" style="display:none"></span>
           <span class="cut-cwrap cut-cchat" data-cut="c-chat-wrap" style="display:none">
-            <span class="cut-cval" tabindex="0"><svg class="cut-chat-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg><span class="cut-cpct cut-chat-val" data-cut="c-chat">—</span></span>
+            <span class="cut-cval" tabindex="0"><svg class="cut-chat-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg><svg class="cut-code-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line></svg><span class="cut-cpct cut-chat-val" data-cut="c-chat">—</span></span>
             <span class="cut-ctip" data-cut="c-chat-tip" aria-hidden="true"></span>
           </span>
         </div>
@@ -1631,6 +1662,7 @@
             <div class="cut-sp-sep"></div>
             <label class="cut-sp-row"><input type="checkbox" data-sp="resetTimeSession" /><span>Session reset time</span></label>
             <label class="cut-sp-row"><input type="checkbox" data-sp="resetTimeWeekly" /><span>Weekly reset time</span></label>
+            <label class="cut-sp-row"><input type="checkbox" data-sp="usageBars" /><span>Usage bars</span></label>
             <label class="cut-sp-row"><input type="checkbox" data-sp="forecast" /><span>Limit forecast</span></label>
             <label class="cut-sp-row"><input type="checkbox" data-sp="chatTokens" /><span>Chat tokens</span></label>
             <div class="cut-sp-sep"></div>
@@ -3840,8 +3872,59 @@
   // Circumference of the compact ring (r = 10 in a 24x24 viewBox).
   const RING_C = 2 * Math.PI * 10;
 
+  // ===== v1.4.5: usage bars with a pace tick =====
+  //
+  // A review: "Seeing numbers alone is not intuitive." The v1.2.2 underline was
+  // removed in v1.2.9 because it only echoed the % in less precise form. This
+  // bar earns its place by adding one thing the number can't say: the tick
+  // marks how far through the window the clock is. Fill past the tick = you're
+  // using it faster than it refills; fill short of it = you'll have some left.
+  // Session windows are 5 hours and weekly ones 7 days; both end at resetsAt.
+  const WINDOW_MS = { session: 5 * 3600e3, weekly: 7 * 86400e3, fable: 7 * 86400e3 };
+
+  function windowElapsedPct(scope, resetsAt) {
+    const len = WINDOW_MS[scope];
+    const end = resetsAt ? new Date(resetsAt).getTime() : NaN;
+    if (!len || !isFinite(end)) return null;
+    const left = end - Date.now();
+    if (left <= 0 || left > len * 1.05) return null;   // stale or unknown window
+    return Math.max(0, Math.min(100, (1 - left / len) * 100));
+  }
+
+  function paceText(p, elapsed) {
+    if (elapsed == null) return "";
+    const e = Math.round(elapsed);
+    if (p >= 100) return "";
+    if (p > e + 10) return `Ahead of pace: ${p}% used, ${e}% of the window gone`;
+    if (p < e - 10) return `Under pace: ${p}% used, ${e}% of the window gone`;
+    return `On pace: ${p}% used, ${e}% of the window gone`;
+  }
+
+  function renderBar(segEl, data) {
+    const bar = segEl.querySelector("[data-cut-bar]");
+    if (!bar) return "";
+    const fill = bar.querySelector("[data-cut-bar-fill]");
+    if (!data || data.percent == null) {
+      bar.classList.add("cut-bar-empty");
+      if (fill) { fill.style.width = "0%"; fill.className = "cut-bar-fill"; }
+      return "";
+    }
+    const p = clampPct(data.percent);
+    bar.classList.remove("cut-bar-empty");
+    if (fill) {
+      fill.style.width = p + "%";
+      fill.className = "cut-bar-fill cut-color-" + colorClass(p);
+    }
+    const scope = segEl.getAttribute("data-cut");
+    // v1.4.5: no on-bar tick. It tracked the CLOCK, so it crawled (~1% per
+    // 3 min on a 5h window, ~1% per 1.7h weekly) while the fill moved with
+    // every message — it read as stuck. Pace stays as a tooltip sentence.
+    return paceText(p, windowElapsedPct(scope, data.resetsAt));
+  }
+
   function renderSegment(segEl, data, labelOverride) {
     if (!segEl) return;
+    const pace = renderBar(segEl, data);
     const labelEl = segEl.querySelector('[data-cut-label]');
     const pctEl   = segEl.querySelector('[data-cut-pct]');
     const metaEl  = segEl.querySelector('[data-cut-meta]');
@@ -3863,6 +3946,8 @@
         metaEl.textContent = "no reset info";
       }
       segEl.dataset.cutTip = data.resetsAt ? `Reset in ${fmtReset(data.resetsAt)}` : "No reset info";
+      // v1.4.5: the pace sentence explains the bar's tick, where the bar shows.
+      if (pace && fieldOn("usageBars")) segEl.dataset.cutTip += "<br>" + pace;
       // Also tint the % number itself, and flag alert states:
       //   >= 90%  → red text ("cut-alert")
       //   = 100%  → red text + pulsing "maxed out" emphasis ("cut-alert-max")
@@ -4304,6 +4389,7 @@
   // Called from the mutation observer / boot loop: cheap unless the chat id
   // actually changed.
   function watchChatRoute() {
+    watchCodeRoute();
     const id = currentChatId();
     if (id === chatTokensRoute) return;
     chatTokensRoute = id;
@@ -4328,8 +4414,204 @@
     }, 1500);
   }
 
+  // ===== v1.4.5: Claude Code session tokens (claude.ai/code/session_…) =====
+  //
+  // page-injector.js sends every message `usage` block it sees on a Code page:
+  // { id: "msg_…", sid: "session_…", in, out, cr, cw }. We keep one entry per
+  // message id (fields merged by max, so repeats and replays never double
+  // count) and sum them. These are Claude's own counts, not an estimate.
+  //
+  // Persisted per session in chrome.storage.local so a reload doesn't zero the
+  // strip if the page doesn't replay history. Merging by id makes the stored
+  // copy and a replay agree. Only the CODE_KEEP most recent sessions are kept.
+  const CODE_PREFIX = "code_usage_";
+  const CODE_KEEP = 30;
+  const codeSessions = new Map();   // sid -> { msgs: Map(id -> rec), order: [id], loaded, saveTimer }
+  let codeRoute = null;
+
+  function currentCodeSessionId() {
+    const m = /^\/code\/(?:[^/]+\/)*?(session_[A-Za-z0-9]{8,})/.exec(location.pathname || "");
+    return m ? m[1] : null;
+  }
+
+  function codeEntry(sid) {
+    let e = codeSessions.get(sid);
+    if (!e) {
+      e = { msgs: new Map(), order: [], loaded: false, saveTimer: 0, touched: 0 };
+      codeSessions.set(sid, e);
+    }
+    return e;
+  }
+
+  function mergeCodeRec(e, r) {
+    if (!r || typeof r.id !== "string") return false;
+    const n = (v) => Math.max(0, Number(v) || 0);
+    const prev = e.msgs.get(r.id);
+    if (!prev) {
+      e.msgs.set(r.id, { in: n(r.in), out: n(r.out), cr: n(r.cr), cw: n(r.cw) });
+      e.order.push(r.id);
+      return true;
+    }
+    let changed = false;
+    for (const k of ["in", "out", "cr", "cw"]) {
+      if (n(r[k]) > prev[k]) { prev[k] = n(r[k]); changed = true; }
+    }
+    return changed;
+  }
+
+  function loadCodeSession(sid) {
+    const e = codeEntry(sid);
+    if (e.loaded) return;
+    e.loaded = true;
+    try {
+      chrome.storage.local.get(CODE_PREFIX + sid, (res) => {
+        void chrome.runtime.lastError;
+        const saved = res && res[CODE_PREFIX + sid];
+        if (!saved || !Array.isArray(saved.m)) return;
+        // Stored entries go FIRST in arrival order — they're older than
+        // anything this page load has seen.
+        const live = e.order.slice();
+        e.order = [];
+        const liveMsgs = e.msgs;
+        e.msgs = new Map();
+        for (const [id, i, o, cr, cw] of saved.m) mergeCodeRec(e, { id, in: i, out: o, cr, cw });
+        for (const id of live) mergeCodeRec(e, { id, ...liveMsgs.get(id) });
+        if (sid === currentCodeSessionId()) renderChatTokens(document.getElementById(OVERLAY_ID));
+      });
+    } catch (_) {}
+  }
+
+  function saveCodeSession(sid) {
+    const e = codeSessions.get(sid);
+    if (!e || e.saveTimer) return;
+    e.saveTimer = setTimeout(() => {
+      e.saveTimer = 0;
+      const m = e.order.map((id) => {
+        const r = e.msgs.get(id);
+        return [id, r.in, r.out, r.cr, r.cw];
+      });
+      try {
+        chrome.storage.local.set({ [CODE_PREFIX + sid]: { m, t: Date.now() } }, () => {
+          void chrome.runtime.lastError;
+          pruneCodeSessions();
+        });
+      } catch (_) {}
+    }, 2000);
+  }
+
+  function pruneCodeSessions() {
+    try {
+      chrome.storage.local.get(null, (all) => {
+        void chrome.runtime.lastError;
+        if (!all) return;
+        const keys = Object.keys(all).filter((k) => k.startsWith(CODE_PREFIX));
+        if (keys.length <= CODE_KEEP) return;
+        keys.sort((a, b) => ((all[b] && all[b].t) || 0) - ((all[a] && all[a].t) || 0));
+        chrome.storage.local.remove(keys.slice(CODE_KEEP), () => void chrome.runtime.lastError);
+      });
+    } catch (_) {}
+  }
+
+  function onCodeUsage(records) {
+    if (!Array.isArray(records)) return;
+    const changedSids = new Set();
+    for (const r of records) {
+      if (!r || typeof r.sid !== "string") continue;
+      const e = codeEntry(r.sid);
+      if (!e.loaded) loadCodeSession(r.sid);
+      if (mergeCodeRec(e, r)) { changedSids.add(r.sid); e.touched = Date.now(); }
+    }
+    for (const sid of changedSids) saveCodeSession(sid);
+    if (changedSids.has(currentCodeSessionId())) {
+      renderChatTokens(document.getElementById(OVERLAY_ID));
+    }
+  }
+
+  function codeTotals(sid) {
+    const e = sid && codeSessions.get(sid);
+    if (!e || !e.order.length) return null;
+    const t = { in: 0, out: 0, cr: 0, cw: 0, messages: e.order.length, context: 0 };
+    for (const r of e.msgs.values()) {
+      t.in += r.in; t.out += r.out; t.cr += r.cr; t.cw += r.cw;
+    }
+    // The newest message's prompt side = what the session's context weighs now.
+    const last = e.msgs.get(e.order[e.order.length - 1]);
+    if (last) t.context = last.in + last.cr + last.cw;
+    t.total = t.in + t.out + t.cr + t.cw;
+    return t;
+  }
+
+  function watchCodeRoute() {
+    const sid = currentCodeSessionId();
+    if (sid === codeRoute) return;
+    codeRoute = sid;
+    if (sid) loadCodeSession(sid);
+    renderChatTokens(document.getElementById(OVERLAY_ID));
+  }
+
+  function renderCodeTokens(root, t) {
+    const el = root.querySelector('[data-cut="chat"]');
+    const cTip = root.querySelector('[data-cut="c-chat-tip"]');
+    el.classList.add("cut-code");
+    const cw = root.querySelector('[data-cut="c-chat-wrap"]');
+    if (cw) cw.classList.add("cut-code");
+    const label = el.querySelector(".cut-chat-label");
+    if (label) label.textContent = "Code";
+    root.querySelectorAll('[data-cut="chat-val"], [data-cut="c-chat"]').forEach((val) => {
+      val.textContent = fmtTokens(t.total);
+      val.classList.remove("cut-chat-long", "cut-chat-huge");
+    });
+    const detail = root.querySelector('[data-cut="chat-detail"]');
+    const cache = t.cr + t.cw;
+    if (detail) {
+      detail.textContent =
+        `in ${fmtTokens(t.in)} · out ${fmtTokens(t.out)} · cache ${fmtTokens(cache)}`;
+    }
+    const cachePct = (t.in + cache) > 0 ? Math.round((t.cr / (t.in + cache)) * 100) : 0;
+    el.dataset.cutTip =
+      `<b>This Code session: ${t.total.toLocaleString()} tokens</b><br>` +
+      `Input ${t.in.toLocaleString()} · Output ${t.out.toLocaleString()}<br>` +
+      `Cache read ${t.cr.toLocaleString()} · Cache write ${t.cw.toLocaleString()}<br>` +
+      `${t.messages.toLocaleString()} Claude replies · ${cachePct}% of input served from cache<br>` +
+      `Current context ~${fmtTokens(t.context)} tokens<br>` +
+      `<span style="opacity:.7">Exact counts reported by Claude Code for the replies this browser has seen.</span>`;
+    if (cTip) cTip.innerHTML = el.dataset.cutTip;
+    el.setAttribute("aria-label",
+      `This Code session: ${t.total.toLocaleString()} tokens. Input ${t.in.toLocaleString()}, ` +
+      `output ${t.out.toLocaleString()}, cache read ${t.cr.toLocaleString()}, ` +
+      `cache write ${t.cw.toLocaleString()}.`);
+  }
+
+  function resetChatSegmentToChat(root) {
+    const el = root.querySelector('[data-cut="chat"]');
+    if (!el || !el.classList.contains("cut-code")) return;
+    el.classList.remove("cut-code");
+    const cw = root.querySelector('[data-cut="c-chat-wrap"]');
+    if (cw) cw.classList.remove("cut-code");
+    const label = el.querySelector(".cut-chat-label");
+    if (label) label.textContent = "Chat";
+    const detail = root.querySelector('[data-cut="chat-detail"]');
+    if (detail) detail.textContent = "";
+  }
+
   function renderChatTokens(root) {
     if (!root) return;
+    // v1.4.5: a Code session page gets exact Claude Code counts instead.
+    const codeSid = currentCodeSessionId();
+    if (codeSid) {
+      const t = fieldOn("chatTokens") ? codeTotals(codeSid) : null;
+      const nodes = ['chat', 'chat-divider', 'c-chat-wrap', 'c-chat-divider']
+        .map((k) => root.querySelector(`[data-cut="${k}"]`));
+      for (const node of nodes) if (node) node.style.display = t ? "" : "none";
+      if (t) renderCodeTokens(root, t);
+      else {
+        const el = root.querySelector('[data-cut="chat"]');
+        if (el) delete el.dataset.cutTip;
+      }
+      scheduleFit(root);
+      return;
+    }
+    resetChatSegmentToChat(root);
     const el = root.querySelector('[data-cut="chat"]');
     const div = root.querySelector('[data-cut="chat-divider"]');
     // Collapsed pill's chip and its leading divider.

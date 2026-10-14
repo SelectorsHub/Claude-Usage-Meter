@@ -115,7 +115,11 @@ const DEFAULT_SETTINGS = {
     // v1.3.6: the per-chat size readout ("Chat ~36.9K tokens"). On by default —
     // it is the answer to the question users actually ask ("how much does this
     // chat take?"), and it only renders on a /chat/ page once it has a number.
-    chatTokens: true
+    chatTokens: true,
+    // v1.4.5: a small bar beside each meter's %. On by default — reviews
+    // asked for a visual, and it only costs ~40px; first thing shed for width
+    // after the reset times.
+    usageBars: true
   },
   // v1.2.17: one-shot desktop heads-up when the projection says the session
   // quota runs out well before it resets. Rides on notificationsEnabled.

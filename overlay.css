@@ -2844,3 +2844,79 @@
 @media (prefers-reduced-motion: reduce) {
   .cut-hc-panel { transition: none; }
 }
+
+/* ---------------------------------------------------------------------------
+   v1.4.5 — Claude Code session tokens. On claude.ai/code/session_… the chat
+   segment reads "Code 2.4M tokens  in 12K · out 48K · cache 2.3M". The
+   in/out/cache detail is the first thing to go for width (fit level 1, and
+   the 820px container tier), the label and word follow the chat segment's
+   own rules. The terminal glyph replaces the bubble wherever a glyph shows.
+--------------------------------------------------------------------------- */
+#claude-usage-overlay .cut-chat-detail {
+  display: none;
+  font-size: 11px;
+  opacity: 0.62;
+  margin-left: 2px;
+  font-variant-numeric: tabular-nums;
+}
+#claude-usage-overlay .cut-chat.cut-code .cut-chat-detail:not(:empty) { display: inline; }
+#claude-usage-overlay .cut-code-ic {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+  opacity: 0.7;
+  display: none;
+}
+#claude-usage-overlay .cut-code .cut-chat-ic { display: none !important; }
+#claude-usage-overlay .cut-cchat.cut-code .cut-code-ic { display: inline-block; }
+@container cut-overlay (max-width: 820px) {
+  #claude-usage-overlay .cut-chat.cut-code .cut-chat-detail:not(:empty) { display: none; }
+}
+@container cut-overlay (max-width: 480px) {
+  #claude-usage-overlay .cut-chat.cut-code .cut-code-ic { display: inline-block; }
+}
+#claude-usage-overlay.cut-fit-1 .cut-chat.cut-code .cut-chat-detail { display: none !important; }
+#claude-usage-overlay.cut-fit-4 .cut-chat.cut-code .cut-code-ic { display: inline-block !important; }
+
+/* ---------------------------------------------------------------------------
+   v1.4.5 — usage bars. A 36x5 bar beside each meter's label: the fill is % used
+   (same green/amber/orange/red as the number). Pace lives in the tooltip.
+   Shed with the reset times (fit level 2 / 640px tier); collapsed pill keeps
+   its rings instead. Hidden while a meter has no number, so an empty track is
+   never mistaken for 0%.
+--------------------------------------------------------------------------- */
+#claude-usage-overlay .cut-bar {
+  position: relative;
+  display: inline-block;
+  width: 36px;
+  height: 5px;
+  border-radius: 3px;
+  flex-shrink: 0;
+  align-self: center;
+  margin: 0 1px;
+  background: rgba(127, 127, 127, 0.22);
+}
+#claude-usage-overlay .cut-bar-fill {
+  position: absolute;
+  left: 0; top: 0; bottom: 0;
+  width: 0%;
+  border-radius: 3px;
+  background: rgba(127, 127, 127, 0.5);
+  transition: width 0.45s cubic-bezier(0.4, 0, 0.2, 1), background-color 0.25s ease;
+}
+#claude-usage-overlay .cut-bar-fill.cut-color-green  { background: #10b981; }
+#claude-usage-overlay .cut-bar-fill.cut-color-amber  { background: #f59e0b; }
+#claude-usage-overlay .cut-bar-fill.cut-color-orange { background: #f97316; }
+#claude-usage-overlay .cut-bar-fill.cut-color-red    { background: #ef4444; }
+#claude-usage-overlay .cut-bar.cut-bar-empty,
+#claude-usage-overlay.cut-no-bars .cut-bar,
+#claude-usage-overlay.cut-collapsed .cut-bar { display: none !important; }
+/* Fable reads "F 3%"; a full-size bar would outweigh its one-letter label. */
+#claude-usage-overlay [data-cut="fable"] .cut-bar { width: 24px; }
+@container cut-overlay (max-width: 640px) {
+  #claude-usage-overlay .cut-bar { display: none; }
+}
+#claude-usage-overlay.cut-fit-2 .cut-bar { display: none !important; }
+@media (prefers-reduced-motion: reduce) {
+  #claude-usage-overlay .cut-bar-fill { transition: none; }
+}

@@ -15,6 +15,11 @@
 // v1.3.6: when a reply stream ENDS, post { kind: "completion_done", uuid } so
 //   the strip can re-measure that chat's size. The content script handles it
 //   locally — it is not forwarded to background as a message_limit payload.
+//
+// v1.4.5: on claude.ai/code, also read the exact per-message token usage
+//   (input / output / cache read / cache write) that Claude Code sessions
+//   report, and post it as { kind: "code_usage", records }. See the block
+//   above patchedFetch for how it finds and counts them.
 
 (function () {
   if (window.__claudeUsageMeterInjected) return;
@@ -252,11 +257,233 @@
     postToContent({ kind: "completion_done", uuid: convoId, ts: Date.now() });
   }
 
+  // ===== v1.4.5: Claude Code session tokens (claude.ai/code) =====
+  //
+  // Claude Code reports exact per-message token counts — the Anthropic API's
+  // `usage` block: input_tokens, output_tokens, cache_read_input_tokens,
+  // cache_creation_input_tokens — and claude.ai/code's web UI receives those
+  // messages to draw the transcript. Unlike claude.ai chat, nothing here has to
+  // be estimated: we only have to SEE the messages.
+  //
+  // Which transport carries them (REST history, SSE, NDJSON, WebSocket) is not
+  // documented and can change, so we don't bind to an endpoint. On /code pages
+  // every same-site JSON/stream payload is scanned for the SHAPE of a message
+  // with usage, the same strategy as findWindows() above. Passive only: the
+  // page always gets the original response (clone/tee), sockets get an extra
+  // listener, nothing is ever sent.
+  //
+  // Counting rules (the totals are only worth showing if they're exact):
+  //   * one entry per message id, fields merged by MAX — the same assistant
+  //     message arrives several times (one event per content block, streaming
+  //     deltas, history reload, our own persisted copy) and must count once.
+  //   * `message_delta` events carry usage with no id; they belong to the
+  //     message_start that opened that stream.
+  //   * `type: "result"` objects are turn TOTALS of messages we already
+  //     counted — skipped, or every turn would count twice.
+  //   * subagent (sidechain) messages carry their own ids and are real spend
+  //     in the same session, so they count.
+  function isCodePage() {
+    return /^\/code(\/|$)/.test(window.location.pathname || "");
+  }
+  function codeSessionFrom(str) {
+    const m = /(session_[A-Za-z0-9]{8,})/.exec(str || "");
+    return m ? m[1] : null;
+  }
+  function pageCodeSession() {
+    return codeSessionFrom(window.location.pathname);
+  }
+
+  function readUsage(u) {
+    if (!u || typeof u !== "object") return null;
+    const n = (v) => (typeof v === "number" && isFinite(v) && v >= 0 ? v : 0);
+    const has = ["input_tokens", "output_tokens",
+                 "cache_read_input_tokens", "cache_creation_input_tokens"]
+      .some((k) => typeof u[k] === "number");
+    if (!has) return null;
+    return {
+      in: n(u.input_tokens),
+      out: n(u.output_tokens),
+      cr: n(u.cache_read_input_tokens),
+      cw: n(u.cache_creation_input_tokens)
+    };
+  }
+
+  let codePending = [];
+  let codeFlushTimer = 0;
+  function queueCodeRecord(rec) {
+    codePending.push(rec);
+    if (codeFlushTimer) return;
+    codeFlushTimer = setTimeout(() => {
+      codeFlushTimer = 0;
+      const records = codePending;
+      codePending = [];
+      if (records.length) {
+        dlog("code usage:", records.length, "record(s)", records);
+        postToContent({ kind: "code_usage", records, ts: Date.now() });
+      }
+    }, 250);
+  }
+
+  // ctx: { sid, lastMsgId } — lastMsgId is per stream, so a message_delta is
+  // tied to the message_start of the SAME stream, never another socket's.
+  function scanForUsage(obj, ctx, depth) {
+    if (!obj || typeof obj !== "object" || depth > 10) return;
+    if (Array.isArray(obj)) {
+      for (const item of obj) scanForUsage(item, ctx, depth + 1);
+      return;
+    }
+    const type = typeof obj.type === "string" ? obj.type : "";
+    if (type === "result") return;
+    const sid =
+      (typeof obj.session_id === "string" && codeSessionFrom(obj.session_id)) ||
+      (typeof obj.sessionId === "string" && codeSessionFrom(obj.sessionId)) ||
+      ctx.sid;
+    const local = sid === ctx.sid ? ctx : { ...ctx, sid };
+
+    const usage = readUsage(obj.usage);
+    if (usage) {
+      let id = typeof obj.id === "string" && /^msg_/.test(obj.id) ? obj.id : null;
+      if (id && type !== "message_delta") ctx.lastMsgId = id;
+      if (!id && type === "message_delta") id = ctx.lastMsgId;
+      if (id && local.sid) {
+        queueCodeRecord({ id, sid: local.sid, ...usage });
+      }
+    }
+    for (const k of Object.keys(obj)) {
+      if (k === "usage") continue;
+      const v = obj[k];
+      if (v && typeof v === "object") scanForUsage(v, local, depth + 1);
+    }
+  }
+
+  // A payload may be one JSON document, NDJSON, or SSE `data:` lines.
+  function scanText(text, ctx) {
+    if (!text || text.length < 20 || text.indexOf("_tokens") === -1) return;
+    try { scanForUsage(JSON.parse(text), ctx, 0); return; } catch (_) {}
+    for (let line of text.split("\n")) {
+      line = line.trim();
+      if (line.startsWith("data:")) line = line.slice(5).trim();
+      if (!line || (line[0] !== "{" && line[0] !== "[")) continue;
+      if (line.indexOf("_tokens") === -1 && line.indexOf("msg_") === -1) continue;
+      try { scanForUsage(JSON.parse(line), ctx, 0); } catch (_) {}
+    }
+  }
+
+  function codeCtxFor(url) {
+    return { sid: codeSessionFrom(url) || pageCodeSession(), lastMsgId: null };
+  }
+
+  function sameSite(url) {
+    return /^https:\/\/([a-z0-9-]+\.)*(claude\.ai|anthropic\.com)\//i.test(url || "");
+  }
+
+  async function scanStreamForUsage(stream, ctx) {
+    const reader = stream.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        let nl;
+        while ((nl = buffer.indexOf("\n")) !== -1) {
+          const line = buffer.slice(0, nl);
+          buffer = buffer.slice(nl + 1);
+          scanText(line, ctx);
+        }
+        if (buffer.length > 4e6) buffer = "";   // never hoard a runaway line
+      }
+      scanText(buffer, ctx);
+    } catch (_) { /* aborted — fine */ }
+  }
+
+  // Returns the response the page should get (the original, or a tee'd copy).
+  function inspectCodeResponse(url, response) {
+    try {
+      if (!isCodePage() || !sameSite(url) || isCompletionUrl(url)) return response;
+      if (!response || !response.ok) return response;
+      const ct = (response.headers && response.headers.get("content-type")) || "";
+      const ctx = codeCtxFor(url);
+      if (/event-stream|ndjson|x-ndjson|jsonl/i.test(ct) && response.body) {
+        dlog("code: scanning stream", url, ct);
+        const [forPage, forScan] = response.body.tee();
+        scanStreamForUsage(forScan, ctx);
+        const wrapped = new Response(forPage, {
+          status: response.status, statusText: response.statusText, headers: response.headers
+        });
+        try { Object.defineProperty(wrapped, "url", { value: response.url }); } catch (_) {}
+        return wrapped;
+      }
+      if (/json/i.test(ct)) {
+        response.clone().text().then((t) => scanText(t, ctx)).catch(() => {});
+      }
+    } catch (_) {}
+    return response;
+  }
+
+  // WebSocket / EventSource: an extra passive listener on each new instance.
+  function watchSocketLike(Orig, name) {
+    if (typeof Orig !== "function") return;
+    const Patched = function (url, opts) {
+      const inst = opts === undefined ? new Orig(url) : new Orig(url, opts);
+      try {
+        const href = normalizeUrl(String(url).replace(/^ws/i, "http"));
+        if (sameSite(href)) {
+          const ctx = codeCtxFor(String(url));
+          dlog("code: watching", name, String(url));
+          inst.addEventListener("message", (ev) => {
+            if (!isCodePage()) return;
+            const d = ev && ev.data;
+            if (typeof d === "string") {
+              // The page may move between sessions on one long-lived socket.
+              if (!codeSessionFrom(String(url))) ctx.sid = pageCodeSession();
+              scanText(d, ctx);
+            }
+          });
+        }
+      } catch (_) {}
+      return inst;
+    };
+    Patched.prototype = Orig.prototype;
+    for (const k of ["CONNECTING", "OPEN", "CLOSING", "CLOSED"]) {
+      if (k in Orig) try { Object.defineProperty(Patched, k, { value: Orig[k] }); } catch (_) {}
+    }
+    try { window[name] = Patched; } catch (_) {}
+  }
+  watchSocketLike(window.WebSocket, "WebSocket");
+  watchSocketLike(window.EventSource, "EventSource");
+
+  // XHR: some clients still poll history this way.
+  try {
+    const OrigOpen = XMLHttpRequest.prototype.open;
+    XMLHttpRequest.prototype.open = function (method, url) {
+      try {
+        const href = normalizeUrl(url);
+        if (isCodePage() && sameSite(href)) {
+          this.addEventListener("load", () => {
+            try {
+              const ct = this.getResponseHeader("content-type") || "";
+              if (/json|event-stream|ndjson/i.test(ct) &&
+                  (this.responseType === "" || this.responseType === "text")) {
+                scanText(this.responseText, codeCtxFor(href));
+              }
+            } catch (_) {}
+          });
+        }
+      } catch (_) {}
+      return OrigOpen.apply(this, arguments);
+    };
+  } catch (_) {}
+
   window.fetch = async function patchedFetch(input, init) {
-    const response = await ORIGINAL_FETCH(input, init);
+    let response = await ORIGINAL_FETCH(input, init);
     try {
       const url = normalizeUrl(input);
-      if (!isCompletionUrl(url)) return response;
+      if (!isCompletionUrl(url)) {
+        // v1.4.5: claude.ai/code traffic (no-op everywhere else).
+        return isCodePage() ? inspectCodeResponse(url, response) : response;
+      }
       dlog("completion request matched:", url, "status", response.status,
            "content-type", response.headers && response.headers.get("content-type"));
 

@@ -256,7 +256,8 @@ const METER_FIELDS = ["session", "weekly", "fable"];
 // v1.2.17: `forecast` joins the trimmings — it can be switched off entirely
 // without leaving the strip empty, so it's outside METER_FIELDS.
 // v1.3.6: `chatTokens` (per-chat size) is a trimming too.
-const ALL_FIELDS = [...METER_FIELDS, "resetTimeSession", "resetTimeWeekly", "forecast", "chatTokens"];
+// v1.4.5: `usageBars` (bar + pace tick beside each %) is a trimming too.
+const ALL_FIELDS = [...METER_FIELDS, "resetTimeSession", "resetTimeWeekly", "forecast", "chatTokens", "usageBars"];
 // v1.3.1: rows in the same panel that are NOT stripFields. The Projects button
 // is injected into Claude's composer, not our strip, so it saves as a top-level
 // setting — but it belongs in this list, because "settings" to a user means
