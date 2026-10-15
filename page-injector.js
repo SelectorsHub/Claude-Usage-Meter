@@ -20,6 +20,12 @@
 //   (input / output / cache read / cache write) that Claude Code sessions
 //   report, and post it as { kind: "code_usage", records }. See the block
 //   above patchedFetch for how it finds and counts them.
+//
+// v1.4.6: also read usage from claude.ai's newer Connect-RPC transport
+//   (ConversationService/StreamTimeline, binary protobuf). Accounts on it never
+//   call /completion, so the meter saw no usage at all there. Decoded readings
+//   are posted in the SSE `windows` shape, tagged with their org. Every
+//   message_limit now also carries orgId (from the URL or x-organization-uuid).
 
 (function () {
   if (window.__claudeUsageMeterInjected) return;
@@ -57,6 +63,14 @@
   function isCompletionUrl(url) {
     if (!url || typeof url !== "string") return false;
     return /claude\.ai\/api\/.*\/(completion|retry_completion)(\?|$)/.test(url);
+  }
+
+  // v1.4.6: the org a completion belongs to, from its URL. Background keys the
+  // Free-plan stream snapshot by org, so a reading is never filed under (or
+  // shown for) a different account than the one that produced it.
+  function orgIdFrom(url) {
+    const m = /\/api\/organizations\/([0-9a-f-]{36})\//i.exec(url || "");
+    return m ? m[1] : null;
   }
 
   // Opt-in tracing: run  localStorage.cum_debug = "1"  on claude.ai and reload.
@@ -192,7 +206,7 @@
     return null;
   }
 
-  function inspectJsonChunk(jsonStr) {
+  function inspectJsonChunk(jsonStr, orgId) {
     try {
       const obj = JSON.parse(jsonStr);
       if (DEBUG && obj && obj.type) {
@@ -214,6 +228,7 @@
             resetsAt: resetsAt || null,
             reached,
             windows,
+            orgId: orgId || null,
             ts: Date.now()
           });
         }
@@ -227,7 +242,7 @@
     return m ? m[1] : null;
   }
 
-  async function teeAndScanSSE(stream, convoId) {
+  async function teeAndScanSSE(stream, convoId, orgId) {
     const reader = stream.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
@@ -249,12 +264,243 @@
             }
           }
           if (dataLines.length === 0) continue;
-          inspectJsonChunk(dataLines.join("\n"));
+          inspectJsonChunk(dataLines.join("\n"), orgId);
         }
       }
     } catch (_) { /* stream cancelled or aborted — fine */ }
     // Stopped or finished, the branch changed either way.
     postToContent({ kind: "completion_done", uuid: convoId, ts: Date.now() });
+  }
+
+  // ===== v1.4.6: claude.ai's newer chat transport (Connect-RPC StreamTimeline) =====
+  //
+  // Some accounts no longer POST /completion at all. Messages go out through
+  //   /claudeai-rpc/anthropic.bard.api.v1alpha.ConversationService/PerformAction
+  // and the reply — including the message_limit usage report — streams back on
+  //   /claudeai-rpc/anthropic.bard.api.v1alpha.ConversationService/StreamTimeline
+  // which the page keeps open (and re-opens every few seconds while idle).
+  // isCompletionUrl() never matches it, so on those accounts the meter never saw
+  // a single usage report. On Free that meant no data, ever.
+  //
+  // Wire format (observed, not documented — re-verify if readings stop):
+  //   body   = Connect frames: flags(1) | length(4, big-endian) | payload
+  //            flags 0x01 = payload gzipped, 0x02 = end-of-stream trailer
+  //   payload (protobuf) StreamTimelineResponse { 1: event }
+  //            event       { 4: message_limit, ...other oneof members }
+  //            MessageLimit { 1: status(enum), 2: resets_at(Timestamp),
+  //                           13: windows map<string, Window> }
+  //            Window      { 1: status(enum, 3 = EXCEEDED),
+  //                          2: resets_at(Timestamp{1: seconds}),
+  //                          3: utilization(double, 0-1 fraction) }
+  // Window keys are the same "5h" / "7d" names the SSE stream uses, so the
+  // decoded result is re-shaped into the SSE `windows` form and goes down the
+  // exact same path to background (parseSseWindow etc.) — no second parser.
+  //
+  // Passive and detached: we read a clone, only the top two message levels of
+  // each frame are walked (conversation updates are skipped as opaque bytes),
+  // and any failure just means no reading. Kill switch for A/B testing:
+  //   localStorage.cum_timeline_off = "1"
+  const TIMELINE_RE = /\/claudeai-rpc\/[^?#]*ConversationService\/StreamTimeline(?:[?#]|$)/;
+  const PB_STATUS_EXCEEDED = 3;
+  const MAX_FRAME_BYTES = 16 * 1024 * 1024;   // larger frames are skipped, never buffered
+
+  function isTimelineUrl(url) {
+    return typeof url === "string" && TIMELINE_RE.test(url);
+  }
+
+  function timelineOff() {
+    try { return localStorage.getItem("cum_timeline_off") === "1"; } catch (_) { return false; }
+  }
+
+  // Org id rides a request header on the RPC transport, not the URL.
+  function requestHeader(input, init, name) {
+    try {
+      const h = (init && init.headers) || (input && typeof input === "object" && input.headers);
+      if (!h) return null;
+      return new Headers(h).get(name);
+    } catch (_) { return null; }
+  }
+
+  // --- minimal protobuf reader: top-level fields of one message ---
+  // Returns [{ no, wt, v }] where v is a Number (varint), a Uint8Array view
+  // (length-delimited), or a Float64 (fixed64, read as double — the only
+  // fixed64 we care about is `utilization`). Throws on malformed input.
+  function pbFields(buf) {
+    const out = [];
+    const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+    let i = 0;
+    const varint = () => {
+      let result = 0, mul = 1, b;
+      for (let n = 0; n < 10; n++) {
+        if (i >= buf.length) throw new Error("pb: eof");
+        b = buf[i++];
+        result += (b & 0x7f) * mul;
+        if (!(b & 0x80)) return result;
+        mul *= 128;
+      }
+      throw new Error("pb: varint");
+    };
+    while (i < buf.length) {
+      const key = varint();
+      const no = Math.floor(key / 8), wt = key & 7;
+      if (wt === 0) out.push({ no, wt, v: varint() });
+      else if (wt === 1) {
+        if (i + 8 > buf.length) throw new Error("pb: eof");
+        out.push({ no, wt, v: dv.getFloat64(i, true) }); i += 8;
+      } else if (wt === 2) {
+        const len = varint();
+        if (i + len > buf.length) throw new Error("pb: eof");
+        out.push({ no, wt, v: buf.subarray(i, i + len) }); i += len;
+      } else if (wt === 5) {
+        if (i + 4 > buf.length) throw new Error("pb: eof");
+        i += 4;
+      } else throw new Error("pb: wiretype " + wt);
+    }
+    return out;
+  }
+  const pbFirst = (fields, no, wt) => {
+    for (const f of fields) if (f.no === no && f.wt === wt) return f.v;
+    return undefined;
+  };
+
+  function pbTimestampSeconds(bytes) {
+    if (!bytes) return null;
+    const s = pbFirst(pbFields(bytes), 1, 0);
+    return typeof s === "number" && s > 0 ? s : null;
+  }
+
+  // MessageLimit bytes -> the SSE-shaped payload background already understands.
+  function decodeMessageLimit(bytes) {
+    const ml = pbFields(bytes);
+    const windows = {};
+    let any = false;
+    for (const f of ml) {
+      if (f.no !== 13 || f.wt !== 2) continue;       // map entry
+      const entry = pbFields(f.v);
+      const keyBytes = pbFirst(entry, 1, 2);
+      const val = pbFirst(entry, 2, 2);
+      if (!keyBytes || !val) continue;
+      const key = new TextDecoder().decode(keyBytes);
+      const w = pbFields(val);
+      const utilization = pbFirst(w, 3, 1);
+      const resetsAt = pbTimestampSeconds(pbFirst(w, 2, 2));
+      if (typeof utilization !== "number" || !isFinite(utilization) || !resetsAt) continue;
+      windows[key] = {
+        status: pbFirst(w, 1, 0) === PB_STATUS_EXCEEDED ? "exceeded_limit" : "within_limit",
+        resets_at: resetsAt,
+        utilization
+      };
+      any = true;
+    }
+    if (!any) return null;
+    const reached = pbFirst(ml, 1, 0) === PB_STATUS_EXCEEDED;
+    const topReset = pbTimestampSeconds(pbFirst(ml, 2, 2));
+    return {
+      kind: "message_limit",
+      reached,
+      resetsAt: reached && topReset ? new Date(topReset * 1000).toISOString() : null,
+      windows
+    };
+  }
+
+  // One frame's payload (already inflated) -> message_limit payload or null.
+  function messageLimitFromProtoFrame(payload) {
+    const event = pbFirst(pbFields(payload), 1, 2);          // StreamTimelineResponse.event
+    if (!event) return null;
+    const ml = pbFirst(pbFields(event), 4, 2);               // event.message_limit
+    return ml ? decodeMessageLimit(ml) : null;
+  }
+
+  // Same thing for a connect+json stream, should claude.ai ever switch codecs.
+  function messageLimitFromJsonFrame(text) {
+    let obj;
+    try { obj = JSON.parse(text); } catch (_) { return null; }
+    const ml = obj && obj.event && (obj.event.message_limit || obj.event.messageLimit);
+    if (!ml || !ml.windows) return null;
+    const secs = (v) => {
+      if (v == null) return null;
+      if (typeof v === "object" && v.seconds != null) return Number(v.seconds);
+      const t = Date.parse(v);
+      return isNaN(t) ? null : t / 1000;
+    };
+    const exceeded = (s) => s === 3 || /EXCEEDED/i.test(String(s || ""));
+    const windows = {};
+    let any = false;
+    for (const [key, w] of Object.entries(ml.windows)) {
+      const r = secs(w && (w.resets_at || w.resetsAt));
+      if (!w || typeof w.utilization !== "number" || !r) continue;
+      windows[key] = { status: exceeded(w.status) ? "exceeded_limit" : "within_limit", resets_at: r, utilization: w.utilization };
+      any = true;
+    }
+    if (!any) return null;
+    const reached = exceeded(ml.status);
+    const top = secs(ml.resets_at || ml.resetsAt);
+    return { kind: "message_limit", reached, resetsAt: reached && top ? new Date(top * 1000).toISOString() : null, windows };
+  }
+
+  async function gunzip(bytes) {
+    const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream("gzip"));
+    return new Uint8Array(await new Response(stream).arrayBuffer());
+  }
+
+  // The stream re-opens every few seconds and may replay the last report;
+  // identical readings inside this window are posted once.
+  let lastTimelineSig = null, lastTimelineAt = 0;
+
+  async function scanTimeline(response, orgId) {
+    if (!response || !response.body) return;
+    const json = /json/i.test((response.headers && response.headers.get("content-type")) || "");
+    const reader = response.body.getReader();
+    let buf = new Uint8Array(0);
+    let skip = 0;                       // bytes left of an oversized frame we're discarding
+    const append = (chunk) => {
+      const next = new Uint8Array(buf.length + chunk.length);
+      next.set(buf, 0); next.set(chunk, buf.length);
+      buf = next;
+    };
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        let chunk = value;
+        if (skip) {
+          const n = Math.min(skip, chunk.length);
+          skip -= n; chunk = chunk.subarray(n);
+          if (!chunk.length) continue;
+        }
+        append(chunk);
+        while (buf.length >= 5) {
+          const flags = buf[0];
+          const len = ((buf[1] << 24) >>> 0) + (buf[2] << 16) + (buf[3] << 8) + buf[4];
+          if (len > MAX_FRAME_BYTES) {
+            const have = buf.length - 5;
+            skip = Math.max(0, len - have);
+            buf = buf.subarray(Math.min(buf.length, 5 + len));
+            continue;
+          }
+          if (buf.length < 5 + len) break;
+          let payload = buf.slice(5, 5 + len);
+          buf = buf.subarray(5 + len);
+          if (flags & 0x02) continue;   // end-of-stream trailer (JSON), no usage in it
+          try {
+            if (flags & 0x01) payload = await gunzip(payload);
+            const ml = json
+              ? messageLimitFromJsonFrame(new TextDecoder().decode(payload))
+              : messageLimitFromProtoFrame(payload);
+            if (!ml) continue;
+            ml.orgId = orgId || null;
+            ml.ts = Date.now();
+            const sig = JSON.stringify([ml.orgId, ml.reached, ml.windows]);
+            if (sig === lastTimelineSig && ml.ts - lastTimelineAt < 60 * 1000) continue;
+            lastTimelineSig = sig; lastTimelineAt = ml.ts;
+            dlog("timeline message_limit:", ml);
+            postToContent(ml);
+          } catch (e) {
+            dlog("timeline frame skipped:", e && e.message);
+          }
+        }
+      }
+    } catch (_) { /* stream closed/aborted by the page — normal */ }
   }
 
   // ===== v1.4.5: Claude Code session tokens (claude.ai/code) =====
@@ -480,6 +726,12 @@
     let response = await ORIGINAL_FETCH(input, init);
     try {
       const url = normalizeUrl(input);
+      // v1.4.6: newer transport. Read a clone, hand the page its original.
+      if (isTimelineUrl(url) && sameSite(url) && response.ok && !timelineOff()) {
+        dlog("timeline stream matched:", url);
+        scanTimeline(response.clone(), requestHeader(input, init, "x-organization-uuid")).catch(() => {});
+        return response;
+      }
       if (!isCompletionUrl(url)) {
         // v1.4.5: claude.ai/code traffic (no-op everywhere else).
         return isCodePage() ? inspectCodeResponse(url, response) : response;
@@ -537,6 +789,7 @@
               resetsAt: resetsAt || null,
               reached: true,
               windows,
+              orgId: orgIdFrom(url),
               ts: Date.now()
             });
           }
@@ -548,7 +801,7 @@
 
       // Tee the body so the page gets one branch and we scan the other.
       const [forPage, forScan] = response.body.tee();
-      teeAndScanSSE(forScan, conversationIdFrom(url));
+      teeAndScanSSE(forScan, conversationIdFrom(url), orgIdFrom(url));
 
       // Re-wrap with the page-bound stream. Preserve all other response metadata.
       const wrapped = new Response(forPage, {

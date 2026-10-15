@@ -1,4 +1,10 @@
 // background.js (service worker, v1.21)
+// - v1.4.6: Free accounts show usage on page load, not only after a prompt.
+//   The completion-stream snapshot is now kept per org (sse_usage_by_org),
+//   written even before the first poll settles the tier, served by
+//   applyUnmetered() until each window's reset passes. See applyMessageLimit().
+//   page-injector also reads the newer StreamTimeline (protobuf) transport,
+//   whose readings arrive here in the same shape as the SSE ones.
 // - v1.3.1: projects list endpoint for the composer's Projects button.
 //   GET /api/organizations/{id}/projects through the same cookie-org ->
 //   widen-to-every-org path as the usage poll, cached for a minute and
@@ -164,7 +170,8 @@ const STORAGE_KEYS = {
   sessionLock: "session_lock",   // {until} — pins session to 100% while a hard lockout is active
   usageRaw: "usage_raw",         // last raw /usage response, for diagnosing field shapes
   history: "usage_history",      // v1.2.17: downsampled % samples backing the burn-rate forecast
-  forecastNotified: "forecast_notified"  // v1.2.17: window key of the last forecast alert (dedupe)
+  forecastNotified: "forecast_notified", // v1.2.17: window key of the last forecast alert (dedupe)
+  sseByOrg: "sse_usage_by_org"   // v1.4.6: last completion-stream windows per org (Free plan)
 };
 
 // ---------- storage helpers ----------
@@ -1019,12 +1026,24 @@ async function applyUnmetered(orgId) {
       [STORAGE_KEYS.forecastNotified]: null
     });
   }
+  // v1.4.6: the snapshot now lives per org (sse_usage_by_org), not inside
+  // usage_state. One-time migration of a 1.4.5 snapshot — only when it is
+  // provably this org's, never another account's.
+  if (orgId && usage.sse && usage.orgId === orgId && !(await getSseSnapshot(orgId))) {
+    await saveSseSnapshot(orgId, usage.sse);
+  }
   usage.orgId = orgId || usage.orgId || null;
   // v1.2.9: /usage has nothing, but the completion stream may already have told
   // us the real figures. Re-poll runs every minute; wiping them here would blank
   // the meters between messages, which is the whole window this fallback exists
   // to cover.
-  const sse = usage.sse || {};
+  // v1.4.6: read from the per-org store, and only windows still running. This
+  // is what makes a Free account show usage the moment claude.ai loads instead
+  // of after the first prompt: the snapshot survives reloads, browser restarts
+  // and org switches. A window whose reset has passed is dropped rather than
+  // shown stale — its real figure is unknowable until the next message.
+  const sse = liveSseWindows(usage.orgId ? await getSseSnapshot(usage.orgId) : null);
+  usage.sse = sse.session || sse.weekly ? sse : null;
   usage.session = sse.session ? { ...sse.session } : null;
   usage.weekly = sse.weekly ? { ...sse.weekly, family: "generic", apiField: "sse[7d]" } : null;
   usage.fable = null;
@@ -1070,6 +1089,11 @@ async function applyUsage(data, orgId) {
 
   const parsed = parseBuckets(data);
   usage.unmetered = false;   // real data arrived — leave the unmetered state
+  // v1.4.6: /usage is authoritative for this org now, so any stream snapshot
+  // kept for it is retired. If the plan later lapses to Free, the meters can't
+  // fall back to the paid plan's figures — it waits for a fresh Free reading.
+  usage.sse = null;
+  if (orgId) await dropSseSnapshot(orgId);
   usage.weeklyByFamily = parsed.weeklyByFamily;
   usage.fable = parsed.fable;
   if (parsed.session) usage.session = parsed.session;
@@ -1301,6 +1325,58 @@ function mergeSseWindow(previous, incoming) {
   return sameWindow && incoming.percent < previous.percent ? previous : incoming;
 }
 
+// ---------- v1.4.6: per-org stream snapshot store ----------
+
+/* On Free, /usage is empty and the completion stream is the only usage report
+   that exists, so its last reading is not a cache of anything refetchable —
+   lose it and nothing short of another prompt brings it back.
+
+   1.4.5 kept it inside usage_state and only wrote it once a poll had already
+   marked the account unmetered. A fresh install, a reload before the first
+   poll, or any org switch therefore threw the first reading away (or wiped
+   it), and the strip sat empty until the user prompted again. Keyed by org it
+   survives all of those, and applyUnmetered() serves it on page load.
+
+   Entries are garbage-collected once every window in them has reset, with a
+   hard 8-day ceiling (a weekly window can legitimately run 7 days). */
+const SSE_SNAPSHOT_MAX_AGE_MS = 8 * 24 * 60 * 60 * 1000;
+
+async function getSseStore() {
+  const { [STORAGE_KEYS.sseByOrg]: store } = await chrome.storage.local.get(STORAGE_KEYS.sseByOrg);
+  return store && typeof store === "object" ? store : {};
+}
+async function getSseSnapshot(orgId) {
+  if (!orgId) return null;
+  return (await getSseStore())[orgId] || null;
+}
+function liveSseWindows(snap, now = Date.now()) {
+  const live = (w) => (w && w.resetsAt && w.resetsAt > now ? { ...w } : null);
+  return {
+    session: live(snap && snap.session),
+    weekly: live(snap && snap.weekly),
+    at: (snap && snap.at) || null
+  };
+}
+async function saveSseSnapshot(orgId, snap) {
+  if (!orgId || !snap) return;
+  const store = await getSseStore();
+  store[orgId] = { session: snap.session || null, weekly: snap.weekly || null, at: snap.at || Date.now() };
+  const now = Date.now();
+  for (const id of Object.keys(store)) {
+    const s = store[id];
+    const live = liveSseWindows(s, now);
+    if ((!live.session && !live.weekly) || now - (s.at || 0) > SSE_SNAPSHOT_MAX_AGE_MS) delete store[id];
+  }
+  await chrome.storage.local.set({ [STORAGE_KEYS.sseByOrg]: store });
+}
+async function dropSseSnapshot(orgId) {
+  if (!orgId) return;
+  const store = await getSseStore();
+  if (!(orgId in store)) return;   // the common case on paid: no write at all
+  delete store[orgId];
+  await chrome.storage.local.set({ [STORAGE_KEYS.sseByOrg]: store });
+}
+
 // ---------- SSE message_limit handler ----------
 
 async function applyMessageLimit(payload) {
@@ -1312,24 +1388,42 @@ async function applyMessageLimit(payload) {
     remaining: payload.remaining, unmetered: !!usage.unmetered
   });
 
-  // v1.2.9: real percentages off the stream. Stored for every tier (cheap, and
-  // it makes the data visible for debugging) but only PROMOTED into the meters
-  // on an account /usage reports nothing for — see below. On a paid tier the
-  // poll is authoritative and arrives with everything else the stream lacks.
-  // v1.2.9: gated to unmetered accounts. On a paid tier /usage is authoritative
+  // v1.2.9: real percentages off the stream, gated to unmetered accounts. On a paid tier /usage is authoritative
   // and arrives with everything the stream lacks (Fable, per-model weeklies,
   // extra usage), so a stream snapshot there is at best unused and at worst a
   // second source of truth someone later wires up by mistake. Not written at all.
-  if (payload.windows && usage.unmetered) {
+  // v1.4.6: the gate is now "not KNOWN to be paid" rather than "already known
+  // to be Free". 1.4.5 required a prior poll to have marked the account
+  // unmetered, so a reading that arrived first (fresh install, reload, org
+  // switch) was dropped. Still never written for an org /usage has reported
+  // real data for — same paid isolation as before, and applyUsage() retires
+  // any snapshot the moment such data arrives.
+  const sseOrg = payload.orgId || usage.orgId || null;
+  const sameOrg = !payload.orgId || !usage.orgId || payload.orgId === usage.orgId;
+  const tierKnown = sameOrg && !!usage.updatedAt;
+  const knownPaid = tierKnown && !usage.unmetered;
+  let needsPoll = false;
+  if (payload.windows && sseOrg && !knownPaid) {
     const session = parseSseWindow(payload.windows["5h"]);
     const weekly = parseSseWindow(payload.windows["7d"]);
-    const prev = usage.sse || {};
-    usage.sse = {
-      session: mergeSseWindow(prev.session, session),
-      weekly: mergeSseWindow(prev.weekly, weekly),
-      at: Date.now()
-    };
-    {
+    if (session || weekly) {
+      const prev = liveSseWindows(await getSseSnapshot(sseOrg));
+      await saveSseSnapshot(sseOrg, {
+        session: mergeSseWindow(prev.session, session),
+        weekly: mergeSseWindow(prev.weekly, weekly),
+        at: Date.now()
+      });
+      // Tier not settled for this org yet: let a poll settle it now. If it's
+      // Free, applyUnmetered() promotes the snapshot just stored straight
+      // into the meters — no second prompt needed.
+      if (!(usage.unmetered && sameOrg)) needsPoll = true;
+    }
+  }
+
+  if (payload.windows && usage.unmetered && sameOrg) {
+    const snap = liveSseWindows(await getSseSnapshot(sseOrg));
+    usage.sse = snap.session || snap.weekly ? snap : null;
+    if (usage.sse) {
       if (usage.sse.session) usage.session = { ...usage.sse.session };
       if (usage.sse.weekly) {
         usage.weekly = { ...usage.sse.weekly, family: "generic", apiField: "sse[7d]" };
@@ -1371,6 +1465,7 @@ async function applyMessageLimit(payload) {
   await saveUsage(usage);
   await maybeNotify(usage);
   await broadcastUsage(usage);
+  if (needsPoll) pollUsage();   // detached: settles the tier, then promotes the snapshot
 }
 
 // ---------- broadcast to claude.ai tabs ----------
