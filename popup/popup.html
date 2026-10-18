@@ -57,6 +57,17 @@
       <div class="fc" id="weekly-fc"></div>
     </section>
 
+    <!-- v1.4.7: extra usage (overage credits). Hidden unless the account has
+         extra usage switched on. -->
+    <section class="card hidden" id="extra-card">
+      <div class="row">
+        <span class="lbl">Extra usage · monthly</span>
+        <span class="pct" id="extra-pct">—</span>
+      </div>
+      <div class="bar" id="extra-bar"><div class="bar-fill" id="extra-fill"></div></div>
+      <div class="sub" id="extra-sub">—</div>
+    </section>
+
     <div id="msgs-left" class="msgs-left hidden">
       <span class="msgs-left-label">Messages left this session</span>
       <span class="msgs-left-val" id="msgs-left-val">—</span>
@@ -102,6 +113,12 @@
         <span class="field-txt">Fable <span class="field-key">F</span></span>
         <span class="field-note hidden" id="field-fable-note">not reported yet</span>
       </label>
+      <label class="field-row" id="field-extra-row">
+        <input type="checkbox" id="field-extra" data-field="extra" />
+        <span class="field-txt">Extra usage <span class="field-key">E</span></span>
+        <span class="field-info" tabindex="0" role="note" aria-label="When does this show?">i<span class="field-tip"><b>Appears only if Extra usage is turned on for your account.</b><br>&bull; Pro / Max: you turn it on in Claude &rsaquo; Settings &rsaquo; Usage.<br>&bull; Team / Enterprise: your admin turns it on.<br>Then it shows how much you&rsquo;ve spent beyond your plan limit this month.</span></span>
+        <span class="field-note hidden" id="field-extra-note">not enabled on this account</span>
+      </label>
       <div class="fields-sep"></div>
       <label class="field-row">
         <input type="checkbox" id="field-resetTimeSession" data-field="resetTimeSession" />
@@ -118,6 +135,7 @@
       <label class="field-row">
         <input type="checkbox" id="field-forecast" data-field="forecast" />
         <span class="field-txt">Limit forecast</span>
+        <span class="field-info" tabindex="0" role="note" aria-label="When does this show?">i<span class="field-tip">Appears next to Session only when you&rsquo;re on pace to hit your limit before it resets (e.g. &ldquo;~1h 20m left&rdquo;). It needs about 12 minutes of usage to measure your pace, so while you&rsquo;re on track it stays hidden.</span></span>
       </label>
       <label class="field-row">
         <input type="checkbox" id="field-chatTokens" data-field="chatTokens" />

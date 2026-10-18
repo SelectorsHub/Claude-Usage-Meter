@@ -1,4 +1,13 @@
 // background.js (service worker, v1.21)
+// - v1.4.7: extra usage (overage credits) tracking — the most-asked-for gap on
+//   Team/Enterprise and Max accounts that pay past their plan limits. /usage
+//   carries `extra_usage: { is_enabled, monthly_limit, used_credits,
+//   utilization }`; parseExtraUsage() turns it into usage.extra
+//   ({ used, limit, percent, currency }). Amounts arrive in MINOR units
+//   (cents) and are divided by 100 here so every surface prints the same
+//   figure. `utilization` is 0-100 like the other /usage buckets. Shown only
+//   when the account has extra usage switched on; no cap = no percentage.
+//   Alerts reuse the weekly thresholds, keyed `extra`, when a cap is set.
 // - v1.4.6: Free accounts show usage on page load, not only after a prompt.
 //   The completion-stream snapshot is now kept per org (sse_usage_by_org),
 //   written even before the first poll settles the tier, served by
@@ -48,6 +57,22 @@
 //   notificationsEnabled. The sample history is cleared alongside every other
 //   cross-account side channel on an org switch — another account\'s pace is
 //   not this account\'s pace, and its window boundaries differ too.
+// ===== TEST BUILD — set to false before shipping =====
+// v1.4.7: when true and the account reports no extra usage, sample figures are
+// shown instead so the Extra segment / E chip / popup card can be checked on
+// any account. Cycles every minute: $12.40 of $50 (green) -> $46.10 of $50
+// (red) -> $8.42 with no cap. Real extra usage, when present, always wins.
+const TEST_BUILD = false;
+const TEST_EXTRA_SAMPLES = [
+  { used: 12.4,  limit: 50,   percent: 25,   currency: "USD", resetsAt: null, apiField: "test" },
+  { used: 46.1,  limit: 50,   percent: 92,   currency: "USD", resetsAt: null, apiField: "test" },
+  { used: 8.42,  limit: null, percent: null, currency: "USD", resetsAt: null, apiField: "test" }
+];
+function testExtra() {
+  return TEST_EXTRA_SAMPLES[Math.floor(Date.now() / 60000) % TEST_EXTRA_SAMPLES.length];
+}
+// ===== end TEST BUILD =====
+
 const POLL_ALARM = "claude-usage-poll";
 const DEFAULT_POLL_MINUTES = 1;
 const ORG_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
@@ -125,8 +150,16 @@ const DEFAULT_SETTINGS = {
     // v1.4.5: a small bar beside each meter's %. On by default — reviews
     // asked for a visual, and it only costs ~40px; first thing shed for width
     // after the reset times.
-    usageBars: true
+    // v1.4.7: OFF by default — the strip stays minimal and keeps its width for
+    // the numbers. Anyone who wants the bars ticks "Usage bars".
+    usageBars: false,
+    // v1.4.7: the "Extra" spend segment (overage credits). On by default, but it
+    // only appears when the account has extra usage turned on.
+    extra: true
   },
+  // v1.4.7: desktop alerts as extra-usage spend crosses the weekly thresholds
+  // (only when a monthly cap is set). Rides on notificationsEnabled.
+  extraAlerts: true,
   // v1.2.17: one-shot desktop heads-up when the projection says the session
   // quota runs out well before it resets. Rides on notificationsEnabled.
   forecastAlerts: true,
@@ -189,6 +222,7 @@ async function getUsage() {
     weekly: null,
     fable: null,
     weeklyByFamily: {},
+    extra: null,
     messagesRemaining: null,
     messagesResetAt: null,
     updatedAt: null,
@@ -1010,6 +1044,9 @@ function looksUnmetered(data) {
     if (v === null || v === undefined) continue;
     if (typeof v === "boolean" || typeof v === "string") continue;
     if (Array.isArray(v) && v.length === 0) continue;
+    // v1.4.7: a switched-off extra_usage block ({is_enabled:false, nulls}) is
+    // not usage — it must not turn an empty Free response into "unrecognised".
+    if (k === "extra_usage" && !parseExtraUsage(data)) continue;
     if (typeof v === "object" && Object.keys(v).length === 0) continue;
     return false;   // something substantive is present — not an empty account
   }
@@ -1047,6 +1084,7 @@ async function applyUnmetered(orgId) {
   usage.session = sse.session ? { ...sse.session } : null;
   usage.weekly = sse.weekly ? { ...sse.weekly, family: "generic", apiField: "sse[7d]" } : null;
   usage.fable = null;
+  usage.extra = TEST_BUILD ? testExtra() : null;   // REVERT: null
   usage.weeklyByFamily = usage.weekly ? { generic: usage.weekly } : {};
   usage.forecast = null;
   usage.unmetered = true;      // the strip's cue to explain rather than show "—"
@@ -1071,6 +1109,7 @@ async function applyUsage(data, orgId) {
       weekly: null,
       fable: null,
       weeklyByFamily: {},
+      extra: null,
       messagesRemaining: null,
       messagesResetAt: null,
       updatedAt: null,
@@ -1096,6 +1135,10 @@ async function applyUsage(data, orgId) {
   if (orgId) await dropSseSnapshot(orgId);
   usage.weeklyByFamily = parsed.weeklyByFamily;
   usage.fable = parsed.fable;
+  // v1.4.7: replaced on every poll (never merged) — turning extra usage off in
+  // claude.ai's settings must make the segment go away on the next poll.
+  usage.extra = parseExtraUsage(data);
+  if (TEST_BUILD && !usage.extra) usage.extra = testExtra();   // REVERT: remove
   if (parsed.session) usage.session = parsed.session;
 
   usage.weekly = pickWeeklyForActiveFamily(
@@ -1127,6 +1170,63 @@ async function applyUsage(data, orgId) {
   await maybeNotify(usage);
   await maybeNotifyForecast(usage);
   await broadcastUsage(usage);
+}
+
+/* v1.4.7 — extra usage (a.k.a. overage / usage credits).
+
+   Accounts that keep working past their plan limits — Team and Enterprise
+   seats with extra usage enabled by an admin, Max with extra usage on — pay
+   for it from a monthly credit allowance. /usage reports it as:
+
+     extra_usage: { is_enabled: true, monthly_limit: 5000,
+                    used_credits: 1240, utilization: 24.8 }
+
+   * monthly_limit / used_credits are MINOR currency units (cents): 5000 is
+     $50.00. Divided by 100 here, once, so no surface can disagree.
+   * utilization is 0-100, same convention as every other /usage bucket. When
+     missing it is derived from used/limit.
+   * monthly_limit null/0 = no cap set. Spend is still shown; percent is null
+     (a percentage of nothing would be invented), so no bar and no alerts.
+   * is_enabled false, or no extra_usage at all, returns null — the segment is
+     conditional, exactly like Fable, and never shows a placeholder.
+   A few alias spellings are accepted so a field rename degrades to "still
+   works" rather than "silently vanished". */
+function parseExtraUsage(data) {
+  if (!data || typeof data !== "object") return null;
+  const node = data.extra_usage || data.extraUsage || data.overage || null;
+  if (!node || typeof node !== "object") return null;
+  const enabled = typeof node.is_enabled === "boolean" ? node.is_enabled
+    : (typeof node.enabled === "boolean" ? node.enabled : null);
+  if (enabled === false) return null;
+  const num = (v) => {
+    if (typeof v === "number" && isFinite(v)) return v;
+    if (typeof v === "string" && v.trim() !== "" && isFinite(Number(v))) return Number(v);
+    return null;
+  };
+  const first = (...vals) => { for (const v of vals) { const n = num(v); if (n != null) return n; } return null; };
+  const usedMinor  = first(node.used_credits, node.usedCredits, node.used);
+  const limitMinor = first(node.monthly_limit, node.monthlyLimit, node.limit);
+  // Nothing to show unless the account says it's on or reports a figure.
+  if (enabled !== true && usedMinor == null && limitMinor == null) return null;
+
+  const used  = Math.max(0, (usedMinor || 0) / 100);
+  const limit = limitMinor != null && limitMinor > 0 ? limitMinor / 100 : null;
+  let percent = null;
+  if (limit != null) {
+    let p = num(node.utilization);
+    if (p == null) p = (used / limit) * 100;
+    percent = Math.max(0, Math.round(p));
+  }
+  const cur = typeof node.currency === "string" && /^[a-z]{3}$/i.test(node.currency)
+    ? node.currency.toUpperCase() : "USD";
+  return {
+    used,
+    limit,
+    percent,
+    currency: cur,
+    resetsAt: pickReset(node) || null,
+    apiField: "extra_usage"
+  };
 }
 
 // v1.2.6: locate the Fable weekly bucket regardless of the exact suffix the
@@ -1544,7 +1644,36 @@ async function maybeNotify(usage) {
       fired[firedKey] = next;
     }
   }
+
+  // v1.4.7: extra usage is real money, so it gets the same heads-up — but only
+  // with a monthly cap (a percentage needs something to be a percentage of).
+  // Rides on the weekly thresholds rather than adding a third list.
+  const x = settings.extraAlerts !== false ? usage.extra : null;
+  if (x && x.percent != null) {
+    if (fired.extra && x.percent + 5 < fired.extra) fired.extra = 0;   // new month
+    const next = nextThresholdToFire(x.percent, settings.weeklyThresholds, fired.extra || 0);
+    if (next != null) {
+      await fireExtraNotification(next, x);
+      fired.extra = next;
+    }
+  }
   await saveLastFired(fired);
+}
+function fmtMoneyBg(v, cur) {
+  try {
+    return new Intl.NumberFormat(undefined, { style: "currency", currency: cur || "USD" }).format(v);
+  } catch (_) {
+    return "$" + Number(v).toFixed(2);
+  }
+}
+async function fireExtraNotification(threshold, x) {
+  await createNotification(`claude-usage-extra-${threshold}-${Date.now()}`, {
+    type: "basic",
+    iconUrl: chrome.runtime.getURL("icons/icon128.png"),
+    title: `Claude · Extra usage at ${threshold}%`,
+    message: `You've spent ${fmtMoneyBg(x.used, x.currency)} of your ${fmtMoneyBg(x.limit, x.currency)} monthly extra usage limit.`,
+    priority: 2
+  });
 }
 function capitalize(s) {
   if (!s) return "";
@@ -1642,6 +1771,21 @@ chrome.runtime.onInstalled.addListener(async (details) => {
       await chrome.storage.local.set({
         install_at: (details && details.reason === "install") ? Date.now() : 0
       });
+    }
+  } catch (_) {}
+  // v1.4.7: usage bars become opt-in. Since 1.4.5 they were on by default and
+  // got written into everyone's stored stripFields, so changing the default
+  // alone would change nothing for existing users. Switch them off ONCE on
+  // upgrade; a user who ticks them afterwards keeps them (flag below).
+  try {
+    const { bars_off_147 } = await chrome.storage.local.get("bars_off_147");
+    if (!bars_off_147) {
+      const { [STORAGE_KEYS.settings]: s } = await chrome.storage.local.get(STORAGE_KEYS.settings);
+      if (s && s.stripFields) {
+        s.stripFields.usageBars = false;
+        await chrome.storage.local.set({ [STORAGE_KEYS.settings]: s });
+      }
+      await chrome.storage.local.set({ bars_off_147: true });
     }
   } catch (_) {}
   const cur = await getSettings();

@@ -752,3 +752,38 @@ footer { display: flex; gap: 8px; margin-top: 14px; }
 }
 
 .fields-foot.show { opacity: 1; color: var(--amber); }
+
+/* v1.4.7: "when does this show?" hints (Limit forecast, Extra usage). */
+.field-info {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border: 1px solid var(--text-mute);
+  border-radius: 50%;
+  color: var(--text-mute);
+  font: italic 700 9.5px/1 Georgia, "Times New Roman", serif;
+  cursor: help;
+  flex-shrink: 0;
+}
+.field-info:hover, .field-info:focus-visible { color: var(--text); border-color: var(--text); outline: none; }
+.field-tip {
+  display: none;
+  position: absolute;
+  right: -4px;
+  top: calc(100% + 7px);
+  z-index: 20;
+  width: 230px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--bg-elev-2);
+  color: var(--text);
+  border: 1px solid var(--line);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3);
+  font: 400 11.5px/1.45 var(--font-body, Inter, system-ui, sans-serif);
+  font-style: normal;
+  text-align: left;
+}
+.field-info:hover .field-tip, .field-info:focus-visible .field-tip { display: block; }

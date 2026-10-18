@@ -147,6 +147,54 @@ function renderForecast(scope, usage) {
   }
 }
 
+/* v1.4.7 — extra usage (overage credits) card. Amounts come from background.js
+   already in major units ({ used, limit, percent, currency }). */
+function fmtMoney(v, cur) {
+  const n = Number(v) || 0;
+  const digits = Number.isInteger(n) ? 0 : 2;
+  try {
+    return new Intl.NumberFormat(undefined, {
+      style: "currency", currency: cur || "USD",
+      minimumFractionDigits: digits, maximumFractionDigits: digits
+    }).format(n);
+  } catch (_) {
+    return "$" + n.toFixed(digits);
+  }
+}
+function fmtMoney2(v, cur) {
+  try {
+    return new Intl.NumberFormat(undefined, { style: "currency", currency: cur || "USD" }).format(Number(v) || 0);
+  } catch (_) {
+    return "$" + (Number(v) || 0).toFixed(2);
+  }
+}
+function renderExtra(usage) {
+  const card = document.getElementById("extra-card");
+  const x = usage && usage.extra;
+  if (!card) return;
+  // v1.4.7: the "Extra usage" toggle hides it here too, not just in the strip.
+  if (extraHidden) { card.classList.add("hidden"); return; }
+  if (!x || typeof x.used !== "number") { card.classList.add("hidden"); return; }
+  card.classList.remove("hidden");
+  const pctEl = document.getElementById("extra-pct");
+  const barEl = document.getElementById("extra-bar");
+  const fillEl = document.getElementById("extra-fill");
+  const subEl = document.getElementById("extra-sub");
+  if (x.limit != null) {
+    pctEl.textContent = `${fmtMoney2(x.used, x.currency)} / ${fmtMoney(x.limit, x.currency)}`;
+    barEl.style.display = "";
+    const p = x.percent != null ? x.percent : 0;
+    fillEl.style.width = `${Math.min(100, p)}%`;
+    fillEl.className = `bar-fill ${colorClassFor(p)}`;
+    const left = Math.max(0, x.limit - x.used);
+    subEl.textContent = `${p}% of monthly limit · ${fmtMoney2(left, x.currency)} left`;
+  } else {
+    pctEl.textContent = fmtMoney2(x.used, x.currency);
+    barEl.style.display = "none";
+    subEl.textContent = "Spent this month · no monthly limit set";
+  }
+}
+
 function renderMessagesLeft(usage) {
   const wrap = document.getElementById("msgs-left");
   const val = document.getElementById("msgs-left-val");
@@ -208,14 +256,18 @@ function setTestResult(msg, kind = "info") {
   if (!msg) el.className = "test-result hidden";
 }
 
+let extraHidden = false;
 async function render(state) {
   const { usage, currentModel } = state;
+  const sfx = state && state.settings && state.settings.stripFields;
+  extraHidden = !!(sfx && sfx.extra === false);
   const hasSession = renderCard("session", usage && usage.session);
   const hasWeekly  = renderCard("weekly",  usage && usage.weekly);
   document.getElementById("weekly-lbl").textContent =
     weeklyLabelFor(usage && usage.weekly, currentModel);
   renderForecast("session", usage);
   renderForecast("weekly", usage);
+  renderExtra(usage);
   renderMessagesLeft(usage);
   renderFields(state && state.settings, usage);
   document.getElementById("updated").textContent = fmtUpdated(usage && usage.updatedAt);
@@ -257,7 +309,8 @@ const METER_FIELDS = ["session", "weekly", "fable"];
 // without leaving the strip empty, so it's outside METER_FIELDS.
 // v1.3.6: `chatTokens` (per-chat size) is a trimming too.
 // v1.4.5: `usageBars` (bar + pace tick beside each %) is a trimming too.
-const ALL_FIELDS = [...METER_FIELDS, "resetTimeSession", "resetTimeWeekly", "forecast", "chatTokens", "usageBars"];
+// v1.4.7: `extra` (overage spend) is a trimming — a money figure, not a meter.
+const ALL_FIELDS = [...METER_FIELDS, "extra", "resetTimeSession", "resetTimeWeekly", "forecast", "chatTokens", "usageBars"];
 // v1.3.1: rows in the same panel that are NOT stripFields. The Projects button
 // is injected into Claude's composer, not our strip, so it saves as a top-level
 // setting — but it belongs in this list, because "settings" to a user means
@@ -329,6 +382,8 @@ function renderFields(settings, usage) {
   // letting the user think the toggle is broken.
   const note = document.getElementById("field-fable-note");
   if (note) note.classList.toggle("hidden", fableAvailable);
+  const xNote = document.getElementById("field-extra-note");
+  if (xNote) xNote.classList.toggle("hidden", !!(usage && usage.extra));
   for (const f of TOP_FIELDS) {
     const box = fieldBox(f);
     if (box) box.checked = settings && settings[f] !== false;
@@ -338,6 +393,9 @@ function renderFields(settings, usage) {
 
 async function saveFields() {
   applyMeterLock();
+  // v1.4.7: reflect the Extra toggle on the popup's own card immediately.
+  const xb = fieldBox("extra");
+  if (xb) { extraHidden = !xb.checked; if (!xb.checked) document.getElementById("extra-card").classList.add("hidden"); }
   try {
     await chrome.runtime.sendMessage({
       type: "save-settings",
@@ -345,6 +403,12 @@ async function saveFields() {
     });
   } catch (_) {}
 }
+
+// v1.4.7: the ⓘ hints live inside their row's <label> — clicking one explains,
+// it must not toggle the checkbox.
+document.addEventListener("click", (e) => {
+  if (e.target && e.target.closest && e.target.closest(".field-info")) e.preventDefault();
+}, true);
 
 document.getElementById("fields-toggle").addEventListener("click", () => {
   const btn = document.getElementById("fields-toggle");

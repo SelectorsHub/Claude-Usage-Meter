@@ -1,4 +1,18 @@
 // content-script.js (isolated world, v1.29)
+// - v1.4.7: EXTRA USAGE. A conditional "Extra" segment ("Extra $12.40 / $50")
+//   after Fable, plus an "E" chip in the collapsed pill, for accounts with
+//   extra usage (overage credits) switched on — Team/Enterprise and Max. Reads
+//   usage.extra from background.js ({ used, limit, percent, currency }); hidden
+//   entirely when absent, same default-hidden pattern as Fable. The bar and
+//   colour follow % of the monthly cap; with no cap there is no bar, just the
+//   amount spent. "/ $50" is the segment's meta, so it sheds with the reset
+//   times (fit level 2) and the full story stays in the tooltip. New
+//   stripFields.extra, on by default, in the gear popover and the popup panel.
+// - v1.4.7: MODERNISED MARK. New toolbar/store icons and icons/usage-meter-logo.svg
+//   (gradients, transparent background, Claude spark on the hub). The strip's
+//   inline copy (meterLogoSvg) and the share card's canvas copy (scDrawGauge)
+//   are redrawn in the same 256-unit box; needle pivot and sweep angles in
+//   overlay.css follow the new geometry (rests at 52.2deg of a 104.5deg arc).
 // - v1.4.5: USAGE BARS. Each meter gets a small bar beside its label (fill =
 //   % used, same colours as the number). The tooltip adds pace ("Ahead of
 //   pace: 62% used, 40% of the window gone"). An on-bar pace tick was tried
@@ -869,6 +883,8 @@
   // v1.2.6: whether the Fable segment currently has data (drives the F key in
   // the collapse tooltip). Set by applyFableVisibility() on every render.
   let fableVisible = false;
+  // v1.4.7: same idea for the Extra (overage spend) segment / E chip.
+  let extraVisible = false;
   // v1.2.7: the popup's "Show in strip" selection. Defaults to everything on so
   // the strip renders in full before the async settings read resolves — an
   // upgrading user never sees a partial strip flash into place.
@@ -880,7 +896,8 @@
     resetTimeWeekly: true,
     forecast: true,
     chatTokens: true,
-    usageBars: true
+    usageBars: false,   // v1.4.7: opt-in
+    extra: true
   };
   function fieldOn(name) {
     return stripFields[name] !== false;
@@ -898,6 +915,7 @@
     if (fieldOn("session")) keys.push("S = session");
     if (fieldOn("weekly")) keys.push("W = weekly");
     if (fableVisible) keys.push("F = Fable");
+    if (extraVisible) keys.push("E = extra usage");
     if (fieldOn("chatTokens") && chatTokens && chatTokens.uuid === currentChatId()) {
       keys.push("bubble = this chat's tokens");
     }
@@ -1316,6 +1334,82 @@
     return fam.split(/[_\s]+/).map((w) => (w ? w[0].toUpperCase() + w.slice(1) : w)).join(" ");
   }
 
+  // v1.4.7: extra usage (overage credits) — conditional like Fable. Null when
+  // the account has it switched off, the API didn't report it, or the user
+  // unticked it.
+  function extraData() {
+    if (!fieldOn("extra")) return null;
+    const x = latestUsage && latestUsage.extra;
+    if (!x || typeof x.used !== "number" || !isFinite(x.used)) return null;
+    return x;
+  }
+
+  // Money for the strip. `short` drops the cents from $100 up so the segment
+  // doesn't grow as the month goes on; a whole-number cap prints as "$50".
+  function fmtMoney(v, cur, short) {
+    const n = Number(v) || 0;
+    const whole = short ? n >= 100 : Number.isInteger(n);
+    const digits = whole ? 0 : 2;
+    try {
+      return new Intl.NumberFormat(undefined, {
+        style: "currency", currency: cur || "USD",
+        minimumFractionDigits: digits, maximumFractionDigits: digits
+      }).format(n);
+    } catch (_) {
+      return "$" + n.toFixed(digits);
+    }
+  }
+
+  function extraTipText(x) {
+    const spent = fmtMoney(x.used, x.currency, false);
+    if (x.limit != null) {
+      const cap = fmtMoney(x.limit, x.currency, false);
+      const pct = x.percent != null ? ` (${x.percent}%)` : "";
+      const left = Math.max(0, x.limit - x.used);
+      return `Extra usage: ${spent} of ${cap} monthly limit spent${pct}` +
+        `<br>${fmtMoney(left, x.currency, false)} left this month`;
+    }
+    return `Extra usage: ${spent} spent this month<br>No monthly limit set`;
+  }
+
+  function renderExtraSegment(segEl, x) {
+    if (!segEl) return;
+    renderBar(segEl, x.percent != null ? { percent: x.percent } : null);
+    const pctEl  = segEl.querySelector('[data-cut-pct]');
+    const metaEl = segEl.querySelector('[data-cut-meta]');
+    pctEl.textContent = fmtMoney(x.used, x.currency, true);
+    if (x.percent != null) {
+      const cls = colorClass(x.percent);
+      pctEl.className = "cut-pct cut-color-" + cls;
+      segEl.classList.toggle("cut-alert", x.percent >= 90);
+      segEl.classList.toggle("cut-alert-max", x.percent >= 100);
+    } else {
+      pctEl.className = "cut-pct";
+      segEl.classList.remove("cut-alert", "cut-alert-max");
+    }
+    if (metaEl) metaEl.textContent = x.limit != null ? `/ ${fmtMoney(x.limit, x.currency, false)}` : "";
+    segEl.dataset.cutTip = extraTipText(x);
+    segEl.setAttribute("aria-label", segEl.dataset.cutTip.replace(/<br>/g, ". "));
+  }
+
+  function renderCompactExtra(root) {
+    const x = extraData();
+    const el = root.querySelector('[data-cut="c-extra"]');
+    const tipEl = root.querySelector('[data-cut="c-extra-tip"]');
+    const ringEl = root.querySelector('[data-cut="ring-extra"]');
+    if (!x || !el) return;
+    el.textContent = fmtMoney(x.used, x.currency, true);
+    const cls = x.percent != null ? colorClass(x.percent) : null;
+    el.className = "cut-cpct" + (cls ? " cut-color-" + cls : "");
+    if (ringEl) {
+      const frac = x.percent != null ? clampPct(x.percent) / 100 : 0;
+      ringEl.style.strokeDasharray = RING_C.toFixed(2);
+      ringEl.style.strokeDashoffset = (RING_C * (1 - frac)).toFixed(2);
+      ringEl.setAttribute("class", "cut-cring-fill" + (cls ? " cut-color-" + cls : ""));
+    }
+    if (tipEl) tipEl.innerHTML = extraTipText(x);
+  }
+
   // v1.2.7: apply the popup's "Show in strip" selection. Runs on every render so
   // a toggle takes effect live (storage.onChanged → renderInto), and so a
   // segment that gains data mid-session still appears on its own.
@@ -1355,6 +1449,8 @@
     // Lets overlay.css widen the "drop the reset text" breakpoint — three
     // segments need more room on one line than two.
     root.classList.toggle("cut-has-fable", fableVisible);
+    extraVisible = !!extraData();
+    root.classList.toggle("cut-has-extra", extraVisible);
 
     // "" (not a display value) restores the stylesheet's own display so the
     // collapsed-mode !important rules and container-query tiers keep working.
@@ -1378,6 +1474,11 @@
     // Fable-only and then loses Fable access, so fableVisible goes false on its
     // own. An empty strip reads as a broken extension, so fall back to Session.
     if (!meters.some((m) => m.on)) meters[0].on = true;
+    // v1.4.7: Extra is added AFTER the safety net — it's a spend figure, not a
+    // usage meter, so it must not stand in for Session on an otherwise empty
+    // strip.
+    meters.push({ on: extraVisible, seg: '[data-cut="extra"]', div: '[data-cut="extra-divider"]',
+      chip: '[data-cut="c-extra-wrap"]', chipDiv: '[data-cut="c-extra-divider"]' });
 
     let chipBefore = false;
     for (const m of meters) {
@@ -1517,21 +1618,37 @@
   // exactly where the needle rests. Draw order matters — the hub is painted
   // AFTER the needle so the needle's wide base is hidden underneath it and the
   // pivot stays clean through the whole sweep.
+  // v1.4.7: redrawn for the modernised mark (256-unit box, gradients, Claude
+  // spark on the hub). Gradient ids are made unique per call — the mark is
+  // mounted more than once per page (strip + sidebar fallback) and duplicate
+  // ids would make every copy borrow the first one's gradient.
+  let meterLogoSeq = 0;
+  const METER_SPARK_D = "m7.75 26.27 7.77-4.36.13-.38-.13-.21h-.38l-1.3-.08-4.44-.12-3.850-.16-3.73-.2-.94-.2-.88-1.16.09-.58.79-.53 1.13.1 2.5.17 3.75.26 2.72.16 4.03.42h.64l.09-.26-.22-.16-.17-.16-3.88-2.63-4.2-2.78-2.2-1.6-1.19-.81-.6-.76-.26-1.66 1.08-1.19 1.45.1.37.1 1.47 1.13 3.14 2.43 4.1 3.02.6.5.24-.17.03-.12-.27-.45-2.23-4.03-2.38-4.1-1.06-1.7-.28-1.020c-.1-.42-.17-.77-.17-1.2l1.23-1.67.68-.22 1.64.22.69.6 1.02 2.33 1.65 3.67 2.56 4.99.75 1.48.4 1.37.15.42h.26v-.24l.21-2.81.39-3.45.38-4.44.13-1.25.62-1.5 1.23-.81.96.46.79 1.13-.11.73-.47 3.05-.92 4.78-.6 3.2h.35l.4-.4 1.62-2.15 2.72-3.4 1.2-1.35 1.4-1.49.9-.71h1.7l1.25 1.86-.56 1.92-1.75 2.220-1.45 1.88-2.08 2.8-1.3 2.24.12.18.31-.03 4.7-1 2.54-.46 3.03-.52 1.37.64.15.65-.54 1.33-3.24.8-3.8.76-5.66 1.34-.07.05.08.1 2.55.24 1.09.06h2.67l4.97.37 1.3.86.78 1.05-.13.8-2 1.02-2.7-.64-6.3-1.5-2.16-.54h-.3v.18l1.8 1.76 3.3 2.98 4.13 3.84.21.95-.53.75-.56-.08-3.630-2.73-1.4-1.23-3.17-2.67h-.21v.28l.73 1.07 3.86 5.8.2 1.78-.28.58-1 .35-1.1-.2-2.26-3.17-2.33-3.57-1.88-3.2-.23.13-1.11 11.95-.52.61-1.2.46-1-.76-.53-1.23.53-2.43.64-3.17.52-2.52.47-3.13.28-1.04-.02-.07-.23.03-2.36 3.24-3.59 4.85-2.84 3.04-.68.27-1.18-.61.11-1.09.66-.97 3.93-5 2.37-3.1 1.53-1.79-.01-.26h-.09l-10.44 6.78-1.86.24-.8-.75.1-1.23.38-.4 3.14-2.16z";
   function meterLogoSvg(size, cls) {
+    const id = "cutlg" + (++meterLogoSeq);
     return `
-      <svg class="${cls}" viewBox="0 0 24 24" width="${size}" height="${size}" aria-hidden="true" focusable="false">
+      <svg class="${cls}" viewBox="0 0 256 256" width="${size}" height="${size}" aria-hidden="true" focusable="false">
+        <defs>
+          <linearGradient id="${id}o" gradientUnits="userSpaceOnUse" x1="0" y1="20" x2="0" y2="240">
+            <stop offset="0" stop-color="#E3876A"></stop><stop offset="1" stop-color="#CF6A4A"></stop>
+          </linearGradient>
+          <linearGradient id="${id}g" gradientUnits="userSpaceOnUse" x1="0" y1="20" x2="0" y2="100">
+            <stop offset="0" stop-color="#B9B6AE"></stop><stop offset="1" stop-color="#A4A199"></stop>
+          </linearGradient>
+        </defs>
         <g class="cut-logo-art" fill="none">
-          <path class="cut-gauge-rest" d="M19.78 4.08A14.11 14.11 0 0 0 7.82 10.71"
-                stroke="#a8a8ad" stroke-width="3.66"></path>
-          <path class="cut-gauge-used" d="M7.82 10.71A14.11 14.11 0 0 0 6.15 21.84"
-                stroke="#d97757" stroke-width="3.66"></path>
+          <path class="cut-gauge-rest" d="M 46.325,236.800 A 168.960,168.960 0 0 1 209.920,25.600"
+                stroke="url(#${id}g)" stroke-width="40.96"></path>
+          <path class="cut-gauge-used" d="M 46.325,236.800 A 168.960,168.960 0 0 1 76.345,91.094"
+                stroke="url(#${id}o)" stroke-width="40.96"></path>
           <g class="cut-needle" data-cut="needle">
-            <path d="M21.21 16.38 L10.52 10.34 L10.00 11.00 L18.36 19.99 Z" fill="#d97757"></path>
+            <polygon points="201.871,163.230 93.548,104.419 177.572,194.600" fill="url(#${id}o)"
+                     stroke="url(#${id}o)" stroke-width="3" stroke-linejoin="round"></polygon>
           </g>
-          <circle cx="19.78" cy="18.19" r="3.84" fill="#d97757"></circle>
-          <path d="M19.97 18.21L22.83 18.56M19.93 18.31L22.23 20.04M19.86 18.37L20.98 21.02M19.76 18.38L19.41 21.24M19.66 18.34L17.93 20.64M19.60 18.27L16.95 19.39M19.59 18.17L16.73 17.82M19.63 18.07L17.33 16.34M19.70 18.01L18.58 15.36M19.80 18.00L20.15 15.14M19.90 18.04L21.63 15.74M19.96 18.11L22.61 16.99"
-                stroke="#ffffff" stroke-width="0.66" stroke-linecap="round"></path>
-          <circle cx="19.78" cy="18.19" r="0.72" fill="#ffffff"></circle>
+          <circle cx="209.920" cy="194.560" r="42.240" fill="url(#${id}o)"></circle>
+          <g transform="translate(171.933,156.544) scale(1.9234)">
+            <path fill="#FFFFFF" d="${METER_SPARK_D}"></path>
+          </g>
         </g>
       </svg>`;
   }
@@ -1585,6 +1702,14 @@
           <span class="cut-sep">·</span>
           <span class="cut-meta" data-cut-meta>—</span>
         </div>
+        <div class="cut-divider" data-cut="extra-divider" style="display:none"></div>
+        <div class="cut-seg" data-cut="extra" style="display:none">
+          <span class="cut-label" data-cut-label>Extra</span>
+          <span class="cut-bar" data-cut-bar aria-hidden="true"><span class="cut-bar-fill" data-cut-bar-fill></span></span>
+          <span class="cut-pct" data-cut-pct>—</span>
+          <span class="cut-sep">·</span>
+          <span class="cut-meta" data-cut-meta></span>
+        </div>
         <div class="cut-divider cut-chat-divider" data-cut="chat-divider" style="display:none"></div>
         <span class="cut-chat" data-cut="chat" tabindex="0" style="display:none">
           <svg class="cut-chat-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>
@@ -1608,6 +1733,11 @@
           <span class="cut-cwrap" data-cut="c-fable-wrap" style="display:none">
             <span class="cut-cval" tabindex="0"><span class="cut-cring"><svg class="cut-cring-svg" viewBox="0 0 24 24" aria-hidden="true"><circle class="cut-cring-track" cx="12" cy="12" r="10"></circle><circle class="cut-cring-fill" data-cut="ring-fable" cx="12" cy="12" r="10"></circle></svg><span class="cut-clabel">F</span></span> <span class="cut-cpct" data-cut="c-fable">—</span><span class="cut-creset" data-cut="c-fable-reset"><svg class="cut-creset-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20.5 13.5a8.5 8.5 0 1 1-2.2-6.4"></path><polyline points="20.5 3 20.5 8 15.5 8"></polyline></svg><span class="cut-creset-txt" data-cut="c-fable-rt">—</span></span></span>
             <span class="cut-ctip" data-cut="c-fable-tip" aria-hidden="true">Waiting for data</span>
+          </span>
+          <span class="cut-cdivider" data-cut="c-extra-divider" aria-hidden="true" style="display:none"></span>
+          <span class="cut-cwrap" data-cut="c-extra-wrap" style="display:none">
+            <span class="cut-cval" tabindex="0"><span class="cut-cring"><svg class="cut-cring-svg" viewBox="0 0 24 24" aria-hidden="true"><circle class="cut-cring-track" cx="12" cy="12" r="10"></circle><circle class="cut-cring-fill" data-cut="ring-extra" cx="12" cy="12" r="10"></circle></svg><span class="cut-clabel">E</span></span> <span class="cut-cpct" data-cut="c-extra">—</span></span>
+            <span class="cut-ctip" data-cut="c-extra-tip" aria-hidden="true">Waiting for data</span>
           </span>
           <span class="cut-cdivider" data-cut="c-chat-divider" aria-hidden="true" style="display:none"></span>
           <span class="cut-cwrap cut-cchat" data-cut="c-chat-wrap" style="display:none">
@@ -1655,15 +1785,17 @@
           </button>
           <span class="cut-settings-tooltip" aria-hidden="true">Choose what to show in this strip.</span>
           <div class="cut-settings-pop" data-cut="settings-pop" style="display:none" role="group" aria-label="Show in strip">
+            <div class="cut-sp-scroll" data-cut="sp-scroll">
             <div class="cut-sp-title">Show in strip</div>
             <label class="cut-sp-row"><input type="checkbox" data-sp="session" /><span>Session</span></label>
             <label class="cut-sp-row"><input type="checkbox" data-sp="weekly" /><span>Weekly</span></label>
             <label class="cut-sp-row" data-cut="sp-fable-row"><input type="checkbox" data-sp="fable" /><span>Fable <span class="cut-sp-key">F</span></span></label>
+            <label class="cut-sp-row" data-cut="sp-extra-row"><input type="checkbox" data-sp="extra" /><span>Extra usage <span class="cut-sp-key">E</span></span><span class="cut-sp-info" tabindex="0" role="note" aria-label="When does this show?">i<span class="cut-sp-tip"><b>Appears only if Extra usage is turned on for your account.</b><br>&bull; Pro / Max: you turn it on in Claude &rsaquo; Settings &rsaquo; Usage.<br>&bull; Team / Enterprise: your admin turns it on.<br>Then it shows how much you&rsquo;ve spent beyond your plan limit this month.</span></span></label>
             <div class="cut-sp-sep"></div>
             <label class="cut-sp-row"><input type="checkbox" data-sp="resetTimeSession" /><span>Session reset time</span></label>
             <label class="cut-sp-row"><input type="checkbox" data-sp="resetTimeWeekly" /><span>Weekly reset time</span></label>
             <label class="cut-sp-row"><input type="checkbox" data-sp="usageBars" /><span>Usage bars</span></label>
-            <label class="cut-sp-row"><input type="checkbox" data-sp="forecast" /><span>Limit forecast</span></label>
+            <label class="cut-sp-row"><input type="checkbox" data-sp="forecast" /><span>Limit forecast</span><span class="cut-sp-info" tabindex="0" role="note" aria-label="When does this show?">i<span class="cut-sp-tip">Appears next to Session only when you&rsquo;re on pace to hit your limit before it resets (e.g. &ldquo;~1h 20m left&rdquo;). It needs about 12 minutes of usage to measure your pace, so while you&rsquo;re on track it stays hidden.</span></span></label>
             <label class="cut-sp-row"><input type="checkbox" data-sp="chatTokens" /><span>Chat tokens</span></label>
             <div class="cut-sp-sep"></div>
             <div class="cut-sp-title cut-sp-title-sub">In Claude&rsquo;s chat box</div>
@@ -1674,6 +1806,8 @@
             <button class="cut-sp-share" type="button" data-cut="sp-share">📸 Share my usage card</button>
             <button class="cut-sp-share cut-sp-support" type="button" data-cut="sp-support">❤️ Donate to support</button>
             <div class="cut-sp-foot" data-cut="sp-foot">Keep at least one meter on.</div>
+            </div>
+            <div class="cut-sp-fade" aria-hidden="true"></div>
           </div>
         </span>
         <span class="cut-collapse-wrap">
@@ -1729,7 +1863,35 @@
       });
       // Clicks inside the popover must not bubble to the strip's own click
       // handlers (which drop tooltips) or the document outside-click closer.
-      settingsPop.addEventListener("click", (e) => e.stopPropagation());
+      settingsPop.addEventListener("click", (e) => {
+        // v1.4.7: the ⓘ hints sit inside their row's <label>; clicking one must
+        // explain, not toggle the checkbox.
+        if (e.target && e.target.closest && e.target.closest(".cut-sp-info")) e.preventDefault();
+        e.stopPropagation();
+      });
+      // v1.4.7: the bubbles are position:fixed (the menu scrolls, and a scroll
+      // box would clip them), so place each one beside its ⓘ as it opens.
+      const placeSpTip = (e) => {
+        const info = e.target && e.target.closest && e.target.closest(".cut-sp-info");
+        if (!info) return;
+        const tip = info.querySelector(".cut-sp-tip");
+        if (!tip) return;
+        requestAnimationFrame(() => {
+          const ir = info.getBoundingClientRect();
+          const tr = tip.getBoundingClientRect();
+          const m = 8;
+          let left = Math.min(ir.right + 6 - tr.width, window.innerWidth - tr.width - m);
+          left = Math.max(m, left);
+          let top = ir.bottom + 7;
+          if (top + tr.height > window.innerHeight - m) top = Math.max(m, ir.top - 7 - tr.height);
+          tip.style.left = left + "px";
+          tip.style.top = top + "px";
+        });
+      };
+      settingsPop.addEventListener("mouseover", placeSpTip);
+      const spScroll = settingsPop.querySelector('[data-cut="sp-scroll"]');
+      if (spScroll) spScroll.addEventListener("scroll", () => syncSpFade(settingsPop), { passive: true });
+      settingsPop.addEventListener("focusin", placeSpTip);
       // v1.3.8: "Share my usage card" — open to everyone, rated or not.
       const spShare = settingsPop.querySelector('[data-cut="sp-share"]');
       if (spShare) spShare.addEventListener("click", (e) => {
@@ -1930,6 +2092,8 @@
         // is the ONLY place its full name and reset live — always allow it. (The
         // tip text itself already omits the reset when that toggle is off.)
         if (key === "fable") return seg.dataset.cutTip || "";
+        // v1.4.7: Extra's tip is its whole story (spent / cap / left) — always.
+        if (key === "extra") return seg.dataset.cutTip || "";
         // v1.2.9: the unmetered notice must ALWAYS surface. The rule below
         // suppresses a segment's tip whenever its inline meta is on screen —
         // right for "Reset in 2h" (don't repeat visible text), but fatal here,
@@ -2447,24 +2611,31 @@
     return size;
   }
 
-  // The gauge mark, same geometry as icons/usage-meter-logo.svg (24×24 box).
+  // The gauge mark, same geometry as icons/usage-meter-logo.svg (256-unit box,
+  // v1.4.7 modernised mark).
   function scDrawGauge(ctx, x, y, size) {
-    const k = size / 24;
+    const k = size / 256;
     ctx.save();
     ctx.translate(x, y);
     ctx.scale(k, k);
-    ctx.lineWidth = 3.66;
-    ctx.strokeStyle = "#a8a8ad";
-    ctx.stroke(new Path2D("M19.78 4.08A14.11 14.11 0 0 0 7.82 10.71"));
-    ctx.strokeStyle = "#d97757";
-    ctx.stroke(new Path2D("M7.82 10.71A14.11 14.11 0 0 0 6.15 21.84"));
-    ctx.fillStyle = "#d97757";
-    ctx.fill(new Path2D("M21.21 16.38 L10.52 10.34 L10.00 11.00 L18.36 19.99 Z"));
-    ctx.beginPath(); ctx.arc(19.78, 18.19, 3.84, 0, Math.PI * 2); ctx.fill();
-    ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 0.66; ctx.lineCap = "round";
-    ctx.stroke(new Path2D("M19.97 18.21L22.83 18.56M19.93 18.31L22.23 20.04M19.86 18.37L20.98 21.02M19.76 18.38L19.41 21.24M19.66 18.34L17.93 20.64M19.60 18.27L16.95 19.39M19.59 18.17L16.73 17.82M19.63 18.07L17.33 16.34M19.70 18.01L18.58 15.36M19.80 18.00L20.15 15.14M19.90 18.04L21.63 15.74M19.96 18.11L22.61 16.99"));
+    const grad = (y1, y2, a, b) => {
+      const g = ctx.createLinearGradient(0, y1, 0, y2);
+      g.addColorStop(0, a); g.addColorStop(1, b); return g;
+    };
+    const orange = grad(20, 240, "#E3876A", "#CF6A4A");
+    ctx.lineWidth = 40.96;
+    ctx.strokeStyle = grad(20, 100, "#B9B6AE", "#A4A199");
+    ctx.stroke(new Path2D("M 46.325,236.800 A 168.960,168.960 0 0 1 209.920,25.600"));
+    ctx.strokeStyle = orange;
+    ctx.stroke(new Path2D("M 46.325,236.800 A 168.960,168.960 0 0 1 76.345,91.094"));
+    ctx.fillStyle = orange;
+    ctx.lineWidth = 3; ctx.lineJoin = "round";
+    const needle = new Path2D("M201.871 163.230 L93.548 104.419 L177.572 194.600 Z");
+    ctx.fill(needle); ctx.stroke(needle);
+    ctx.beginPath(); ctx.arc(209.92, 194.56, 42.24, 0, Math.PI * 2); ctx.fill();
+    ctx.translate(171.933, 156.544); ctx.scale(1.9234, 1.9234);
     ctx.fillStyle = "#ffffff";
-    ctx.beginPath(); ctx.arc(19.78, 18.19, 0.72, 0, Math.PI * 2); ctx.fill();
+    ctx.fill(new Path2D(METER_SPARK_D));
     ctx.restore();
   }
 
@@ -3374,13 +3545,31 @@
     const btn = root && root.querySelector('[data-cut="settings"]');
     if (!pop || !btn || !pop.isConnected || !settingsPopOpen) return;
     const br = btn.getBoundingClientRect();
-    const pr = pop.getBoundingClientRect();
     const margin = 8;
     const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    // v1.4.7: the menu outgrew short windows. Measure it at natural height,
+    // then open on whichever side fits it — or, if neither does, the roomier
+    // side with the list scrolling inside (.cut-sp-scroll).
+    const scroller = pop.querySelector('[data-cut="sp-scroll"]');
+    const keepScroll = scroller ? scroller.scrollTop : 0;
+    if (scroller) scroller.style.maxHeight = "";
+    let pr = pop.getBoundingClientRect();
+    const roomAbove = br.top - 10 - margin;
+    const roomBelow = vh - br.bottom - 10 - margin;
+    const above = pr.height <= roomAbove || (pr.height > roomBelow && roomAbove >= roomBelow);
+    const room = above ? roomAbove : roomBelow;
+    if (scroller && pr.height > room) {
+      const chrome = pr.height - scroller.getBoundingClientRect().height;   // padding
+      scroller.style.maxHeight = Math.max(80, room - chrome) + "px";
+      scroller.scrollTop = keepScroll;   // re-anchoring must not jump the list
+      pr = pop.getBoundingClientRect();
+    }
+    syncSpFade(pop);
     let left = br.left + br.width / 2 - pr.width / 2;
     left = Math.max(margin, Math.min(left, vw - pr.width - margin));
     let top;
-    if (br.top >= pr.height + 14) {
+    if (above) {
       top = br.top - pr.height - 10;
       pop.classList.remove("cut-pop-below");
     } else {
@@ -3391,6 +3580,14 @@
     pop.style.setProperty("--cut-arrow-x", arrowX + "px");
     pop.style.left = left + "px";
     pop.style.top = top + "px";
+  }
+
+  // v1.4.7: fade at the bottom of the settings menu while more is below.
+  function syncSpFade(pop) {
+    const sc = pop && pop.querySelector('[data-cut="sp-scroll"]');
+    if (!sc) return;
+    const more = sc.scrollHeight - sc.clientHeight - sc.scrollTop > 4;
+    pop.classList.toggle("cut-sp-has-more", more);
   }
 
   function spBoxes(pop) {
@@ -3418,6 +3615,9 @@
     const fRow = pop.querySelector('[data-cut="sp-fable-row"]');
     const fableReported = !!(latestUsage && latestUsage.fable);
     if (fRow) fRow.style.display = fableReported ? "" : "none";
+    // v1.4.7: the Extra usage row is ALWAYS listed (unlike Fable) so anyone
+    // can switch it off ahead of time — it's a money figure some people would
+    // rather not have on screen.
     // Lock the last enabled meter so the strip can't be emptied (same rule as
     // the popup; an unreported Fable can't satisfy it — nothing to show).
     const meterNames = fableReported ? ["session", "weekly", "fable"] : ["session", "weekly"];
@@ -3489,7 +3689,9 @@
     // Follow the gear while open: rAF-throttled reposition on viewport resize
     // and any scroll (the strip lives in the page flow, the popover is fixed).
     let followQueued = false;
-    settingsPopFollowHandler = () => {
+    settingsPopFollowHandler = (e) => {
+      // v1.4.7: scrolling INSIDE the menu is not the gear moving.
+      if (e && e.type === "scroll" && e.target && e.target.nodeType === 1 && pop.contains(e.target)) return;
       if (followQueued) return;
       followQueued = true;
       requestAnimationFrame(() => { followQueued = false; positionSettingsPop(); });
@@ -4141,11 +4343,18 @@
     root.classList.toggle("cut-auto-collapsed", on);
     root.classList.toggle("cut-collapsed", collapsed || on);
   }
+  // v1.4.7: how far the EXPANDED strip may shed before it switches to the
+  // collapsed pill. Level 1 is cosmetic only (byline, "left"/"tokens" words,
+  // the limit promo). Everything from level 2 up is something the user ticked
+  // (reset times, bars, forecast…), and a ticked field must not silently
+  // vanish — the collapsed pill keeps them as compact chips instead.
+  const EXPANDED_MAX_FIT = 1;
   // Sheds levels until the row fits. true = it fits.
-  function shedToFit(root) {
+  function shedToFit(root, maxLevel) {
+    const max = maxLevel == null ? FIT_LEVELS : maxLevel;
     setFitLevel(root, 0);
     if (stripOverflowPx(root) <= 0.5) return true;
-    for (let n = 1; n <= FIT_LEVELS; n++) {
+    for (let n = 1; n <= max; n++) {
       setFitLevel(root, n);
       if (stripOverflowPx(root) <= 0.5) return true;
     }
@@ -4160,12 +4369,14 @@
     // while auto-collapsed never paints.
     root.classList.remove("cut-fit-scroll");
     if (autoCollapsed && !collapsed) setAutoCollapsed(root, false);
-    if (shedToFit(root)) return;
-    // v1.3.6: the expanded strip can't fit even fully shed — show the collapsed
-    // pill instead, which keeps every number (chat size included).
+    if (shedToFit(root, collapsed ? FIT_LEVELS : EXPANDED_MAX_FIT)) return;
+    // v1.3.6 / v1.4.7: the expanded strip can't fit what's ticked — show the
+    // collapsed pill instead, which keeps every number (chat size included).
+    // The settings menu stays open (the gear is in the pill now) and simply
+    // re-anchors, so ticking a box that tips the strip over doesn't slam it.
     if (!collapsed) {
-      if (settingsPopOpen) closeSettingsPop(root);
       setAutoCollapsed(root, true);
+      if (settingsPopOpen) requestAnimationFrame(positionSettingsPop);
       if (shedToFit(root)) return;
     }
     // Everything optional is gone and it still doesn't fit. Scroll is the least
@@ -4262,6 +4473,10 @@
         segF.setAttribute("aria-label", segF.dataset.cutTip);
       }
     }
+    // v1.4.7: Extra usage segment (visibility already applied above).
+    const extra = extraData();
+    if (extra) renderExtraSegment(root.querySelector('[data-cut="extra"]'), extra);
+    renderCompactExtra(root);
     if (!isUnmetered()) {
       renderForecast(root);
       renderCompact(root);

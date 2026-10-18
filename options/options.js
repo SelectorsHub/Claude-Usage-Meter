@@ -1,4 +1,6 @@
 // options.js (v1.6)
+// - v1.4.7: Extra usage card — `stripFields.extra` (show/hide the spend
+//   segment, E chip and popup card) and `extraAlerts`.
 // - v1.3.1: `projectsButton` toggle for the Projects button injected into
 //   claude.ai's composer. It writes into Claude's own UI rather than our strip,
 //   so it gets an explicit off switch even though it's on by default.
@@ -19,6 +21,8 @@ let state = {
   forecastAlerts: true,
   projectsButton: true,
   chatSearch: true,
+  extraShow: true,
+  extraAlerts: true,
   pollMinutes: 1
 };
 
@@ -30,7 +34,11 @@ async function load() {
   state.forecastAlerts = settings.forecastAlerts !== false;
   state.projectsButton = settings.projectsButton !== false;
   state.chatSearch = settings.chatSearch !== false;
+  state.extraShow = !(settings.stripFields && settings.stripFields.extra === false);
+  state.extraAlerts = settings.extraAlerts !== false;
   state.pollMinutes = settings.pollMinutes || 1;
+  document.getElementById("extra-show").checked = state.extraShow;
+  document.getElementById("extra-alerts").checked = state.extraAlerts;
   document.getElementById("notifications-enabled").checked = state.notificationsEnabled;
   document.getElementById("forecast-alerts").checked = state.forecastAlerts;
   document.getElementById("projects-button").checked = state.projectsButton;
@@ -80,6 +88,8 @@ async function save() {
   state.forecastAlerts = document.getElementById("forecast-alerts").checked;
   state.projectsButton = document.getElementById("projects-button").checked;
   state.chatSearch = document.getElementById("chat-search").checked;
+  state.extraShow = document.getElementById("extra-show").checked;
+  state.extraAlerts = document.getElementById("extra-alerts").checked;
   const pm = parseInt(document.getElementById("poll-minutes").value, 10);
   state.pollMinutes = isNaN(pm) ? 1 : Math.max(1, Math.min(60, pm));
   document.getElementById("poll-minutes").value = state.pollMinutes;
@@ -92,6 +102,10 @@ async function save() {
       forecastAlerts: state.forecastAlerts,
       projectsButton: state.projectsButton,
       chatSearch: state.chatSearch,
+      extraAlerts: state.extraAlerts,
+      // Merged into the stored stripFields by background (save-settings), so
+      // only this one key changes.
+      stripFields: { extra: state.extraShow },
       pollMinutes: state.pollMinutes
     }
   });

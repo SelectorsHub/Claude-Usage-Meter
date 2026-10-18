@@ -157,7 +157,7 @@
 #claude-usage-overlay .cut-needle {
   /* The gauge pivot, which is also the hub circle's centre. Rotating about
      anything else makes the needle detach from the hub mid-sweep. */
-  transform-origin: 19.78px 18.19px;
+  transform-origin: 209.92px 194.56px;   /* v1.4.7: 256-unit mark */
   transform-box: view-box;
 }
 
@@ -176,13 +176,13 @@
    linear slide. The last three steps overshoot and decay, which is what sells
    it as a physical needle rather than a sliding graphic. */
 @keyframes cut-needle-sweep {
-  0%   { transform: rotate(-53.3deg); }
+  0%   { transform: rotate(-52.2deg); }
   6%   { transform: rotate(-46deg); }
   16%  { transform: rotate(-25deg); }
   28%  { transform: rotate(12deg); }
   36%  { transform: rotate(42deg); }
-  40%  { transform: rotate(51.7deg); }
-  50%  { transform: rotate(51.7deg); }
+  40%  { transform: rotate(52.2deg); }
+  50%  { transform: rotate(52.2deg); }
   62%  { transform: rotate(28.4deg); }
   76%  { transform: rotate(-5deg); }
   86%  { transform: rotate(2deg); }
@@ -768,9 +768,10 @@
 /* Tier 1 (< 640px): drop the "resets in …" meta text and its "·" separator.
    Dots + percentages keep all the at-a-glance signal; reset times remain one
    click away in the popup. */
+/* v1.4.7: the 640px tier no longer hides reset times — a ticked field must
+   never vanish for width. fitStrip() switches to the collapsed pill instead,
+   which keeps the reset countdowns. Only the cosmetic "tokens" word goes. */
 @container cut-overlay (max-width: 640px) {
-  #claude-usage-overlay .cut-meta,
-  #claude-usage-overlay .cut-sep,
   #claude-usage-overlay .cut-chat-word {
     display: none;
   }
@@ -791,6 +792,13 @@
   display: none !important;
 }
 
+/* v1.4.7: Extra usage reads "Extra $12.40 / $50". The cap is the segment's
+   meta (so the width tiers and fit level 2 shed it with the reset times) and
+   joins the amount with "/" rather than the usual "·" separator. */
+#claude-usage-overlay [data-cut="extra"] .cut-sep { display: none !important; }
+#claude-usage-overlay [data-cut="extra"] .cut-meta { margin-left: -2px; }
+#claude-usage-overlay [data-cut="extra"] .cut-meta:empty { display: none !important; }
+
 /* v1.2.7a: an earlier cut of this shed the reset times at 780px whenever the
    Fable segment and the forecast chip were both up, on the reasoning that the
    chip was the more actionable number. That was the wrong call to make on the
@@ -804,25 +812,9 @@
 /* Narrow safety band while the F chip is up: tighten the gap one notch and,
    if it still can't fit, scroll horizontally (scrollbar hidden) instead of
    clipping or wrapping — same escape hatch as the 330px tier. */
-@container cut-overlay (max-width: 820px) {
-  #claude-usage-overlay.cut-has-forecast .cut-strip {
-    gap: 8px;
-    overflow-x: auto;
-    scrollbar-width: none;
-    -ms-overflow-style: none;
-  }
-  #claude-usage-overlay.cut-has-forecast .cut-strip::-webkit-scrollbar { display: none; }
-}
-
-@container cut-overlay (max-width: 720px) {
-  #claude-usage-overlay.cut-has-fable .cut-strip {
-    gap: 8px;
-    overflow-x: auto;
-    scrollbar-width: none;
-    -ms-overflow-style: none;
-  }
-  #claude-usage-overlay.cut-has-fable .cut-strip::-webkit-scrollbar { display: none; }
-}
+/* v1.4.7: the has-forecast / has-fable / has-extra scroll bands are gone.
+   A crowded strip now switches to the collapsed pill (fitStrip) rather than
+   scrolling, and a scroll container clipped the strip's own tooltips. */
 
 /* v1.2.7a: the chip sheds in LOCKSTEP with the reset times at Tier 1, rather
    than outliving them to 480px as it first did. Outliving them produced exactly
@@ -830,9 +822,7 @@
    it — which reads as the reset time being broken rather than deliberately
    dropped. Both are "when does this end?" answers; they belong together, and
    below Tier 1 the projection is still on the segment tooltip. */
-@container cut-overlay (max-width: 640px) {
-  #claude-usage-overlay .cut-fc { display: none !important; }
-}
+/* v1.4.7: (the forecast chip is no longer hidden at 640px — see fitStrip.) */
 
 /* Tier 2 (< 480px): tighten spacing and shrink "Rate us" and "Support" to just icons. */
 @container cut-overlay (max-width: 480px) {
@@ -1355,10 +1345,8 @@
 
 #claude-usage-overlay .cut-settings[aria-expanded="true"] { opacity: 1; }
 
-/* Collapsed mode: no gear. */
-#claude-usage-overlay.cut-collapsed .cut-settings-wrap {
-  display: none !important;
-}
+/* v1.4.7: the gear stays in collapsed mode — the collapsed pill is now what
+   a crowded strip turns into, so its settings must stay one click away. */
 
 /* The popover itself. Base look while nested (rarely visible — it's portaled
    to <body> on open); the portal class carries the same look at fixed
@@ -2438,8 +2426,8 @@
 #claude-usage-overlay.cut-fit-1 .cut-lp-short { display: inline; opacity: 0.7; }
 #claude-usage-overlay.cut-collapsed .cut-lp-wrap,
 #claude-usage-overlay.cut-collapsed .cut-lp-divider,
-#claude-usage-overlay.cut-fit-2 .cut-lp-wrap,
-#claude-usage-overlay.cut-fit-2 .cut-lp-divider { display: none !important; }
+#claude-usage-overlay.cut-fit-1 .cut-lp-wrap,
+#claude-usage-overlay.cut-fit-1 .cut-lp-divider { display: none !important; }
 /* ≤640px the tiers already drop the inline reset time; the promo must not
    outlive the one number that matters during a lockout. */
 @container cut-overlay (max-width: 640px) {
@@ -2888,8 +2876,8 @@
 #claude-usage-overlay .cut-bar {
   position: relative;
   display: inline-block;
-  width: 36px;
-  height: 5px;
+  width: 18px;   /* v1.4.7: was 36px — half the width, the % beside it carries the number */
+  height: 4px;
   border-radius: 3px;
   flex-shrink: 0;
   align-self: center;
@@ -2912,11 +2900,94 @@
 #claude-usage-overlay.cut-no-bars .cut-bar,
 #claude-usage-overlay.cut-collapsed .cut-bar { display: none !important; }
 /* Fable reads "F 3%"; a full-size bar would outweigh its one-letter label. */
-#claude-usage-overlay [data-cut="fable"] .cut-bar { width: 24px; }
-@container cut-overlay (max-width: 640px) {
-  #claude-usage-overlay .cut-bar { display: none; }
-}
+/* v1.4.7: every bar is 18px now, so Fable and Extra no longer need a smaller one. */
+/* v1.4.7: (bars are no longer hidden at 640px — see fitStrip.) */
 #claude-usage-overlay.cut-fit-2 .cut-bar { display: none !important; }
 @media (prefers-reduced-motion: reduce) {
   #claude-usage-overlay .cut-bar-fill { transition: none; }
 }
+
+/* v1.4.7: "when does this show?" hints in the gear popover (Limit forecast,
+   Extra usage). Hover or keyboard focus opens a small bubble under the ⓘ. */
+.cut-settings-pop-portal .cut-sp-info,
+#claude-usage-overlay .cut-sp-info {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 13px;
+  height: 13px;
+  margin-left: auto;
+  border: 1px solid rgba(127, 127, 127, 0.75);
+  border-radius: 50%;
+  color: rgba(127, 127, 127, 0.95);
+  font: italic 700 9px/1 Georgia, "Times New Roman", serif;
+  cursor: help;
+  flex-shrink: 0;
+}
+/* Colour, not opacity, for the muted icon — opacity would fade the bubble too. */
+.cut-settings-pop-portal .cut-sp-info:hover,
+.cut-settings-pop-portal .cut-sp-info:focus-visible { color: inherit; border-color: currentColor; outline: none; }
+.cut-settings-pop-portal .cut-sp-tip,
+#claude-usage-overlay .cut-sp-tip {
+  display: none;
+  position: fixed;   /* placed by placeSpTip() — escapes the menu's scroll box */
+  z-index: 2147483647;
+  width: 220px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: #2b2b2e;
+  color: #f5f3ef;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35), 0 0 0 1px rgba(255, 255, 255, 0.12);
+  font: 400 11.5px/1.45 Inter, system-ui, -apple-system, sans-serif;
+  font-style: normal;
+  letter-spacing: 0;
+  text-transform: none;
+  text-align: left;
+  white-space: normal;
+}
+.cut-settings-pop-portal .cut-sp-info:hover .cut-sp-tip,
+.cut-settings-pop-portal .cut-sp-info:focus-visible .cut-sp-tip { display: block; }
+
+/* v1.4.7: the settings menu scrolls when it's taller than the room beside the
+   gear. The scroll box is an INNER wrapper so the popover's arrow (::after)
+   isn't clipped by it; max-height is set by positionSettingsPop(). */
+.cut-settings-pop-portal .cut-sp-scroll {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  margin-right: -8px;
+  padding-right: 8px;
+}
+/* Styling ::-webkit-scrollbar is what makes Chrome/Edge on macOS show the bar
+   all the time instead of only while scrolling. (Setting the standard
+   scrollbar-width/-color would switch Chrome back to overlay bars, so those
+   are kept for Firefox only.) */
+.cut-settings-pop-portal .cut-sp-scroll::-webkit-scrollbar { width: 6px; }
+.cut-settings-pop-portal .cut-sp-scroll::-webkit-scrollbar-track { background: transparent; }
+.cut-settings-pop-portal .cut-sp-scroll::-webkit-scrollbar-thumb {
+  background: rgba(127, 127, 127, 0.55);
+  border-radius: 3px;
+}
+@supports not selector(::-webkit-scrollbar) {
+  .cut-settings-pop-portal .cut-sp-scroll {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(127, 127, 127, 0.55) transparent;
+  }
+}
+/* "More below" fade while the list is scrolled short of its end. */
+.cut-settings-pop-portal .cut-sp-fade {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 8px;
+  height: 28px;
+  border-radius: 0 0 10px 10px;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+  background: linear-gradient(to bottom, rgba(26, 26, 28, 0), #1a1a1c);
+}
+.cut-settings-pop-portal.cut-pop-dark .cut-sp-fade {
+  background: linear-gradient(to bottom, rgba(245, 243, 239, 0), #f5f3ef);
+}
+.cut-settings-pop-portal.cut-sp-has-more .cut-sp-fade { opacity: 1; }

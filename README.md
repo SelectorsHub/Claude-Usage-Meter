@@ -4,7 +4,8 @@ A Chrome extension (Manifest V3) that tracks your Claude.ai usage with:
 
 - **In-composer strip** — a small pill embedded inside the chat composer (just under the project chip), showing session %, reset time, and messages-left when known.
 - **Toolbar popup** — Session (5-hour) + Weekly card auto-labelled with whichever Claude model you're actively using. Clicking the toolbar icon immediately fetches fresh data.
-- **Threshold notifications** — desktop alerts when usage crosses percentages you configure.
+- **Extra usage** (v1.4.7) — for accounts with extra usage / overage credits switched on (Team, Enterprise, Max), an "Extra $12.40 / $50" segment in the strip, an "E" chip in the collapsed view, and a card in the popup showing spend against the monthly limit. Hidden on accounts without it.
+- **Threshold notifications** — desktop alerts when usage crosses percentages you configure (extra usage alerts use the weekly thresholds, when a monthly limit is set).
 - **Auto-scroll** — optionally keeps the chat pinned to the bottom while Claude is replying, so the latest text stays in view. Only engages when you're already near the bottom, so scrolling up to read history is never interrupted. Toggle it in **Settings → Reading experience** (on by default).
 
 ## Install
@@ -26,7 +27,8 @@ A Chrome extension (Manifest V3) that tracks your Claude.ai usage with:
 {
   "five_hour":      { "utilization": 34, "resets_at": "..." },
   "seven_day":      { "utilization": 72, "resets_at": "..." },
-  "seven_day_opus": { "utilization": 93, "resets_at": "..." }
+  "seven_day_opus": { "utilization": 93, "resets_at": "..." },
+  "extra_usage":    { "is_enabled": true, "monthly_limit": 5000, "used_credits": 1240, "utilization": 24.8 }
 }
 ```
 
