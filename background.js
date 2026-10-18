@@ -1,4 +1,5 @@
 // background.js (service worker, v1.21)
+// - v1.4.8: uninstall feedback page moved to /claude-usage-meter-uninstalled/.
 // - v1.4.7: extra usage (overage credits) tracking — the most-asked-for gap on
 //   Team/Enterprise and Max accounts that pay past their plan limits. /usage
 //   carries `extra_usage: { is_enabled, monthly_limit, used_credits,
@@ -152,7 +153,8 @@ const DEFAULT_SETTINGS = {
     // after the reset times.
     // v1.4.7: OFF by default — the strip stays minimal and keeps its width for
     // the numbers. Anyone who wants the bars ticks "Usage bars".
-    usageBars: false,
+    // v1.4.8: on by default: a 2px underline under each label, costs no room.
+    usageBars: true,
     // v1.4.7: the "Extra" spend segment (overage credits). On by default, but it
     // only appears when the account has extra usage turned on.
     extra: true
@@ -1773,20 +1775,22 @@ chrome.runtime.onInstalled.addListener(async (details) => {
       });
     }
   } catch (_) {}
-  // v1.4.7: usage bars become opt-in. Since 1.4.5 they were on by default and
-  // got written into everyone's stored stripFields, so changing the default
-  // alone would change nothing for existing users. Switch them off ONCE on
-  // upgrade; a user who ticks them afterwards keeps them (flag below).
+  setUninstallPage();   // v1.4.7: now that install_at exists
+  // v1.4.8: usage bars are ON by default again. They're now a 2px underline
+  // that takes no room in the strip. 1.4.7 switched them off once for everyone
+  // on update (bars_off_147); undo that once for those users (bars_on_148), so
+  // only people who turn them off themselves have them off. Users who never
+  // had 1.4.7 keep whatever they already chose.
   try {
-    const { bars_off_147 } = await chrome.storage.local.get("bars_off_147");
-    if (!bars_off_147) {
+    const flags = await chrome.storage.local.get(["bars_off_147", "bars_on_148"]);
+    if (flags.bars_off_147 && !flags.bars_on_148) {
       const { [STORAGE_KEYS.settings]: s } = await chrome.storage.local.get(STORAGE_KEYS.settings);
       if (s && s.stripFields) {
-        s.stripFields.usageBars = false;
+        s.stripFields.usageBars = true;
         await chrome.storage.local.set({ [STORAGE_KEYS.settings]: s });
       }
-      await chrome.storage.local.set({ bars_off_147: true });
     }
+    if (!flags.bars_on_148) await chrome.storage.local.set({ bars_on_148: true });
   } catch (_) {}
   const cur = await getSettings();
   await chrome.storage.local.set({ [STORAGE_KEYS.settings]: cur });
@@ -1803,6 +1807,29 @@ chrome.runtime.onInstalled.addListener(async (details) => {
   await rescheduleAlarm();
   pollUsage();
 });
+// v1.4.7: uninstall feedback page. The browser opens it right after removal;
+// it gets version, browser and days installed so feedback can be read in
+// context. Nothing else about the user is sent. Re-set on every worker start
+// so the "days installed" figure stays roughly current.
+const UNINSTALL_URL = "https://www.selectorshub.com/claude-usage-meter-uninstalled/";
+async function setUninstallPage() {
+  try {
+    if (!chrome.runtime.setUninstallURL) return;
+    const ua = (typeof navigator !== "undefined" && navigator.userAgent) || "";
+    const browserName = /Firefox\//i.test(ua) ? "firefox" : (isEdgeBrowser() ? "edge" : "chrome");
+    let days = "";
+    try {
+      const { install_at } = await chrome.storage.local.get("install_at");
+      if (install_at) days = String(Math.max(0, Math.floor((Date.now() - install_at) / 86400000)));
+    } catch (_) {}
+    const p = new URLSearchParams({ v: chrome.runtime.getManifest().version, b: browserName });
+    if (days) p.set("d", days);
+    const r = chrome.runtime.setUninstallURL(UNINSTALL_URL + "?" + p.toString());
+    if (r && typeof r.catch === "function") r.catch(() => {});
+  } catch (_) {}
+}
+setUninstallPage();
+
 chrome.runtime.onStartup.addListener(async () => {
   try { await chrome.action.setBadgeText({ text: "" }); } catch (_) {}
   await rescheduleAlarm();

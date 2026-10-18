@@ -1,4 +1,12 @@
 // content-script.js (isolated world, v1.29)
+// - v1.4.8: USAGE BARS ARE THE THIN UNDERLINE AGAIN. The v1.4.5 bars sat
+//   BESIDE each label and cost ~25px per meter. They're now the v1.2.2-style
+//   2px line UNDER the label ("Session", "Weekly", "F", "Extra"): absolutely
+//   positioned inside .cut-lwrap, so it adds no width or height and never
+//   shifts the layout. Same data, colours and pace tooltip as before, still
+//   driven by renderBar(), still the "Usage bars" setting (stripFields.usageBars),
+//   which is ON by default again since it no longer costs width.
+//   Because it costs no space, fitStrip() no longer sheds it.
 // - v1.4.7: EXTRA USAGE. A conditional "Extra" segment ("Extra $12.40 / $50")
 //   after Fable, plus an "E" chip in the collapsed pill, for accounts with
 //   extra usage (overage credits) switched on — Team/Enterprise and Max. Reads
@@ -896,7 +904,7 @@
     resetTimeWeekly: true,
     forecast: true,
     chatTokens: true,
-    usageBars: false,   // v1.4.7: opt-in
+    usageBars: true,    // v1.4.8: on by default (underline, no extra room)
     extra: true
   };
   function fieldOn(name) {
@@ -1676,8 +1684,7 @@
         </a>
         <div class="cut-divider" data-cut="session-divider"></div>
         <div class="cut-seg" data-cut="session">
-          <span class="cut-label" data-cut-label>Session</span>
-          <span class="cut-bar" data-cut-bar aria-hidden="true"><span class="cut-bar-fill" data-cut-bar-fill></span></span>
+          <span class="cut-lwrap"><span class="cut-label" data-cut-label>Session</span><span class="cut-bar" data-cut-bar aria-hidden="true"><span class="cut-bar-fill" data-cut-bar-fill></span></span></span>
           <span class="cut-pct" data-cut-pct>—</span>
           <span class="cut-sep">·</span>
           <span class="cut-meta" data-cut-meta>waiting…</span>
@@ -1688,24 +1695,21 @@
         </div>
         <div class="cut-divider" data-cut="weekly-divider"></div>
         <div class="cut-seg" data-cut="weekly">
-          <span class="cut-label" data-cut-label>Weekly</span>
-          <span class="cut-bar" data-cut-bar aria-hidden="true"><span class="cut-bar-fill" data-cut-bar-fill></span></span>
+          <span class="cut-lwrap"><span class="cut-label" data-cut-label>Weekly</span><span class="cut-bar" data-cut-bar aria-hidden="true"><span class="cut-bar-fill" data-cut-bar-fill></span></span></span>
           <span class="cut-pct" data-cut-pct>—</span>
           <span class="cut-sep">·</span>
           <span class="cut-meta" data-cut-meta>—</span>
         </div>
         <div class="cut-divider" data-cut="fable-divider" style="display:none"></div>
         <div class="cut-seg" data-cut="fable" style="display:none">
-          <span class="cut-label" data-cut-label>Fable</span>
-          <span class="cut-bar" data-cut-bar aria-hidden="true"><span class="cut-bar-fill" data-cut-bar-fill></span></span>
+          <span class="cut-lwrap"><span class="cut-label" data-cut-label>Fable</span><span class="cut-bar" data-cut-bar aria-hidden="true"><span class="cut-bar-fill" data-cut-bar-fill></span></span></span>
           <span class="cut-pct" data-cut-pct>—</span>
           <span class="cut-sep">·</span>
           <span class="cut-meta" data-cut-meta>—</span>
         </div>
         <div class="cut-divider" data-cut="extra-divider" style="display:none"></div>
         <div class="cut-seg" data-cut="extra" style="display:none">
-          <span class="cut-label" data-cut-label>Extra</span>
-          <span class="cut-bar" data-cut-bar aria-hidden="true"><span class="cut-bar-fill" data-cut-bar-fill></span></span>
+          <span class="cut-lwrap"><span class="cut-label" data-cut-label>Extra</span><span class="cut-bar" data-cut-bar aria-hidden="true"><span class="cut-bar-fill" data-cut-bar-fill></span></span></span>
           <span class="cut-pct" data-cut-pct>—</span>
           <span class="cut-sep">·</span>
           <span class="cut-meta" data-cut-meta></span>

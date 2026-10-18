@@ -2873,15 +2873,24 @@
    its rings instead. Hidden while a meter has no number, so an empty track is
    never mistaken for 0%.
 --------------------------------------------------------------------------- */
-#claude-usage-overlay .cut-bar {
+/* v1.4.8: the usage bar is a 2px line UNDER the label (v1.2.2 style), not a
+   block beside it. Absolutely positioned inside .cut-lwrap, so it costs no
+   width or height and the strip's layout is identical with it on or off. */
+#claude-usage-overlay .cut-lwrap {
   position: relative;
-  display: inline-block;
-  width: 18px;   /* v1.4.7: was 36px — half the width, the % beside it carries the number */
-  height: 4px;
-  border-radius: 3px;
-  flex-shrink: 0;
-  align-self: center;
-  margin: 0 1px;
+  display: inline-flex;
+  align-items: center;
+}
+#claude-usage-overlay .cut-bar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -3px;
+  min-width: 8px;          /* "F" is one letter wide; keep the line readable */
+  height: 2px;
+  border-radius: 1px;
+  overflow: hidden;
+  pointer-events: none;
   background: rgba(127, 127, 127, 0.22);
 }
 #claude-usage-overlay .cut-bar-fill {
@@ -2902,7 +2911,7 @@
 /* Fable reads "F 3%"; a full-size bar would outweigh its one-letter label. */
 /* v1.4.7: every bar is 18px now, so Fable and Extra no longer need a smaller one. */
 /* v1.4.7: (bars are no longer hidden at 640px — see fitStrip.) */
-#claude-usage-overlay.cut-fit-2 .cut-bar { display: none !important; }
+/* v1.4.8: no longer shed for width: the underline takes no space. */
 @media (prefers-reduced-motion: reduce) {
   #claude-usage-overlay .cut-bar-fill { transition: none; }
 }
