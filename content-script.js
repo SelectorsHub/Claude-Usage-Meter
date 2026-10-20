@@ -1,4 +1,16 @@
 // content-script.js (isolated world, v1.29)
+// - v1.4.9: WHAT'S NEW CARD. After an update (never a fresh install) a card
+//   points at the gear once: what's new in this version, "Show me" opens the
+//   settings menu and flashes those rows. Content lives in WHATS_NEW, keyed by
+//   version; background.js sets whats_new_pending on update.
+// - v1.4.9: usage-bar polish: with a bar showing, the label is 11px (as before
+//   v1.2.10), the bar is 3px thick (was 2px) with a 3px gap under the label.
+//   CSS only (overlay.css, .cut-lwrap:has(...)); labels without a bar keep 12px.
+// - v1.4.9: "Desktop notifications" switch in the gear popover (and the
+//   popup). It writes the existing settings.notificationsEnabled, which
+//   background.js already checks before every threshold, extra-usage and
+//   forecast alert, so all three surfaces (gear, popup, options page) stay
+//   in sync through storage.onChanged.
 // - v1.4.8: USAGE BARS ARE THE THIN UNDERLINE AGAIN. The v1.4.5 bars sat
 //   BESIDE each label and cost ~25px per meter. They're now the v1.2.2-style
 //   2px line UNDER the label ("Session", "Weekly", "F", "Extra"): absolutely
@@ -1798,7 +1810,7 @@
             <div class="cut-sp-sep"></div>
             <label class="cut-sp-row"><input type="checkbox" data-sp="resetTimeSession" /><span>Session reset time</span></label>
             <label class="cut-sp-row"><input type="checkbox" data-sp="resetTimeWeekly" /><span>Weekly reset time</span></label>
-            <label class="cut-sp-row"><input type="checkbox" data-sp="usageBars" /><span>Usage bars</span></label>
+            <label class="cut-sp-row" data-cut="sp-bars-row"><input type="checkbox" data-sp="usageBars" /><span>Usage bars</span></label>
             <label class="cut-sp-row"><input type="checkbox" data-sp="forecast" /><span>Limit forecast</span><span class="cut-sp-info" tabindex="0" role="note" aria-label="When does this show?">i<span class="cut-sp-tip">Appears next to Session only when you&rsquo;re on pace to hit your limit before it resets (e.g. &ldquo;~1h 20m left&rdquo;). It needs about 12 minutes of usage to measure your pace, so while you&rsquo;re on track it stays hidden.</span></span></label>
             <label class="cut-sp-row"><input type="checkbox" data-sp="chatTokens" /><span>Chat tokens</span></label>
             <div class="cut-sp-sep"></div>
@@ -1806,6 +1818,8 @@
             <label class="cut-sp-row" data-cut="sp-projects-row"><input type="checkbox" data-sp-top="projectsButton" /><span>Projects button</span></label>
             <div class="cut-sp-title cut-sp-title-sub">In Claude&rsquo;s sidebar</div>
             <label class="cut-sp-row" data-cut="sp-chatsearch-row"><input type="checkbox" data-sp-top="chatSearch" /><span>Chat history search</span></label>
+            <div class="cut-sp-title cut-sp-title-sub">Alerts</div>
+            <label class="cut-sp-row" data-cut="sp-notif-row"><input type="checkbox" data-sp-top="notificationsEnabled" /><span>Desktop notifications</span></label>
             <div class="cut-sp-sep"></div>
             <button class="cut-sp-share" type="button" data-cut="sp-share">📸 Share my usage card</button>
             <button class="cut-sp-share cut-sp-support" type="button" data-cut="sp-support">❤️ Donate to support</button>
@@ -2286,6 +2300,7 @@
   }
 
   function maybeShowNudge() {
+    if (whatsNewEl || whatsNewDue()) return;   // v1.4.9: What's new goes first
     if (nudgeOpen || !nudgeDue() || supportNudgeDue()) return;
     // A card shown to a background tab is a wasted ask AND burns the slot, so
     // wait for the tab to actually be looked at.
@@ -3037,6 +3052,7 @@
     shareNudgeEl.style.top = top + "px";
   }
   function maybeShowShareNudge() {
+    if (whatsNewEl || whatsNewDue()) return;   // v1.4.9: What's new goes first
     if (shareNudgeEl || nudgeOpen || supportNudgeEl || toolsNudgeEl || scPanel || !shareNudgeDue() || document.hidden) return;
     if (settingsPopOpen || sharePopOpen || logoMenuOpen) return;
     const root = document.getElementById(OVERLAY_ID);
@@ -3186,6 +3202,7 @@
     supportNudgeEl.style.top = top + "px";
   }
   function maybeShowSupportNudge() {
+    if (whatsNewEl || whatsNewDue()) return;   // v1.4.9: What's new goes first
     if (supportNudgeEl || nudgeOpen || shareNudgeEl || toolsNudgeEl || scPanel || !supportNudgeDue() || document.hidden) return;
     if (settingsPopOpen || sharePopOpen || logoMenuOpen) return;
     const root = document.getElementById(OVERLAY_ID);
@@ -3347,6 +3364,7 @@
     toolsNudgeEl.style.top = top + "px";
   }
   function maybeShowToolsNudge() {
+    if (whatsNewEl || whatsNewDue()) return;   // v1.4.9: What's new goes first
     if (toolsNudgeEl || nudgeOpen || shareNudgeEl || supportNudgeEl || scPanel || !toolsNudgeDue() || document.hidden) return;
     if (settingsPopOpen || sharePopOpen || logoMenuOpen) return;
     const root = document.getElementById(OVERLAY_ID);
@@ -3420,6 +3438,162 @@
     const r = root || document.getElementById(OVERLAY_ID);
     const wrap = r && r.querySelector('[data-cut="logo"]');
     if (wrap) wrap.classList.remove("cut-rate-pulse", "cut-pop-open");
+  }
+
+
+  // ===== v1.4.9: "What's new" card, once per update =====
+  //
+  // background.js writes whats_new_pending = <version> when the extension
+  // UPDATES (never on a fresh install; new users get the welcome page). If
+  // WHATS_NEW has an entry for that version and it hasn't been seen, a card
+  // points at the gear once. "Show me" opens the settings menu and flashes the
+  // rows it talks about. It's stamped as seen the moment it shows, so it never
+  // repeats and other tabs stand down. Highest-priority card: the rate, share,
+  // support and tools cards all wait while it's due or open.
+  //
+  // To announce a future release, add an entry keyed by its version number.
+  const WHATS_NEW = {
+    "1.4.9": {
+      title: "New in Claude Usage Meter ✨",
+      items: [
+        "Turn <b>desktop notifications</b> on or off",
+        "Hide the <b>usage bars</b> under Session &amp; Weekly"
+      ],
+      rows: ["sp-notif-row", "sp-bars-row"]
+    }
+  };
+  const WN_PENDING_KEY = "whats_new_pending";
+  const WN_SEEN_KEY = "whats_new_seen";
+  let wnPending = null;     // version string waiting to be announced
+  let wnSeen = null;        // last version announced
+  let wnLoaded = false;
+  let whatsNewEl = null;
+  let wnTimer = null;
+  let wnOutside = null, wnKey = null, wnFollow = null;
+
+  try {
+    chrome.storage.local.get([WN_PENDING_KEY, WN_SEEN_KEY], (r) => {
+      void chrome.runtime.lastError;
+      wnPending = (r && r[WN_PENDING_KEY]) || null;
+      wnSeen = (r && r[WN_SEEN_KEY]) || null;
+      wnLoaded = true;
+    });
+  } catch (_) { wnLoaded = true; }
+
+  function whatsNewDue() {
+    return !!(wnLoaded && wnPending && WHATS_NEW[wnPending] && wnSeen !== wnPending);
+  }
+  function scheduleWhatsNew() {
+    if (wnTimer || whatsNewEl || !whatsNewDue()) return;
+    wnTimer = setTimeout(() => { wnTimer = null; maybeShowWhatsNew(); }, NUDGE_MOUNT_DELAY);
+  }
+  function positionWhatsNew() {
+    const root = document.getElementById(OVERLAY_ID);
+    const btn = root && root.querySelector('[data-cut="settings"]');
+    if (!whatsNewEl || !btn) return;
+    const br = btn.getBoundingClientRect();
+    const nr = whatsNewEl.getBoundingClientRect();
+    const vw = window.innerWidth;
+    const left = Math.max(8, Math.min(br.left + br.width / 2 - nr.width / 2, vw - nr.width - 8));
+    let top;
+    if (br.top >= nr.height + 14) { top = br.top - nr.height - 10; whatsNewEl.classList.remove("cut-pop-below"); }
+    else { top = br.bottom + 10; whatsNewEl.classList.add("cut-pop-below"); }
+    whatsNewEl.style.setProperty("--cut-arrow-x", Math.max(14, Math.min(br.left + br.width / 2 - left, nr.width - 14)) + "px");
+    whatsNewEl.style.left = left + "px";
+    whatsNewEl.style.top = top + "px";
+  }
+  function maybeShowWhatsNew() {
+    if (whatsNewEl || !whatsNewDue() || document.hidden) return;
+    if (nudgeOpen || shareNudgeEl || supportNudgeEl || toolsNudgeEl || scPanel) return;
+    if (settingsPopOpen || sharePopOpen || logoMenuOpen) return;
+    const root = document.getElementById(OVERLAY_ID);
+    const gear = root && root.querySelector('[data-cut="settings"]');
+    if (!gear || !gear.getClientRects().length) return;
+    const entry = WHATS_NEW[wnPending];
+
+    // Stamp first: one showing per version, across every tab.
+    wnSeen = wnPending;
+    try { chrome.storage.local.set({ [WN_SEEN_KEY]: wnSeen }); } catch (_) {}
+
+    const el = document.createElement("div");
+    el.className = "cut-rate-nudge cut-wn-nudge";
+    el.setAttribute("role", "dialog");
+    el.setAttribute("aria-label", "What's new in Claude Usage Meter");
+    el.classList.toggle("cut-pop-dark", root.classList.contains("cut-theme-dark"));
+    el.innerHTML = `
+      <button class="cut-nudge-x" type="button" data-cut="wn-close" aria-label="Close">×</button>
+      <div class="cut-nudge-title">${entry.title}</div>
+      <ul class="cut-wn-list">${entry.items.map((t) => `<li>${t}</li>`).join("")}</ul>
+      <div class="cut-nudge-body">Both are in the ⚙ settings, any time.</div>
+      <div class="cut-nudge-actions">
+        <button class="cut-nudge-cta" type="button" data-cut="wn-go">Show me</button>
+        <button class="cut-nudge-later" type="button" data-cut="wn-close">Got it</button>
+      </div>`;
+    whatsNewEl = el;
+    document.body.appendChild(el);
+    el.style.visibility = "hidden";
+    positionWhatsNew();
+    el.style.visibility = "";
+    requestAnimationFrame(() => el.classList.add("cut-nudge-in"));
+    const gw = root.querySelector('[data-cut="settings-wrap"]');
+    if (gw) gw.classList.add("cut-rate-pulse", "cut-pop-open");
+    hidePortalTip();
+
+    el.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      const t = ev.target.closest("[data-cut]");
+      const what = t && t.getAttribute("data-cut");
+      if (what === "wn-go") { closeWhatsNew(root); showWhatsNewRows(root, entry.rows); }
+      else if (what === "wn-close") closeWhatsNew(root);
+    });
+    wnOutside = (ev) => {
+      if (!whatsNewEl || whatsNewEl.contains(ev.target)) return;
+      const onGear = !!(ev.target && ev.target.closest && ev.target.closest('[data-cut="settings"]'));
+      closeWhatsNew(root);
+      if (onGear) setTimeout(() => flashRows(entry.rows), 60);
+    };
+    setTimeout(() => document.addEventListener("click", wnOutside, true), 0);
+    wnKey = (ev) => { if (ev.key === "Escape") closeWhatsNew(root); };
+    document.addEventListener("keydown", wnKey, true);
+    wnFollow = () => requestAnimationFrame(positionWhatsNew);
+    window.addEventListener("resize", wnFollow);
+    window.addEventListener("scroll", wnFollow, true);
+  }
+  function closeWhatsNew(root) {
+    if (wnTimer) { clearTimeout(wnTimer); wnTimer = null; }
+    if (!whatsNewEl) return;
+    if (wnOutside) { document.removeEventListener("click", wnOutside, true); wnOutside = null; }
+    if (wnKey) { document.removeEventListener("keydown", wnKey, true); wnKey = null; }
+    if (wnFollow) {
+      window.removeEventListener("resize", wnFollow);
+      window.removeEventListener("scroll", wnFollow, true);
+      wnFollow = null;
+    }
+    const el = whatsNewEl; whatsNewEl = null;
+    el.classList.remove("cut-nudge-in");
+    setTimeout(() => el.remove(), 180);
+    const r = root || document.getElementById(OVERLAY_ID);
+    const gw = r && r.querySelector('[data-cut="settings-wrap"]');
+    if (gw) gw.classList.remove("cut-rate-pulse", "cut-pop-open");
+  }
+  function flashRows(rows) {
+    const pop = activeSettingsPop;
+    if (!pop) return;
+    let first = null;
+    for (const id of rows || []) {
+      const row = pop.querySelector(`[data-cut="${id}"]`);
+      if (!row) continue;
+      if (!first) first = row;
+      row.classList.remove("cut-sp-flash");
+      void row.offsetWidth;
+      row.classList.add("cut-sp-flash");
+      setTimeout(() => row.classList.remove("cut-sp-flash"), 2400);
+    }
+    if (first) first.scrollIntoView({ block: "nearest" });
+  }
+  function showWhatsNewRows(root, rows) {
+    if (!settingsPopOpen) openSettingsPop(root);
+    requestAnimationFrame(() => flashRows(rows));
   }
 
   let sharePopOpen = false;
@@ -3613,6 +3787,9 @@
     // belongs in the one menu people actually find.
     const csBox = pop.querySelector('input[data-sp-top="chatSearch"]');
     if (csBox) csBox.checked = chatSearchEnabled;
+    // v1.4.9: desktop notifications on/off (settings.notificationsEnabled).
+    const ntBox = pop.querySelector('input[data-sp-top="notificationsEnabled"]');
+    if (ntBox) ntBox.checked = notificationsOn;
     // The Fable row only makes sense when the API reports a Fable bucket; a
     // checkbox that visibly does nothing reads as broken, so hide the row and
     // its divider position stays natural.
@@ -3649,6 +3826,12 @@
       projectsEnabled = projBox.checked;
       projectsSettingsKnown = true;
       ensureProjectsButton();
+    }
+
+    const ntBox = pop.querySelector('input[data-sp-top="notificationsEnabled"]');
+    if (ntBox) {
+      settings.notificationsEnabled = ntBox.checked;
+      notificationsOn = ntBox.checked;
     }
 
     const csBox = pop.querySelector('input[data-sp-top="chatSearch"]');
@@ -4522,6 +4705,9 @@
     // heartbeat that arms it: renderInto runs on mount, on every usage update
     // and on the 30s tick, so a long-lived tab still gets the card the day it
     // comes due without needing a reload.
+    // v1.4.9: the What's new card, re-anchored or armed on every render.
+    if (whatsNewEl) requestAnimationFrame(positionWhatsNew);
+    else scheduleWhatsNew();
     if (nudgeOpen) {
       // A rebuild replaces the rate wrap, taking the pulse/tooltip-suppression
       // classes with it — put them back on the new node.
@@ -5903,6 +6089,7 @@
   ];
 
   let chatSearchEnabled = true;       // settings.chatSearch
+  let notificationsOn = true;         // v1.4.9: settings.notificationsEnabled
   let chatSearchSettingsKnown = false;
   let csList = null;                  // last good conversation list
   let csError = null;
@@ -6754,6 +6941,7 @@
         projectsEnabled = resp.settings.projectsButton !== false;
         // v1.3.4: the sidebar chat search (default on).
         chatSearchEnabled = resp.settings.chatSearch !== false;
+        notificationsOn = resp.settings.notificationsEnabled !== false;
       }
       projectsSettingsKnown = true;
       chatSearchSettingsKnown = true;
@@ -6859,6 +7047,9 @@
         ensureProjectsButton();
       }
       // v1.3.4: and the sidebar search box, same live-apply path.
+      // v1.4.9: keep the gear's notifications box in step with the popup/options.
+      notificationsOn = nv.notificationsEnabled !== false;
+      if (settingsPopOpen && activeSettingsPop) syncSettingsPop(activeSettingsPop);
       const wantChatSearch = nv.chatSearch !== false;
       if (wantChatSearch !== chatSearchEnabled || !chatSearchSettingsKnown) {
         chatSearchEnabled = wantChatSearch;

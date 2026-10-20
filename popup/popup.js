@@ -317,7 +317,8 @@ const ALL_FIELDS = [...METER_FIELDS, "extra", "resetTimeSession", "resetTimeWeek
 // whichever of our three surfaces they happened to open.
 // v1.3.4: `chatSearch` joins it — same story, in the sidebar instead of the
 // composer.
-const TOP_FIELDS = ["projectsButton", "chatSearch"];
+// v1.4.9: `notificationsEnabled` (desktop notifications on/off) joins them.
+const TOP_FIELDS = ["projectsButton", "chatSearch", "notificationsEnabled"];
 
 // Whether the usage API is actually reporting a Fable bucket for this account.
 // A checked-but-unreported Fable can't satisfy the "keep one meter on" rule —

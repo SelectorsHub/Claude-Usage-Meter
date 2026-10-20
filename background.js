@@ -1623,6 +1623,14 @@ async function maybeNotify(usage) {
   const settings = await getSettings();
   if (!settings.notificationsEnabled) return;
   const fired = await getLastFired();
+  // TEST BUILD: re-fire on every poll (~1 a minute) at 10% steps, so the
+  // "Desktop notifications" switch can be checked: on = alerts keep coming,
+  // off = they stop. Extra usage uses the same steps.   REVERT: remove block
+  if (TEST_BUILD) {
+    for (const k of Object.keys(fired)) delete fired[k];
+    settings.sessionThresholds = [1, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100];
+    settings.weeklyThresholds  = [1, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100];
+  }
 
   if (usage.session && usage.session.percent != null) {
     if (fired.session && usage.session.percent + 5 < fired.session) fired.session = 0;
@@ -1776,6 +1784,18 @@ chrome.runtime.onInstalled.addListener(async (details) => {
     }
   } catch (_) {}
   setUninstallPage();   // v1.4.7: now that install_at exists
+  // v1.4.9: tell the strip there's a What's new card to show for this version.
+  // Updates only; a fresh install gets the welcome page instead. TEST_BUILD
+  // also arms it on install/reload so it can be checked.   REVERT note: the
+  // TEST_BUILD clause is harmless in production (TEST_BUILD is false there).
+  try {
+    if ((details && details.reason === "update") || TEST_BUILD) {
+      const v = chrome.runtime.getManifest().version;
+      const upd = { whats_new_pending: v };
+      if (TEST_BUILD) upd.whats_new_seen = null;   // show again on every reload
+      await chrome.storage.local.set(upd);
+    }
+  } catch (_) {}
   // v1.4.8: usage bars are ON by default again. They're now a 2px underline
   // that takes no room in the strip. 1.4.7 switched them off once for everyone
   // on update (bars_off_147); undo that once for those users (bars_on_148), so

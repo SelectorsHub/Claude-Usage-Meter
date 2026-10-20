@@ -2885,10 +2885,10 @@
   position: absolute;
   left: 0;
   right: 0;
-  bottom: -3px;
+  bottom: -6px;            /* v1.4.9: 3px gap below the label, then the bar */
   min-width: 8px;          /* "F" is one letter wide; keep the line readable */
-  height: 2px;
-  border-radius: 1px;
+  height: 3px;             /* v1.4.9: was 2px */
+  border-radius: 2px;
   overflow: hidden;
   pointer-events: none;
   background: rgba(127, 127, 127, 0.22);
@@ -2912,6 +2912,16 @@
 /* v1.4.7: every bar is 18px now, so Fable and Extra no longer need a smaller one. */
 /* v1.4.7: (bars are no longer hidden at 640px — see fitStrip.) */
 /* v1.4.8: no longer shed for width: the underline takes no space. */
+/* v1.4.9: while a bar is actually showing under a label, the label drops to
+   11px (pre-v1.2.10 size) and lifts 2px so label + gap + bar sit centred in
+   the strip. Labels without a bar (setting off, no data yet, collapsed) keep
+   the normal 12px. Still no layout change: transform doesn't move siblings. */
+#claude-usage-overlay:not(.cut-no-bars):not(.cut-collapsed) .cut-lwrap:has(> .cut-bar:not(.cut-bar-empty)) {
+  transform: translateY(-2px);
+}
+#claude-usage-overlay:not(.cut-no-bars):not(.cut-collapsed) .cut-lwrap:has(> .cut-bar:not(.cut-bar-empty)) .cut-label {
+  font-size: 11px;
+}
 @media (prefers-reduced-motion: reduce) {
   #claude-usage-overlay .cut-bar-fill { transition: none; }
 }
@@ -3000,3 +3010,8 @@
   background: linear-gradient(to bottom, rgba(245, 243, 239, 0), #f5f3ef);
 }
 .cut-settings-pop-portal.cut-sp-has-more .cut-sp-fade { opacity: 1; }
+
+/* v1.4.9: What's new card (reuses the .cut-rate-nudge look). */
+.cut-wn-nudge .cut-wn-list { margin: 6px 0 6px 18px; padding: 0; font-size: 13px; line-height: 1.45; }
+.cut-wn-nudge .cut-wn-list li { margin: 2px 0; }
+.cut-wn-nudge .cut-wn-list b { font-weight: 600; }
