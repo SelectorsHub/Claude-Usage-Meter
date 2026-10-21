@@ -22,6 +22,7 @@ let state = {
   projectsButton: true,
   chatSearch: true,
   extraShow: true,
+  toolbarBadge: true,
   extraAlerts: true,
   pollMinutes: 1
 };
@@ -36,6 +37,8 @@ async function load() {
   state.chatSearch = settings.chatSearch !== false;
   state.extraShow = !(settings.stripFields && settings.stripFields.extra === false);
   state.extraAlerts = settings.extraAlerts !== false;
+  state.toolbarBadge = settings.toolbarBadge !== false;
+  document.getElementById("toolbar-badge").checked = state.toolbarBadge;
   state.pollMinutes = settings.pollMinutes || 1;
   document.getElementById("extra-show").checked = state.extraShow;
   document.getElementById("extra-alerts").checked = state.extraAlerts;
@@ -90,6 +93,7 @@ async function save() {
   state.chatSearch = document.getElementById("chat-search").checked;
   state.extraShow = document.getElementById("extra-show").checked;
   state.extraAlerts = document.getElementById("extra-alerts").checked;
+  state.toolbarBadge = document.getElementById("toolbar-badge").checked;
   const pm = parseInt(document.getElementById("poll-minutes").value, 10);
   state.pollMinutes = isNaN(pm) ? 1 : Math.max(1, Math.min(60, pm));
   document.getElementById("poll-minutes").value = state.pollMinutes;
@@ -103,6 +107,7 @@ async function save() {
       projectsButton: state.projectsButton,
       chatSearch: state.chatSearch,
       extraAlerts: state.extraAlerts,
+      toolbarBadge: state.toolbarBadge,
       // Merged into the stored stripFields by background (save-settings), so
       // only this one key changes.
       stripFields: { extra: state.extraShow },

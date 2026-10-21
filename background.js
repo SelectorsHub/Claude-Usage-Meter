@@ -1,4 +1,11 @@
 // background.js (service worker, v1.21)
+// - v1.5.0: SESSION % ON THE TOOLBAR ICON. updateBadge() paints the session
+//   percentage on the action icon ("34", "MAX" at 100%), coloured by the same
+//   bands as the strip (green <50, amber 50-74, orange 75-89, red >=90). Runs
+//   from broadcastUsage(), i.e. after every poll / stream reading / lockout,
+//   and on settings changes. Blank when there's no live session reading
+//   (Free plan before a message, window already reset, not signed in).
+//   New setting `toolbarBadge` (default on): gear menu, popup and options page.
 // - v1.4.8: uninstall feedback page moved to /claude-usage-meter-uninstalled/.
 // - v1.4.7: extra usage (overage credits) tracking — the most-asked-for gap on
 //   Team/Enterprise and Max accounts that pay past their plan limits. /usage
@@ -122,6 +129,8 @@ const DEFAULT_SETTINGS = {
   sessionThresholds: [50, 75, 90],
   weeklyThresholds:  [50, 75, 90],
   notificationsEnabled: true,
+  // v1.5.0: session % on the toolbar icon. On by default.
+  toolbarBadge: true,
   pollMinutes: DEFAULT_POLL_MINUTES,
   // v1.2.13: which parts of the on-page strip to render. All on by default, so
   // upgrading users see no change. Read by content-script.js (expanded AND
@@ -1572,8 +1581,43 @@ async function applyMessageLimit(payload) {
 
 // ---------- broadcast to claude.ai tabs ----------
 
+// v1.5.0: session % on the toolbar icon.
+const BADGE_COLORS = { green: "#0f9f6e", amber: "#d98a06", orange: "#ea6a12", red: "#dc2626" };
+function badgeBand(p) {
+  if (p >= 90) return "red";
+  if (p >= 75) return "orange";
+  if (p >= 50) return "amber";
+  return "green";
+}
+async function updateBadge(usageOpt, settingsOpt) {
+  try {
+    const usage = usageOpt || await getUsage();
+    const settings = settingsOpt || await getSettings();
+    const s = usage && usage.session;
+    const pct = s && typeof s.percent === "number" && isFinite(s.percent) ? Math.round(s.percent) : null;
+    // A window whose reset has passed has no current figure until the next
+    // reading; show nothing rather than last window's number.
+    const expired = !!(s && s.resetsAt && Number(s.resetsAt) < Date.now());
+    if (settings.toolbarBadge === false || pct == null || expired) {
+      await chrome.action.setBadgeText({ text: "" });
+      try { await chrome.action.setTitle({ title: "Claude Usage Meter" }); } catch (_) {}
+      return;
+    }
+    const p = Math.max(0, pct);
+    await chrome.action.setBadgeText({ text: p >= 100 ? "MAX" : String(p) });
+    await chrome.action.setBadgeBackgroundColor({ color: BADGE_COLORS[badgeBand(p)] });
+    try { if (chrome.action.setBadgeTextColor) await chrome.action.setBadgeTextColor({ color: "#ffffff" }); } catch (_) {}
+    try {
+      await chrome.action.setTitle({ title: p >= 100
+        ? "Claude Usage Meter: session limit reached"
+        : `Claude Usage Meter: session ${p}% used` });
+    } catch (_) {}
+  } catch (_) {}
+}
+
 async function broadcastUsage(usageOpt) {
   const usage = usageOpt || await getUsage();
+  updateBadge(usage);   // v1.5.0
   try {
     const tabs = await chrome.tabs.query({ url: "https://claude.ai/*" });
     for (const tab of tabs) {
@@ -1791,8 +1835,10 @@ chrome.runtime.onInstalled.addListener(async (details) => {
   try {
     if ((details && details.reason === "update") || TEST_BUILD) {
       const v = chrome.runtime.getManifest().version;
-      const upd = { whats_new_pending: v };
-      if (TEST_BUILD) upd.whats_new_seen = null;   // show again on every reload
+      // v1.5.0: remember where they came from, so the card can list every
+      // release since then. TEST_BUILD pretends they came from 1.4.8.
+      const upd = { whats_new_pending: v, whats_new_from: (details && details.previousVersion) || null };
+      if (TEST_BUILD) { upd.whats_new_seen = null; upd.whats_new_from = "1.4.8"; }   // REVERT: show on every reload
       await chrome.storage.local.set(upd);
     }
   } catch (_) {}
@@ -2578,6 +2624,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       await saveLastFired({});
       const usage = await getUsage();
       await maybeNotify(usage);
+      await updateBadge(usage, next);   // v1.5.0: badge on/off applies at once
       sendResponse({ ok: true });
     })();
     return true;

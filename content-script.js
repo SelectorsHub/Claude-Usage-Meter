@@ -1,4 +1,6 @@
 // content-script.js (isolated world, v1.29)
+// - v1.5.0: "Session % on toolbar icon" switch in the gear popover (writes
+//   settings.toolbarBadge; background.js paints the badge).
 // - v1.4.9: WHAT'S NEW CARD. After an update (never a fresh install) a card
 //   points at the gear once: what's new in this version, "Show me" opens the
 //   settings menu and flashes those rows. Content lives in WHATS_NEW, keyed by
@@ -1820,6 +1822,8 @@
             <label class="cut-sp-row" data-cut="sp-chatsearch-row"><input type="checkbox" data-sp-top="chatSearch" /><span>Chat history search</span></label>
             <div class="cut-sp-title cut-sp-title-sub">Alerts</div>
             <label class="cut-sp-row" data-cut="sp-notif-row"><input type="checkbox" data-sp-top="notificationsEnabled" /><span>Desktop notifications</span></label>
+            <div class="cut-sp-title cut-sp-title-sub">Toolbar icon</div>
+            <label class="cut-sp-row" data-cut="sp-badge-row"><input type="checkbox" data-sp-top="toolbarBadge" /><span>Session % on the icon</span></label>
             <div class="cut-sp-sep"></div>
             <button class="cut-sp-share" type="button" data-cut="sp-share">📸 Share my usage card</button>
             <button class="cut-sp-share cut-sp-support" type="button" data-cut="sp-support">❤️ Donate to support</button>
@@ -3452,7 +3456,15 @@
   // support and tools cards all wait while it's due or open.
   //
   // To announce a future release, add an entry keyed by its version number.
+  // v1.5.0: the card lists every entry newer than the version the user
+  // updated FROM (whats_new_from), newest first, so someone jumping 1.4.8 ->
+  // 1.5.0 still hears about 1.4.9. Without a known previous version, only the
+  // current version's entry is shown.
   const WHATS_NEW = {
+    "1.5.0": {
+      items: ["See your <b>session %</b> right on the toolbar icon"],
+      rows: ["sp-badge-row"]
+    },
     "1.4.9": {
       title: "New in Claude Usage Meter ✨",
       items: [
@@ -3464,6 +3476,29 @@
   };
   const WN_PENDING_KEY = "whats_new_pending";
   const WN_SEEN_KEY = "whats_new_seen";
+  const WN_FROM_KEY = "whats_new_from";
+  let wnFrom = null;        // version the user updated from (may be unknown)
+  function vcmp(a, b) {
+    const pa = String(a).split(".").map(Number), pb = String(b).split(".").map(Number);
+    for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+      const d = (pa[i] || 0) - (pb[i] || 0);
+      if (d) return d;
+    }
+    return 0;
+  }
+  // Merge every entry in (from, pending], newest first. Max 4 bullet points.
+  function whatsNewEntry() {
+    const vs = Object.keys(WHATS_NEW)
+      .filter((v) => vcmp(v, wnPending) <= 0 && (wnFrom ? vcmp(v, wnFrom) > 0 : v === wnPending))
+      .sort((a, b) => vcmp(b, a));
+    if (!vs.length) return null;
+    const items = [], rows = [];
+    for (const v of vs) {
+      for (const t of WHATS_NEW[v].items) if (items.length < 4) items.push(t);
+      for (const r of WHATS_NEW[v].rows) if (!rows.includes(r)) rows.push(r);
+    }
+    return { title: "New in Claude Usage Meter \u2728", items, rows };
+  }
   let wnPending = null;     // version string waiting to be announced
   let wnSeen = null;        // last version announced
   let wnLoaded = false;
@@ -3472,16 +3507,17 @@
   let wnOutside = null, wnKey = null, wnFollow = null;
 
   try {
-    chrome.storage.local.get([WN_PENDING_KEY, WN_SEEN_KEY], (r) => {
+    chrome.storage.local.get([WN_PENDING_KEY, WN_SEEN_KEY, WN_FROM_KEY], (r) => {
       void chrome.runtime.lastError;
       wnPending = (r && r[WN_PENDING_KEY]) || null;
+      wnFrom = (r && r[WN_FROM_KEY]) || null;
       wnSeen = (r && r[WN_SEEN_KEY]) || null;
       wnLoaded = true;
     });
   } catch (_) { wnLoaded = true; }
 
   function whatsNewDue() {
-    return !!(wnLoaded && wnPending && WHATS_NEW[wnPending] && wnSeen !== wnPending);
+    return !!(wnLoaded && wnPending && wnSeen !== wnPending && whatsNewEntry());
   }
   function scheduleWhatsNew() {
     if (wnTimer || whatsNewEl || !whatsNewDue()) return;
@@ -3509,7 +3545,7 @@
     const root = document.getElementById(OVERLAY_ID);
     const gear = root && root.querySelector('[data-cut="settings"]');
     if (!gear || !gear.getClientRects().length) return;
-    const entry = WHATS_NEW[wnPending];
+    const entry = whatsNewEntry();
 
     // Stamp first: one showing per version, across every tab.
     wnSeen = wnPending;
@@ -3524,7 +3560,7 @@
       <button class="cut-nudge-x" type="button" data-cut="wn-close" aria-label="Close">×</button>
       <div class="cut-nudge-title">${entry.title}</div>
       <ul class="cut-wn-list">${entry.items.map((t) => `<li>${t}</li>`).join("")}</ul>
-      <div class="cut-nudge-body">Both are in the ⚙ settings, any time.</div>
+      <div class="cut-nudge-body">${entry.items.length > 1 ? "Turn any of these on or off" : "Turn it on or off"} in the ⚙ settings.</div>
       <div class="cut-nudge-actions">
         <button class="cut-nudge-cta" type="button" data-cut="wn-go">Show me</button>
         <button class="cut-nudge-later" type="button" data-cut="wn-close">Got it</button>
@@ -3790,6 +3826,9 @@
     // v1.4.9: desktop notifications on/off (settings.notificationsEnabled).
     const ntBox = pop.querySelector('input[data-sp-top="notificationsEnabled"]');
     if (ntBox) ntBox.checked = notificationsOn;
+    // v1.5.0: session % badge on the toolbar icon (settings.toolbarBadge).
+    const bgBox = pop.querySelector('input[data-sp-top="toolbarBadge"]');
+    if (bgBox) bgBox.checked = toolbarBadgeOn;
     // The Fable row only makes sense when the API reports a Fable bucket; a
     // checkbox that visibly does nothing reads as broken, so hide the row and
     // its divider position stays natural.
@@ -3832,6 +3871,11 @@
     if (ntBox) {
       settings.notificationsEnabled = ntBox.checked;
       notificationsOn = ntBox.checked;
+    }
+    const bgBox = pop.querySelector('input[data-sp-top="toolbarBadge"]');
+    if (bgBox) {
+      settings.toolbarBadge = bgBox.checked;
+      toolbarBadgeOn = bgBox.checked;
     }
 
     const csBox = pop.querySelector('input[data-sp-top="chatSearch"]');
@@ -6090,6 +6134,7 @@
 
   let chatSearchEnabled = true;       // settings.chatSearch
   let notificationsOn = true;         // v1.4.9: settings.notificationsEnabled
+  let toolbarBadgeOn = true;          // v1.5.0: settings.toolbarBadge
   let chatSearchSettingsKnown = false;
   let csList = null;                  // last good conversation list
   let csError = null;
@@ -6942,6 +6987,7 @@
         // v1.3.4: the sidebar chat search (default on).
         chatSearchEnabled = resp.settings.chatSearch !== false;
         notificationsOn = resp.settings.notificationsEnabled !== false;
+        toolbarBadgeOn = resp.settings.toolbarBadge !== false;
       }
       projectsSettingsKnown = true;
       chatSearchSettingsKnown = true;
@@ -7049,6 +7095,7 @@
       // v1.3.4: and the sidebar search box, same live-apply path.
       // v1.4.9: keep the gear's notifications box in step with the popup/options.
       notificationsOn = nv.notificationsEnabled !== false;
+      toolbarBadgeOn = nv.toolbarBadge !== false;
       if (settingsPopOpen && activeSettingsPop) syncSettingsPop(activeSettingsPop);
       const wantChatSearch = nv.chatSearch !== false;
       if (wantChatSearch !== chatSearchEnabled || !chatSearchSettingsKnown) {
