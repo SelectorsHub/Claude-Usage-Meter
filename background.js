@@ -1,4 +1,6 @@
 // background.js (service worker, v1.21)
+// - v1.5.1: TEST_BUILD flags cut_test_build for the content script's
+//   "Now available" card (shows at once, resets on reload).
 // - v1.5.0: SESSION % ON THE TOOLBAR ICON. updateBadge() paints the session
 //   percentage on the action icon ("34", "MAX" at 100%), coloured by the same
 //   bands as the strip (green <50, amber 50-74, orange 75-89, red >=90). Runs
@@ -1839,6 +1841,10 @@ chrome.runtime.onInstalled.addListener(async (details) => {
       // release since then. TEST_BUILD pretends they came from 1.4.8.
       const upd = { whats_new_pending: v, whats_new_from: (details && details.previousVersion) || null };
       if (TEST_BUILD) { upd.whats_new_seen = null; upd.whats_new_from = "1.4.8"; }   // REVERT: show on every reload
+      // v1.5.1: TEST_BUILD shows the "Now available" card at once, on every
+      // reload (content script reads cut_test_build).
+      upd.cut_test_build = !!TEST_BUILD;
+      if (TEST_BUILD) { upd.meters_promo_closed = null; upd.meters_promo_clicked = null; }
       await chrome.storage.local.set(upd);
     }
   } catch (_) {}

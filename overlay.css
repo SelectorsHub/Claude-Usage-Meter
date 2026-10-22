@@ -3015,3 +3015,86 @@
 .cut-wn-nudge .cut-wn-list { margin: 6px 0 6px 18px; padding: 0; font-size: 13px; line-height: 1.45; }
 .cut-wn-nudge .cut-wn-list li { margin: 2px 0; }
 .cut-wn-nudge .cut-wn-list b { font-weight: 600; }
+
+/* v1.5.1: "Now available" card: ChatGPT / Gemini Usage Meter. Fixed on the
+   right of claude.ai, deliberately quiet: one small title, one row each. */
+.cut-mp {
+  position: fixed;
+  top: 50%;
+  right: 16px;
+  z-index: 2147482000;
+  width: max-content;   /* full product names, never cut off */
+  max-width: calc(100vw - 32px);
+  padding: 10px 10px 8px 12px;
+  border-radius: 12px;
+  background: #ffffff;
+  color: #1f1e1d;
+  border: 1px solid rgba(31, 30, 29, 0.12);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.08);
+  font: 500 12.5px/1.3 ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  opacity: 0;
+  transform: translate(8px, -50%);   /* vertically centred on the right edge */
+  transition: opacity .18s ease, transform .18s ease;
+}
+.cut-mp.cut-mp-in { opacity: 1; transform: translate(0, -50%); }
+.cut-mp.cut-mp-dark {
+  background: #262624;
+  color: #ece9e3;
+  border-color: rgba(255, 255, 255, 0.10);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
+}
+.cut-mp-title {
+  margin: 0 22px 6px 0;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  opacity: 0.55;
+}
+.cut-mp-x {
+  position: absolute;
+  top: 5px;
+  right: 6px;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: inherit;
+  font-size: 15px;
+  line-height: 20px;
+  opacity: 0.45;
+  cursor: pointer;
+}
+.cut-mp-x:hover, .cut-mp-x:focus-visible { opacity: 1; background: rgba(127, 127, 127, 0.15); outline: none; }
+.cut-mp-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 2px;
+  border-radius: 8px;
+  color: inherit !important;
+  text-decoration: none !important;
+}
+.cut-mp-row + .cut-mp-row { border-top: 1px solid rgba(127, 127, 127, 0.14); }
+.cut-mp-logo { flex: 0 0 20px; width: 20px; height: 20px; display: inline-flex; }
+.cut-mp-logo svg { width: 20px; height: 20px; display: block; }
+.cut-mp-name { flex: 1; white-space: nowrap; padding-right: 6px; }
+.cut-mp-btn {
+  flex-shrink: 0;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: #fff;
+  background: #d97757;
+  transition: background .15s;
+}
+.cut-mp-row:hover .cut-mp-btn, .cut-mp-row:focus-visible .cut-mp-btn { background: #c4633f; }
+.cut-mp-row:focus-visible { outline: 2px solid #d97757; outline-offset: 1px; }
+@media (prefers-reduced-motion: reduce) { .cut-mp { transition: none; } }
+/* The ChatGPT meter's needle is near-black: give both logos a light tile in
+   the dark theme so they read. */
+.cut-mp.cut-mp-dark .cut-mp-logo { background: #f4f2ee; border-radius: 6px; padding: 2px; box-sizing: border-box; }
+.cut-mp.cut-mp-dark .cut-mp-logo svg { width: 16px; height: 16px; }

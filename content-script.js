@@ -1,4 +1,7 @@
 // content-script.js (isolated world, v1.29)
+// - v1.5.1: "Now available" card (right side of claude.ai) for ChatGPT Usage
+//   Meter and Gemini Usage Meter: logo + Install per row, × closes it for
+//   good. Existing users see it now, new installs after 2 days. See MP_*.
 // - v1.5.0: "Session % on toolbar icon" switch in the gear popover (writes
 //   settings.toolbarBadge; background.js paints the badge).
 // - v1.4.9: WHAT'S NEW CARD. After an update (never a fresh install) a card
@@ -3632,6 +3635,142 @@
     requestAnimationFrame(() => flashRows(rows));
   }
 
+  // ===== v1.5.1: "Now available" card for ChatGPT / Gemini Usage Meter =====
+  //
+  // A small fixed card on the right of claude.ai, one row per sibling meter,
+  // each with its logo and an Install link. Rules:
+  //   • existing users (install_at 0 = installed before the stamp existed)
+  //     see it now; new installs only once 2 days have passed
+  //   • × closes it for good; Install hides that row (and the card once both
+  //     rows are used)
+  //   • only while the strip is on the page, on a visible tab, at a width
+  //     where it won't cover the conversation, and never while the What's new
+  //     card is showing or due
+  const MP_CLOSED_KEY = "meters_promo_closed";
+  const MP_CLICKED_KEY = "meters_promo_clicked";
+  const MP_TEST_KEY = "cut_test_build";
+  const MP_WAIT = 2 * DAY_MS;
+  const MP_MIN_WIDTH = 1100;   // narrower windows: the card would sit on the chat
+  const MP_ITEMS = [
+    { id: "chatgpt", name: "ChatGPT Usage Meter", logo: "icons/chatgpt-usage-meter-logo.svg",
+      url: "https://www.selectorshub.com/chatgpt-usage-meter/?utm_source=claudeusagemeter&utm_medium=promo_card&utm_campaign=chatgpt_usage_meter" },
+    { id: "gemini", name: "Gemini Usage Meter", logo: "icons/gemini-usage-meter-logo.svg",
+      url: "https://www.selectorshub.com/gemini-usage-meter/?utm_source=claudeusagemeter&utm_medium=promo_card&utm_campaign=gemini_usage_meter" }
+  ];
+  let mpLoaded = false, mpClosed = false, mpClicked = {}, mpTest = false;
+  let mpEl = null, mpTimer = null;
+
+  try {
+    chrome.storage.local.get([MP_CLOSED_KEY, MP_CLICKED_KEY, MP_TEST_KEY], (r) => {
+      void chrome.runtime.lastError;
+      mpClosed = !!(r && r[MP_CLOSED_KEY]);
+      mpClicked = (r && r[MP_CLICKED_KEY]) || {};
+      mpTest = !!(r && r[MP_TEST_KEY]);
+      mpLoaded = true;
+    });
+    // Closed or used in another tab: take it down here too.
+    chrome.storage.onChanged.addListener((ch, area) => {
+      if (area !== "local") return;
+      if (ch[MP_CLOSED_KEY] && ch[MP_CLOSED_KEY].newValue) { mpClosed = true; closeMetersPromo(); }
+      if (ch[MP_CLICKED_KEY]) {
+        mpClicked = ch[MP_CLICKED_KEY].newValue || {};
+        if (mpEl) {
+          mpEl.querySelectorAll(".cut-mp-row").forEach((r) => { if (mpClicked[r.dataset.mp]) r.remove(); });
+          if (!mpItemsLeft().length) closeMetersPromo();
+        }
+      }
+    });
+  } catch (_) {}
+
+  function mpItemsLeft() { return MP_ITEMS.filter((it) => !mpClicked[it.id]); }
+  function metersPromoDue() {
+    if (!mpLoaded || mpClosed || installAt === null) return false;
+    if (!mpItemsLeft().length) return false;
+    if (!mpTest && installAt && Date.now() - installAt < MP_WAIT) return false;
+    return true;
+  }
+  function scheduleMetersPromo() {
+    if (mpEl) {   // keep it off narrow layouts if the window shrinks
+      mpEl.style.display = window.innerWidth < MP_MIN_WIDTH ? "none" : "";
+      return;
+    }
+    if (mpTimer || !metersPromoDue()) return;
+    mpTimer = setTimeout(() => { mpTimer = null; maybeShowMetersPromo(); }, NUDGE_MOUNT_DELAY);
+  }
+  function mpLogoNode(path) {
+    const span = document.createElement("span");
+    span.className = "cut-mp-logo";
+    let url = "";
+    try { url = chrome.runtime.getURL(path); } catch (_) { return span; }
+    fetch(url).then((r) => (r.ok ? r.text() : null)).then((text) => {
+      if (!text) return;
+      const doc = new DOMParser().parseFromString(text, "image/svg+xml");
+      const svg = doc.querySelector("svg");
+      if (!svg || doc.querySelector("parsererror")) return;
+      svg.querySelectorAll("script, foreignObject, style").forEach((n) => n.remove());
+      const node = document.importNode(svg, true);
+      node.setAttribute("width", "20"); node.setAttribute("height", "20");
+      node.setAttribute("aria-hidden", "true");
+      span.appendChild(node);
+    }).catch(() => {});
+    return span;
+  }
+  function maybeShowMetersPromo() {
+    if (mpEl || !metersPromoDue() || document.hidden) return;
+    if (window.innerWidth < MP_MIN_WIDTH) return;
+    if (typeof whatsNewEl !== "undefined" && (whatsNewEl || whatsNewDue())) return;
+    const root = document.getElementById(OVERLAY_ID);
+    if (!root || !root.isConnected) return;
+
+    const el = document.createElement("div");
+    el.className = "cut-mp";
+    el.setAttribute("role", "complementary");
+    el.setAttribute("aria-label", "More usage meters");
+    el.classList.toggle("cut-mp-dark", root.classList.contains("cut-theme-dark"));
+    const x = document.createElement("button");
+    x.type = "button"; x.className = "cut-mp-x"; x.setAttribute("aria-label", "Close"); x.textContent = "×";
+    const title = document.createElement("div");
+    title.className = "cut-mp-title"; title.textContent = "Now available";
+    el.append(x, title);
+    for (const it of mpItemsLeft()) {
+      const row = document.createElement("a");
+      row.className = "cut-mp-row"; row.href = it.url; row.target = "_blank"; row.rel = "noopener";
+      row.dataset.mp = it.id;
+      const name = document.createElement("span");
+      name.className = "cut-mp-name"; name.textContent = it.name;
+      const btn = document.createElement("span");
+      btn.className = "cut-mp-btn"; btn.textContent = "Install";
+      row.append(mpLogoNode(it.logo), name, btn);
+      el.appendChild(row);
+    }
+    x.addEventListener("click", (ev) => {
+      ev.preventDefault(); ev.stopPropagation();
+      mpClosed = true;
+      try { chrome.storage.local.set({ [MP_CLOSED_KEY]: Date.now() }); } catch (_) {}
+      closeMetersPromo();
+    });
+    el.addEventListener("click", (ev) => {
+      const row = ev.target.closest && ev.target.closest(".cut-mp-row");
+      if (!row) return;
+      mpClicked = { ...mpClicked, [row.dataset.mp]: Date.now() };
+      try { chrome.storage.local.set({ [MP_CLICKED_KEY]: mpClicked }); } catch (_) {}
+      setTimeout(() => {   // after the link has opened
+        row.remove();
+        if (!mpItemsLeft().length) closeMetersPromo();
+      }, 300);
+    });
+    mpEl = el;
+    document.body.appendChild(el);
+    requestAnimationFrame(() => el.classList.add("cut-mp-in"));
+  }
+  function closeMetersPromo() {
+    if (mpTimer) { clearTimeout(mpTimer); mpTimer = null; }
+    if (!mpEl) return;
+    const el = mpEl; mpEl = null;
+    el.classList.remove("cut-mp-in");
+    setTimeout(() => el.remove(), 180);
+  }
+
   let sharePopOpen = false;
   let sharePopOutsideHandler = null;
   let activeSharePop = null;   // the popover node while portaled to <body>
@@ -4752,6 +4891,7 @@
     // v1.4.9: the What's new card, re-anchored or armed on every render.
     if (whatsNewEl) requestAnimationFrame(positionWhatsNew);
     else scheduleWhatsNew();
+    scheduleMetersPromo();   // v1.5.1
     if (nudgeOpen) {
       // A rebuild replaces the rate wrap, taking the pulse/tooltip-suppression
       // classes with it — put them back on the new node.

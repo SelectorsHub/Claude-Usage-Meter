@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <defs>
+    <linearGradient id="cutgem-a" gradientUnits="userSpaceOnUse" x1="40" y1="240" x2="230" y2="150">
+      <stop offset="0" stop-color="#3B82F6"></stop><stop offset="0.55" stop-color="#7C6CF2"></stop><stop offset="1" stop-color="#B46CE0"></stop>
+    </linearGradient>
+    <linearGradient id="cutgem-b" gradientUnits="userSpaceOnUse" x1="0" y1="20" x2="0" y2="100">
+      <stop offset="0" stop-color="#B7BCC8"></stop><stop offset="1" stop-color="#A0A6B3"></stop>
+    </linearGradient>
+  </defs>
+  <g fill="none">
+    <path d="M 46.325,236.800 A 168.960,168.960 0 0 1 209.920,25.600" stroke="url(#cutgem-b)" stroke-width="40.96"></path>
+    <path d="M 46.325,236.800 A 168.960,168.960 0 0 1 76.345,91.094" stroke="url(#cutgem-a)" stroke-width="40.96"></path>
+    <polygon points="201.871,163.230 93.548,104.419 177.572,194.600" fill="url(#cutgem-a)" stroke="url(#cutgem-a)" stroke-width="3" stroke-linejoin="round"></polygon>
+    <circle cx="209.920" cy="194.560" r="42.240" fill="url(#cutgem-a)"></circle>
+    <path d="M209.92,161.56A33,33 0 0 0 242.92,194.56A33,33 0 0 0 209.92,227.56A33,33 0 0 0 176.92,194.56A33,33 0 0 0 209.92,161.56Z" fill="#FFFFFF"></path>
+  </g>
+</svg>
