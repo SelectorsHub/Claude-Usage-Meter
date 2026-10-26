@@ -319,7 +319,8 @@ const ALL_FIELDS = [...METER_FIELDS, "extra", "resetTimeSession", "resetTimeWeek
 // composer.
 // v1.4.9: `notificationsEnabled` (desktop notifications on/off) joins them.
 // v1.5.0: `toolbarBadge` (session % on the toolbar icon).
-const TOP_FIELDS = ["projectsButton", "chatSearch", "notificationsEnabled", "toolbarBadge"];
+// v1.5.2: `tipsEnabled` (the small pop-up cards on claude.ai).
+const TOP_FIELDS = ["projectsButton", "chatSearch", "notificationsEnabled", "toolbarBadge", "tipsEnabled"];
 
 // Whether the usage API is actually reporting a Fable bucket for this account.
 // A checked-but-unreported Fable can't satisfy the "keep one meter on" rule —

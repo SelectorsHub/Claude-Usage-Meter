@@ -23,6 +23,7 @@ let state = {
   chatSearch: true,
   extraShow: true,
   toolbarBadge: true,
+  tipsEnabled: true,
   extraAlerts: true,
   pollMinutes: 1
 };
@@ -39,6 +40,8 @@ async function load() {
   state.extraAlerts = settings.extraAlerts !== false;
   state.toolbarBadge = settings.toolbarBadge !== false;
   document.getElementById("toolbar-badge").checked = state.toolbarBadge;
+  state.tipsEnabled = settings.tipsEnabled !== false;
+  document.getElementById("tips-enabled").checked = state.tipsEnabled;
   state.pollMinutes = settings.pollMinutes || 1;
   document.getElementById("extra-show").checked = state.extraShow;
   document.getElementById("extra-alerts").checked = state.extraAlerts;
@@ -94,6 +97,7 @@ async function save() {
   state.extraShow = document.getElementById("extra-show").checked;
   state.extraAlerts = document.getElementById("extra-alerts").checked;
   state.toolbarBadge = document.getElementById("toolbar-badge").checked;
+  state.tipsEnabled = document.getElementById("tips-enabled").checked;
   const pm = parseInt(document.getElementById("poll-minutes").value, 10);
   state.pollMinutes = isNaN(pm) ? 1 : Math.max(1, Math.min(60, pm));
   document.getElementById("poll-minutes").value = state.pollMinutes;
@@ -108,6 +112,7 @@ async function save() {
       chatSearch: state.chatSearch,
       extraAlerts: state.extraAlerts,
       toolbarBadge: state.toolbarBadge,
+      tipsEnabled: state.tipsEnabled,
       // Merged into the stored stripFields by background (save-settings), so
       // only this one key changes.
       stripFields: { extra: state.extraShow },

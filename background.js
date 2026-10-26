@@ -1,4 +1,5 @@
 // background.js (service worker, v1.21)
+// - v1.5.2: tipsEnabled setting (pop-up cards on/off), default on.
 // - v1.5.1: TEST_BUILD flags cut_test_build for the content script's
 //   "Now available" card (shows at once, resets on reload).
 // - v1.5.0: SESSION % ON THE TOOLBAR ICON. updateBadge() paints the session
@@ -133,6 +134,9 @@ const DEFAULT_SETTINGS = {
   notificationsEnabled: true,
   // v1.5.0: session % on the toolbar icon. On by default.
   toolbarBadge: true,
+  // v1.5.2: the small pop-up cards (rate / share / donate / tools / What's
+  // new / Now available). On by default; the content script reads it.
+  tipsEnabled: true,
   pollMinutes: DEFAULT_POLL_MINUTES,
   // v1.2.13: which parts of the on-page strip to render. All on by default, so
   // upgrading users see no change. Read by content-script.js (expanded AND
@@ -1829,6 +1833,12 @@ chrome.runtime.onInstalled.addListener(async (details) => {
       });
     }
   } catch (_) {}
+  // v1.5.2: the Free-plan "Send your first message" hint is for NEW users
+  // only. A fresh install arms it; updates never do, so existing users never
+  // see it. The content script clears it for good on Got it / ×.
+  if ((details && details.reason === "install") || TEST_BUILD) {
+    try { await chrome.storage.local.set({ free_hint_new_user: true }); } catch (_) {}
+  }
   setUninstallPage();   // v1.4.7: now that install_at exists
   // v1.4.9: tell the strip there's a What's new card to show for this version.
   // Updates only; a fresh install gets the welcome page instead. TEST_BUILD
@@ -1840,11 +1850,10 @@ chrome.runtime.onInstalled.addListener(async (details) => {
       // v1.5.0: remember where they came from, so the card can list every
       // release since then. TEST_BUILD pretends they came from 1.4.8.
       const upd = { whats_new_pending: v, whats_new_from: (details && details.previousVersion) || null };
-      if (TEST_BUILD) { upd.whats_new_seen = null; upd.whats_new_from = "1.4.8"; }   // REVERT: show on every reload
       // v1.5.1: TEST_BUILD shows the "Now available" card at once, on every
       // reload (content script reads cut_test_build).
       upd.cut_test_build = !!TEST_BUILD;
-      if (TEST_BUILD) { upd.meters_promo_closed = null; upd.meters_promo_clicked = null; }
+      if (TEST_BUILD) { upd.meters_promo_closed = null; upd.meters_promo_clicked = null; upd.free_hint_done = null; }
       await chrome.storage.local.set(upd);
     }
   } catch (_) {}

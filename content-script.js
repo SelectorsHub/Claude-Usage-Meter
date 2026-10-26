@@ -1,4 +1,9 @@
 // content-script.js (isolated world, v1.29)
+// - v1.5.2: Free-plan first-message hint (freeHintDue / maybeShowFreeHint):
+//   "Send your first message" card at the Usage segment, once per user.
+// - v1.5.2: far fewer pop-up cards (7-day gap between any two, rating asked
+//   at most twice, share/tools once, donate twice) plus a Tips & requests
+//   switch and a "Don't show these cards" link on every card. See cardsQuiet().
 // - v1.5.1: "Now available" card (right side of claude.ai) for ChatGPT Usage
 //   Meter and Gemini Usage Meter: logo + Install per row, × closes it for
 //   good. Existing users see it now, new installs after 2 days. See MP_*.
@@ -823,6 +828,18 @@
   // ██ TEST BUILD — REVERT RATE_TEST to false before store packaging ██
   const RATE_TEST = false;
   const DAY_MS = 24 * 60 * 60 * 1000;
+  // v1.5.2: fewer pop-up cards. A review said "too many pop ups… only left a
+  // review to get another annoying pop to go away". So:
+  //   • tipsOn (settings.tipsEnabled, default on) switches ALL cards off —
+  //     rate, share, donate, tools, What's new, Now available. It's in the
+  //     gear menu, popup and Settings, and every card has a one-click
+  //     "Don't show these" link that turns it off.
+  //   • a 7-day quiet period between ANY two cards (was 1–2 days)
+  //   • rating card: first after 7 days, at most twice ever, 14 days apart
+  //   • share once, tools once, donate twice (60 days apart)
+  let tipsOn = true;
+  let mpShownAt = 0;     // when the "Now available" card last appeared
+  const QUIET_HTML = `<button class="cut-nudge-quiet" type="button" data-cut="nudge-quiet">Don\u2019t show these cards</button>`;
   const SHARE_DELAY = RATE_TEST ? 0 : SHARE_DELAY_PROD;
   const INSTALL_KEY = "install_at";
   const RATE_DELAY = RATE_TEST ? 0 : 2 * DAY_MS; // 2 days in milliseconds
@@ -838,9 +855,9 @@
   //   • only when a moment is due: a session reset after real use (peak ≥ 50%),
   //     fresh within MOMENT_TTL, or STREAK_DAYS distinct days of use.
   const NUDGE_KEY = "rate_nudge_at";             // ms epoch the card last appeared
-  const NUDGE_FIRST = RATE_TEST ? 0 : 3 * DAY_MS;          // earliest first ask after install
-  const NUDGE_REPEAT = RATE_TEST ? 60 * 1000 : 2 * DAY_MS;  // v1.4.1: rate card returns every 2 days until rated
-  const CARD_GAP = RATE_TEST ? 60 * 1000 : 2 * DAY_MS;     // v1.4.2: min gap between ANY two cards (rate/share/support)
+  const NUDGE_FIRST = RATE_TEST ? 0 : 7 * DAY_MS;   // v1.5.2: was 3 days          // earliest first ask after install
+  const NUDGE_REPEAT = RATE_TEST ? 60 * 1000 : 14 * DAY_MS;  // v1.5.2: was every 2 days, forever
+  const CARD_GAP = RATE_TEST ? 60 * 1000 : 7 * DAY_MS;   // v1.5.2: was 2 days     // v1.4.2: min gap between ANY two cards (rate/share/support)
   const NUDGE_MAX_DISMISS = 2;                   // ask, ask once more, then stop for good
   const NUDGE_MOUNT_DELAY = RATE_TEST ? 3 * 1000 : 10 * 1000; // let the page settle before popping
   const NUDGE_DISMISS_KEY = "rate_nudge_dismissals";  // count of "not now"s
@@ -1463,7 +1480,10 @@
     if (!latestUsage || !latestUsage.unmetered) return true;
     if (!latestUsage.updatedAt) return true;
     if (latestUsage.weekly) return true;
-    return !latestUsage.session;
+    // v1.5.2: Free with no reading yet: the Usage segment already explains
+    // ("shows after your next message"); a second "— waiting…" beside it just
+    // looked broken. Weekly appears once a reply reports it.
+    return false;
   }
 
   function applyFieldVisibility(root, fable) {
@@ -1827,6 +1847,8 @@
             <label class="cut-sp-row" data-cut="sp-notif-row"><input type="checkbox" data-sp-top="notificationsEnabled" /><span>Desktop notifications</span></label>
             <div class="cut-sp-title cut-sp-title-sub">Toolbar icon</div>
             <label class="cut-sp-row" data-cut="sp-badge-row"><input type="checkbox" data-sp-top="toolbarBadge" /><span>Session % on the icon</span></label>
+            <div class="cut-sp-title cut-sp-title-sub">Pop-up cards</div>
+            <label class="cut-sp-row" data-cut="sp-tips-row"><input type="checkbox" data-sp-top="tipsEnabled" /><span>Tips &amp; requests</span><span class="cut-sp-info" tabindex="0" role="note" aria-label="What are these?">i<span class="cut-sp-tip">The occasional small card asking for a review, a share or a donation, or showing what&rsquo;s new. At most one a week. Turn off to never see them.</span></span></label>
             <div class="cut-sp-sep"></div>
             <button class="cut-sp-share" type="button" data-cut="sp-share">📸 Share my usage card</button>
             <button class="cut-sp-share cut-sp-support" type="button" data-cut="sp-support">❤️ Donate to support</button>
@@ -2283,6 +2305,8 @@
     if (rated) return false;                        // anyone who clicked Rate us: never
     if (!rateStateLoaded || installAt === null || nudgeAt === null) return false;
     // v1.4.1: back to the plain timer — no dismissal cap, no moment gating.
+    if (cardsQuiet()) return false;                 // v1.5.2
+    if (nudgeDismissals >= NUDGE_MAX_DISMISS) return false;   // v1.5.2: asked twice → never again
     if (!rateUnlocked()) return false;              // button (the card's anchor) isn't out yet
     if (installAt && Date.now() - installAt < NUDGE_FIRST) return false;
     if (nudgeAt && Date.now() - nudgeAt < NUDGE_REPEAT) return false;
@@ -2337,13 +2361,14 @@
           <span>★</span><span>★</span><span>★</span><span>★</span><span>★</span>
         </div>
         <div class="cut-nudge-body">
-          Pls Rate us &amp; this button disappears forever after you review. 🙏🏻
+          If it&rsquo;s useful, a quick review helps others find it. 🙏🏻
           <span class="cut-nudge-by">Thank you ~ <a href="https://www.linkedin.com/in/creator-sanjaykumar/" target="_blank" rel="noopener noreferrer">Sanjay</a>, Creator</span>
         </div>
         <div class="cut-nudge-actions">
           <button class="cut-nudge-cta" type="button" data-cut="nudge-rate">Write a review</button>
           <button class="cut-nudge-later" type="button" data-cut="nudge-later">Maybe later</button>
-        </div>`;
+        </div>
+        ${QUIET_HTML}`;
     }
     if (step === "no") {
       return `
@@ -2355,7 +2380,8 @@
         <div class="cut-nudge-actions">
           <button class="cut-nudge-cta" type="button" data-cut="nudge-feedback">Share feedback</button>
           <button class="cut-nudge-later" type="button" data-cut="nudge-rate">Rate us anyway</button>
-        </div>`;
+        </div>
+        ${QUIET_HTML}`;
     }
     const days = Math.max(activeDays.n || 0, STREAK_DAYS);
     const title = nudgeKind === "reset"
@@ -2371,7 +2397,8 @@
       <div class="cut-nudge-actions">
         <button class="cut-nudge-cta" type="button" data-cut="nudge-yes">👍 Yes, it helps</button>
         <button class="cut-nudge-alt" type="button" data-cut="nudge-no">👎 Not really</button>
-      </div>`;
+      </div>
+        ${QUIET_HTML}`;
   }
 
   function buildNudge() {
@@ -3005,7 +3032,7 @@
   const SHARE_NUDGE_DISMISS_KEY = "share_nudge_dismissals";
   const SHARE_REPEAT = RATE_TEST ? 90 * 1000 : 7 * DAY_MS;
   const SHARE_GRACE = RATE_TEST ? 60 * 1000 : 2 * DAY_MS;
-  const SHARE_MAX_DISMISS = 3;
+  const SHARE_MAX_DISMISS = 1;   // v1.5.2: once (was 3)
   const SHARE_MOMENT_MIN = 50;                   // % — a meter at/above this (but below BUSY_PCT)
   let shareNudgeAt = null;
   let shareNudgeDismissals = 0;
@@ -3023,6 +3050,7 @@
   }
   function shareNudgeDue() {
     if (!rated || shared || !rateStateLoaded || shareNudgeAt === null) return false;
+    if (cardsQuiet()) return false;   // v1.5.2
     if (!shareUnlocked()) return false;
     if (shareNudgeDismissals >= SHARE_MAX_DISMISS) return false;
     const now = Date.now();
@@ -3080,7 +3108,8 @@
       <div class="cut-nudge-title">Know someone who hits Claude limits?</div>
       <div class="cut-nudge-actions">
         <button class="cut-nudge-cta" type="button" data-cut="snudge-card">📸 Share my usage</button>
-      </div>`;
+      </div>
+        ${QUIET_HTML}`;
     shareNudgeEl = el;
     document.body.appendChild(el);
     el.style.visibility = "hidden";
@@ -3146,8 +3175,8 @@
   const SUPPORT_NUDGE_DISMISS_KEY = "support_nudge_dismissals";
   const SUPPORT_FIRST = RATE_TEST ? 0 : 15 * DAY_MS;
   const SUPPORT_AFTER_RATE = RATE_TEST ? 30 * 1000 : 5 * DAY_MS;
-  const SUPPORT_REPEAT = RATE_TEST ? 90 * 1000 : 30 * DAY_MS;
-  const SUPPORT_MAX_SHOWS = 5;
+  const SUPPORT_REPEAT = RATE_TEST ? 90 * 1000 : 60 * DAY_MS;   // v1.5.2: was 30 days
+  const SUPPORT_MAX_SHOWS = 2;   // v1.5.2: was 5
   let supportNudgeAt = null;      // null = not loaded, 0 = never shown
   let supportNudgeDismissals = 0;
   let supported = false;          // any Support click, ever
@@ -3166,6 +3195,7 @@
   function supportNudgeDue() {
     if (supported || !rateStateLoaded || supportNudgeAt === null || installAt === null || nudgeAt === null) return false;
     if (supportNudgeDismissals >= SUPPORT_MAX_SHOWS) return false;
+    if (cardsQuiet()) return false;   // v1.5.2
     const now = Date.now();
     if (installAt && now - installAt < SUPPORT_FIRST) return false;
     if (rated && ratedAt && now - ratedAt < SUPPORT_AFTER_RATE) return false;
@@ -3246,7 +3276,8 @@
       </div>
       <div class="cut-nudge-actions">
         <button class="cut-nudge-cta" type="button" data-cut="unudge-go">❤️ Donate</button>
-      </div>`;
+      </div>
+        ${QUIET_HTML}`;
     supportNudgeEl = el;
     document.body.appendChild(el);
     el.style.visibility = "hidden";
@@ -3318,7 +3349,7 @@
   const TOOLS_FIRST = RATE_TEST ? 0 : 10 * DAY_MS;
   const TOOLS_REPEAT = RATE_TEST ? 90 * 1000 : 30 * DAY_MS;
   const TOOLS_GAP = RATE_TEST ? 20 * 1000 : 1 * DAY_MS;
-  const TOOLS_MAX_DISMISS = 3;
+  const TOOLS_MAX_DISMISS = 1;   // v1.5.2: once (was 3)
   let toolsNudgeAt = null;        // null = not loaded, 0 = never shown
   let toolsNudgeDismissals = 0;
   let logoMenuOpened = false;     // any logo-menu open, ever
@@ -3337,6 +3368,7 @@
   function toolsNudgeDue() {
     if (logoMenuOpened || !rateStateLoaded || toolsNudgeAt === null || installAt === null || nudgeAt === null) return false;
     if (toolsNudgeDismissals >= TOOLS_MAX_DISMISS) return false;
+    if (cardsQuiet()) return false;   // v1.5.2
     const now = Date.now();
     if (installAt && now - installAt < TOOLS_FIRST) return false;
     if (toolsNudgeAt && now - toolsNudgeAt < TOOLS_REPEAT) return false;
@@ -3393,7 +3425,8 @@
       <div class="cut-nudge-body">15+ tools for testers &amp; devs, used by 2M+.</div>
       <div class="cut-nudge-actions">
         <button class="cut-nudge-cta" type="button" data-cut="tnudge-go">Show me</button>
-      </div>`;
+      </div>
+        ${QUIET_HTML}`;
     toolsNudgeEl = el;
     document.body.appendChild(el);
     el.style.visibility = "hidden";
@@ -3463,20 +3496,11 @@
   // updated FROM (whats_new_from), newest first, so someone jumping 1.4.8 ->
   // 1.5.0 still hears about 1.4.9. Without a known previous version, only the
   // current version's entry is shown.
-  const WHATS_NEW = {
-    "1.5.0": {
-      items: ["See your <b>session %</b> right on the toolbar icon"],
-      rows: ["sp-badge-row"]
-    },
-    "1.4.9": {
-      title: "New in Claude Usage Meter ✨",
-      items: [
-        "Turn <b>desktop notifications</b> on or off",
-        "Hide the <b>usage bars</b> under Session &amp; Weekly"
-      ],
-      rows: ["sp-notif-row", "sp-bars-row"]
-    }
-  };
+  // v1.5.2: emptied. Everyone has already seen the 1.4.9 / 1.5.0 items
+  // (notifications, usage bars, toolbar %), so no card on this update. Add a
+  // new entry here, keyed by version, to announce something in future, e.g.
+  //   "1.5.3": { items: ["..."], rows: ["sp-...-row"] },
+  const WHATS_NEW = {};
   const WN_PENDING_KEY = "whats_new_pending";
   const WN_SEEN_KEY = "whats_new_seen";
   const WN_FROM_KEY = "whats_new_from";
@@ -3520,7 +3544,7 @@
   } catch (_) { wnLoaded = true; }
 
   function whatsNewDue() {
-    return !!(wnLoaded && wnPending && wnSeen !== wnPending && whatsNewEntry());
+    return !!(tipsOn && wnLoaded && wnPending && wnSeen !== wnPending && whatsNewEntry());
   }
   function scheduleWhatsNew() {
     if (wnTimer || whatsNewEl || !whatsNewDue()) return;
@@ -3649,6 +3673,7 @@
   const MP_CLOSED_KEY = "meters_promo_closed";
   const MP_CLICKED_KEY = "meters_promo_clicked";
   const MP_TEST_KEY = "cut_test_build";
+  const MP_SHOWN_KEY = "meters_promo_shown_at";
   const MP_WAIT = 2 * DAY_MS;
   const MP_MIN_WIDTH = 1100;   // narrower windows: the card would sit on the chat
   const MP_ITEMS = [
@@ -3661,8 +3686,9 @@
   let mpEl = null, mpTimer = null;
 
   try {
-    chrome.storage.local.get([MP_CLOSED_KEY, MP_CLICKED_KEY, MP_TEST_KEY], (r) => {
+    chrome.storage.local.get([MP_CLOSED_KEY, MP_CLICKED_KEY, MP_TEST_KEY, MP_SHOWN_KEY], (r) => {
       void chrome.runtime.lastError;
+      mpShownAt = Math.max(mpShownAt, Number(r && r[MP_SHOWN_KEY]) || 0);
       mpClosed = !!(r && r[MP_CLOSED_KEY]);
       mpClicked = (r && r[MP_CLICKED_KEY]) || {};
       mpTest = !!(r && r[MP_TEST_KEY]);
@@ -3685,6 +3711,7 @@
   function mpItemsLeft() { return MP_ITEMS.filter((it) => !mpClicked[it.id]); }
   function metersPromoDue() {
     if (!mpLoaded || mpClosed || installAt === null) return false;
+    if (!mpTest && cardsQuiet()) return false;   // v1.5.2
     if (!mpItemsLeft().length) return false;
     if (!mpTest && installAt && Date.now() - installAt < MP_WAIT) return false;
     return true;
@@ -3760,6 +3787,8 @@
       }, 300);
     });
     mpEl = el;
+    mpShownAt = Date.now();
+    try { chrome.storage.local.set({ [MP_SHOWN_KEY]: mpShownAt }); } catch (_) {}
     document.body.appendChild(el);
     requestAnimationFrame(() => el.classList.add("cut-mp-in"));
   }
@@ -3770,6 +3799,158 @@
     el.classList.remove("cut-mp-in");
     setTimeout(() => el.remove(), 180);
   }
+
+  // ===== v1.5.2: first-message hint for Free accounts =====
+  //
+  // Uninstall feedback keeps saying "didn't show my usage". On Free, Claude
+  // only reports usage inside its replies, so a new Free user sees "—" until
+  // they send a message, decides it's broken and leaves. This card, pointed at
+  // the Usage segment, says so the first time it happens:
+  //   • new users only (free_hint_new_user, armed by a fresh install)
+  //   • only while the account is unmetered AND has no reading yet
+  //   • once per user: ×, Got it, a click away, or the first reading arriving
+  //     retires it for good (free_hint_done)
+  //   • shown regardless of the Tips & requests switch: it isn't a request,
+  //     it's how the meter works on Free
+  // TEST_BUILD (cut_test_build) shows it on any account, every reload.
+  const FH_KEY = "free_hint_done";
+  const FH_NEW_KEY = "free_hint_new_user";   // set by background on a fresh install only
+  let fhLoaded = false, fhDone = false, fhNewUser = false;
+  let freeHintEl = null, fhTimer = null, fhOutside = null, fhKey = null, fhFollow = null;
+  try {
+    chrome.storage.local.get([FH_KEY, FH_NEW_KEY], (r) => {
+      void chrome.runtime.lastError;
+      fhDone = !!(r && r[FH_KEY]);
+      fhNewUser = !!(r && r[FH_NEW_KEY]);
+      fhLoaded = true;
+    });
+  } catch (_) {}
+
+  function freeHintDue() {
+    if (!fhLoaded || fhDone || !fhNewUser) return false;   // new installs only
+    if (mpTest) return true;
+    return isUnmetered();
+  }
+  function fhAnchor(root) {
+    const sel = root.classList.contains("cut-collapsed") ? '[data-cut="c-session"]' : '[data-cut="session"]';
+    const a = root.querySelector(sel);
+    return a && a.getClientRects().length ? a : root.querySelector(".cut-strip") || root;
+  }
+  function scheduleFreeHint() {
+    // A first reading arrived without the hint ever being needed: retire it.
+    if (fhLoaded && fhNewUser && !fhDone && !mpTest && latestUsage && (latestUsage.session || latestUsage.weekly)) {
+      fhDone = true;
+      try { chrome.storage.local.set({ [FH_KEY]: Date.now() }); } catch (_) {}
+    }
+    if (freeHintEl) {
+      // The first reading arrived: the hint did its job.
+      if (!mpTest && !isUnmetered()) closeFreeHint(true);
+      return;
+    }
+    if (fhTimer || !freeHintDue()) return;
+    fhTimer = setTimeout(() => { fhTimer = null; maybeShowFreeHint(); }, 2500);
+  }
+  function positionFreeHint() {
+    const root = document.getElementById(OVERLAY_ID);
+    if (!freeHintEl || !root) return;
+    const br = fhAnchor(root).getBoundingClientRect();
+    const nr = freeHintEl.getBoundingClientRect();
+    const vw = window.innerWidth;
+    const left = Math.max(8, Math.min(br.left + br.width / 2 - nr.width / 2, vw - nr.width - 8));
+    let top;
+    if (br.top >= nr.height + 14) { top = br.top - nr.height - 10; freeHintEl.classList.remove("cut-pop-below"); }
+    else { top = br.bottom + 10; freeHintEl.classList.add("cut-pop-below"); }
+    freeHintEl.style.setProperty("--cut-arrow-x", Math.max(14, Math.min(br.left + br.width / 2 - left, nr.width - 14)) + "px");
+    freeHintEl.style.left = left + "px";
+    freeHintEl.style.top = top + "px";
+  }
+  function maybeShowFreeHint() {
+    if (freeHintEl || !freeHintDue() || document.hidden) return;
+    // Never on top of another card or menu; it'll try again on the next render.
+    if (whatsNewEl || nudgeOpen || shareNudgeEl || supportNudgeEl || toolsNudgeEl || scPanel) return;
+    if (settingsPopOpen || sharePopOpen || logoMenuOpen) return;
+    const root = document.getElementById(OVERLAY_ID);
+    if (!root || !root.isConnected || !root.getClientRects().length) return;
+
+    const el = document.createElement("div");
+    el.className = "cut-rate-nudge cut-free-hint";
+    el.setAttribute("role", "dialog");
+    el.setAttribute("aria-label", "How usage shows on the Free plan");
+    el.classList.toggle("cut-pop-dark", root.classList.contains("cut-theme-dark"));
+    el.innerHTML = `
+      <button class="cut-nudge-x" type="button" data-cut="fh-close" aria-label="Close">×</button>
+      <div class="cut-nudge-title">Send your first message to Claude \u{1F44B}</div>
+      <div class="cut-nudge-body">Your usage data appears after Claude replies.</div>
+      <div class="cut-nudge-actions">
+        <button class="cut-nudge-cta" type="button" data-cut="fh-ok">Got it</button>
+      </div>`;
+    freeHintEl = el;
+    document.body.appendChild(el);
+    el.style.visibility = "hidden";
+    positionFreeHint();
+    el.style.visibility = "";
+    requestAnimationFrame(() => el.classList.add("cut-nudge-in"));
+
+    el.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      const t = ev.target.closest("[data-cut]");
+      const what = t && t.getAttribute("data-cut");
+      if (what === "fh-ok" || what === "fh-close") closeFreeHint(true);
+    });
+    fhOutside = (ev) => { if (freeHintEl && !freeHintEl.contains(ev.target)) closeFreeHint(true); };
+    setTimeout(() => document.addEventListener("click", fhOutside, true), 0);
+    fhKey = (ev) => { if (ev.key === "Escape") closeFreeHint(true); };
+    document.addEventListener("keydown", fhKey, true);
+    fhFollow = () => requestAnimationFrame(positionFreeHint);
+    window.addEventListener("resize", fhFollow);
+    window.addEventListener("scroll", fhFollow, true);
+  }
+  // `retire` = never show again (every close does, apart from a strip rebuild).
+  function closeFreeHint(retire) {
+    if (fhTimer) { clearTimeout(fhTimer); fhTimer = null; }
+    if (retire && !mpTest) {
+      fhDone = true;
+      try { chrome.storage.local.set({ [FH_KEY]: Date.now() }); } catch (_) {}
+    }
+    if (fhOutside) { document.removeEventListener("click", fhOutside, true); fhOutside = null; }
+    if (fhKey) { document.removeEventListener("keydown", fhKey, true); fhKey = null; }
+    if (fhFollow) {
+      window.removeEventListener("resize", fhFollow);
+      window.removeEventListener("scroll", fhFollow, true);
+      fhFollow = null;
+    }
+    if (!freeHintEl) return;
+    const el = freeHintEl; freeHintEl = null;
+    el.classList.remove("cut-nudge-in");
+    setTimeout(() => el.remove(), 200);
+  }
+
+  // v1.5.2: one gate for every card. tipsOn off → none; otherwise a week
+  // between any two (rate, share, donate, tools, Now available).
+  function cardsQuiet() {
+    if (!tipsOn) return true;
+    if (freeHintEl) return true;   // the Free-plan hint has the floor
+    const last = Math.max(nudgeAt || 0, shareNudgeAt || 0, supportNudgeAt || 0, toolsNudgeAt || 0, mpShownAt || 0);
+    return !!last && Date.now() - last < CARD_GAP;
+  }
+  function closeAllCards() {
+    const root = document.getElementById(OVERLAY_ID);
+    try { closeNudge(root, true); } catch (_) {}
+    try { closeShareNudge(root, true); } catch (_) {}
+    try { closeSupportNudge(root, true); } catch (_) {}
+    try { closeToolsNudge(root, true); } catch (_) {}
+    try { if (whatsNewEl) closeWhatsNew(root); } catch (_) {}
+    try { closeMetersPromo(); } catch (_) {}
+  }
+  // "Don't show these cards" on any card: same as unticking Tips & requests.
+  document.addEventListener("click", (ev) => {
+    const q = ev.target && ev.target.closest && ev.target.closest('[data-cut="nudge-quiet"]');
+    if (!q) return;
+    ev.preventDefault(); ev.stopImmediatePropagation();
+    tipsOn = false;
+    closeAllCards();
+    try { chrome.runtime.sendMessage({ type: "save-settings", settings: { tipsEnabled: false } }); } catch (_) {}
+  }, true);
 
   let sharePopOpen = false;
   let sharePopOutsideHandler = null;
@@ -3968,6 +4149,8 @@
     // v1.5.0: session % badge on the toolbar icon (settings.toolbarBadge).
     const bgBox = pop.querySelector('input[data-sp-top="toolbarBadge"]');
     if (bgBox) bgBox.checked = toolbarBadgeOn;
+    const tpBox = pop.querySelector('input[data-sp-top="tipsEnabled"]');
+    if (tpBox) tpBox.checked = tipsOn;
     // The Fable row only makes sense when the API reports a Fable bucket; a
     // checkbox that visibly does nothing reads as broken, so hide the row and
     // its divider position stays natural.
@@ -4015,6 +4198,12 @@
     if (bgBox) {
       settings.toolbarBadge = bgBox.checked;
       toolbarBadgeOn = bgBox.checked;
+    }
+    const tpBox = pop.querySelector('input[data-sp-top="tipsEnabled"]');
+    if (tpBox) {
+      settings.tipsEnabled = tpBox.checked;
+      tipsOn = tpBox.checked;
+      if (!tipsOn) closeAllCards();
     }
 
     const csBox = pop.querySelector('input[data-sp-top="chatSearch"]');
@@ -4892,6 +5081,7 @@
     if (whatsNewEl) requestAnimationFrame(positionWhatsNew);
     else scheduleWhatsNew();
     scheduleMetersPromo();   // v1.5.1
+    scheduleFreeHint();      // v1.5.2
     if (nudgeOpen) {
       // A rebuild replaces the rate wrap, taking the pulse/tooltip-suppression
       // classes with it — put them back on the new node.
@@ -7128,6 +7318,7 @@
         chatSearchEnabled = resp.settings.chatSearch !== false;
         notificationsOn = resp.settings.notificationsEnabled !== false;
         toolbarBadgeOn = resp.settings.toolbarBadge !== false;
+        tipsOn = resp.settings.tipsEnabled !== false;
       }
       projectsSettingsKnown = true;
       chatSearchSettingsKnown = true;
@@ -7236,6 +7427,8 @@
       // v1.4.9: keep the gear's notifications box in step with the popup/options.
       notificationsOn = nv.notificationsEnabled !== false;
       toolbarBadgeOn = nv.toolbarBadge !== false;
+      tipsOn = nv.tipsEnabled !== false;
+      if (!tipsOn) closeAllCards();
       if (settingsPopOpen && activeSettingsPop) syncSettingsPop(activeSettingsPop);
       const wantChatSearch = nv.chatSearch !== false;
       if (wantChatSearch !== chatSearchEnabled || !chatSearchSettingsKnown) {

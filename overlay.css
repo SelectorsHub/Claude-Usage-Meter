@@ -3098,3 +3098,24 @@
    the dark theme so they read. */
 .cut-mp.cut-mp-dark .cut-mp-logo { background: #f4f2ee; border-radius: 6px; padding: 2px; box-sizing: border-box; }
 .cut-mp.cut-mp-dark .cut-mp-logo svg { width: 16px; height: 16px; }
+
+/* v1.5.2: "Don't show these cards" — quiet text link under every card's
+   buttons. Turns off settings.tipsEnabled. */
+.cut-nudge-quiet {
+  display: block;
+  margin: 8px auto 0;
+  padding: 2px 4px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 11px;
+  opacity: 0.55;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+.cut-nudge-quiet:hover, .cut-nudge-quiet:focus-visible { opacity: 0.9; outline: none; }
+/* v1.5.2: Free-plan hint: a touch wider so the title stays on one line. */
+.cut-rate-nudge.cut-free-hint { width: auto; max-width: calc(100vw - 16px); }
+.cut-free-hint .cut-nudge-title { white-space: nowrap; }
