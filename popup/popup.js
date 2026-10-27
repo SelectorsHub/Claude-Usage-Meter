@@ -283,13 +283,23 @@ async function render(state) {
   renderError(state);
 }
 
+// v1.5.4: tell the background which window the popup was opened in, so it
+// answers for that window's Claude account (normal vs private / container).
+async function myTabId() {
+  try {
+    const [t] = await chrome.tabs.query({ active: true, currentWindow: true });
+    return t ? t.id : undefined;
+  } catch (_) { return undefined; }
+}
+
 async function refresh({ forceFetch = false } = {}) {
+  const tabId = await myTabId();
   if (forceFetch) {
     setLoading(true);
-    try { await chrome.runtime.sendMessage({ type: "force-refresh" }); } catch (_) {}
+    try { await chrome.runtime.sendMessage({ type: "force-refresh", tabId }); } catch (_) {}
     setLoading(false);
   }
-  const state = await chrome.runtime.sendMessage({ type: "get-state" });
+  const state = await chrome.runtime.sendMessage({ type: "get-state", tabId });
   await render(state);
 }
 
@@ -402,6 +412,7 @@ async function saveFields() {
   try {
     await chrome.runtime.sendMessage({
       type: "save-settings",
+      tabId: await myTabId(),
       settings: { stripFields: readFields(), ...readTopFields() }
     });
   } catch (_) {}
@@ -447,7 +458,7 @@ document.getElementById("test-btn").addEventListener("click", async () => {
 });
 
 document.getElementById("reset-btn").addEventListener("click", async () => {
-  await chrome.runtime.sendMessage({ type: "reset-usage" });
+  await chrome.runtime.sendMessage({ type: "reset-usage", tabId: await myTabId() });
   setTestResult("", "");
   refresh({ forceFetch: true });
 });
