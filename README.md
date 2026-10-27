@@ -13,6 +13,14 @@ A Chrome extension (Manifest V3) that tracks your Claude.ai usage with:
 - **Threshold notifications** — desktop alerts (switch them off any time with "Desktop notifications" in the strip's gear menu, the popup, or Settings) when usage crosses percentages you configure (extra usage alerts use the weekly thresholds, when a monthly limit is set).
 - **Auto-scroll** — optionally keeps the chat pinned to the bottom while Claude is replying, so the latest text stays in view. Only engages when you're already near the bottom, so scrolling up to read history is never interrupted. Toggle it in **Settings → Reading experience** (on by default).
 
+## Several accounts: normal window + incognito / private / containers (v1.5.4)
+
+State is stored **per Claude account**, in the single `chrome.storage.local`, under the account's org id (`org:<orgId>:usage_state`, `…:usage_history`, `…:last_fired_thresholds`, `…:session_lock`, `…:forecast_notified`, `…:usage_raw`). It does not matter which window you are in: the same account seen from a normal window and from an incognito window reads and updates the same entry, and two different accounts never share one. Hopping A -> B -> A therefore keeps A's history, fired notification thresholds and lockout. Which account a window is on is read from its `lastActiveOrg` cookie, in that window's own cookie store. Pre-1.5.4 data is migrated under its org the first time that org is seen.
+
+Window-level facts (last error, org-discovery cache, current model) are kept per window; settings, the notify-error flag and the Free-plan SSE snapshots (already keyed by org) are shared.
+
+The background worker can only send the normal window's cookies, so for any other window the `/api/...` requests are performed by a claude.ai tab living in that window (`proxy-fetch` message handled in `content-script.js`). A private window therefore needs at least one open claude.ai tab to be polled, and the extension has to be allowed in private windows (Chrome: *Allow in Incognito*; Firefox: *Run in Private Windows*). No `"incognito": "split"` is used, so it works the same in Chrome, Edge and Firefox. Toolbar badge: normal window = global badge, other windows = tab-specific badges.
+
 ## Install
 
 1. Unzip the folder.

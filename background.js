@@ -209,7 +209,35 @@ function normalizeStripFields(sf) {
   return out;
 }
 
-const STORAGE_KEYS = {
+// ---------- browsing contexts (v1.5.4) ----------
+//
+// One extension instance serves several cookie jars: the normal window, an
+// incognito / private window, and (Firefox) container tabs. Each jar can be
+// signed in to a DIFFERENT Claude account, so everything that belongs to "the
+// account" - the usage numbers, the org id, history, thresholds already fired,
+// the SSE snapshot, and the in-memory projects / chats caches - has to be kept
+// per jar. Before this, there was one set of keys and one set of caches, and
+// the background polled with the normal jar's cookies, so a second account in
+// incognito was shown the first account's limits (and its chat titles).
+//
+//   CTX            "default" for the normal jar, otherwise "incognito" (Chrome /
+//                  Edge) or the Firefox cookieStoreId ("firefox-private",
+//                  "firefox-container-N").
+//   inCtx(ctx, fn) runs fn with CTX set, strictly one at a time (a FIFO queue),
+//                  so the code in between can keep reading STORAGE_KEYS.* and
+//                  the cache variables as if there were only one account. Every
+//                  entry point (alarm, message, cookie change) goes through it.
+//   ctxFetch()     "default" fetches from the worker, exactly as before. Any
+//                  other jar cannot be reached from the worker (it would send
+//                  the normal jar's cookies), so the request is run by the
+//                  content script of a claude.ai tab that lives in that jar.
+//
+// The "default" jar keeps the original, un-prefixed storage keys, so nothing
+// already stored is lost or migrated. Settings and the notify-error flag are
+// user-level and stay shared.
+let CTX = "default";
+
+const BASE_STORAGE_KEYS = {
   usage: "usage_state",
   settings: "settings",
   lastFiredThresholds: "last_fired_thresholds",
@@ -223,6 +251,199 @@ const STORAGE_KEYS = {
   forecastNotified: "forecast_notified", // v1.2.17: window key of the last forecast alert (dedupe)
   sseByOrg: "sse_usage_by_org"   // v1.4.6: last completion-stream windows per org (Free plan)
 };
+// Three kinds of keys:
+//   shared   user level, one copy:                      settings, lastNotifyError,
+//            sseByOrg (already a map keyed by org id inside)
+//   account  everything that describes ONE Claude account, stored under that
+//            account's org id - "org:<orgId>:usage_state" - no matter which
+//            window (normal / incognito / private / container) it was seen from:
+//            usage, lastFiredThresholds, sessionLock, usageRaw, history,
+//            forecastNotified. Same account in two windows = same entry.
+//   window   facts about the login state of one window, not the account:
+//            orgCache, lastError, currentModel (the default window keeps the
+//            original, un-prefixed keys).
+// Which account a window is on is the org id in its lastActiveOrg cookie (read
+// from THAT window's cookie store), resolved by orgForCtx() below.
+const SHARED_STORAGE_KEYS = new Set(["settings", "lastNotifyError", "sseByOrg"]);
+const WINDOW_STORAGE_KEYS = new Set(["orgCache", "lastError", "currentModel"]);
+let CURRENT_ORG = null;   // the account of the window being served (set by inCtx / setCurrentOrg)
+const STORAGE_KEYS = {};
+for (const name of Object.keys(BASE_STORAGE_KEYS)) {
+  Object.defineProperty(STORAGE_KEYS, name, {
+    enumerable: true,
+    get() {
+      const base = BASE_STORAGE_KEYS[name];
+      if (SHARED_STORAGE_KEYS.has(name)) return base;
+      if (WINDOW_STORAGE_KEYS.has(name)) return CTX === "default" ? base : `ctx:${CTX}:${base}`;
+      return `org:${CURRENT_ORG || "-"}:${base}`;
+    }
+  });
+}
+
+// Which jar does this tab belong to? Firefox exposes cookieStoreId on the tab
+// (needs the "cookies" permission, which we have); Chrome / Edge only tell us
+// whether it is incognito, and they have just the two jars.
+function ctxOfTab(tab) {
+  if (!tab) return "default";
+  const sid = tab.cookieStoreId;
+  if (sid) return (sid === "firefox-default" || sid === "0") ? "default" : String(sid);
+  return tab.incognito ? "incognito" : "default";
+}
+
+// The cookie store id behind a ctx, looked up fresh each time (an incognito
+// store disappears with its last window). null = cannot tell -> callers must
+// NOT fall back to the default store, that is exactly the leak being fixed.
+async function storeIdForCtx(ctx) {
+  if (ctx === "default") return null;
+  try {
+    const tabs = await chrome.tabs.query({ url: "https://claude.ai/*" });
+    const mine = tabs.filter((t) => ctxOfTab(t) === ctx);
+    for (const t of mine) if (t.cookieStoreId) return t.cookieStoreId;
+    if (chrome.cookies && chrome.cookies.getAllCookieStores) {
+      const stores = await chrome.cookies.getAllCookieStores();
+      for (const t of mine) {
+        const s = stores.find((x) => Array.isArray(x.tabIds) && x.tabIds.includes(t.id));
+        if (s) return s.id;
+      }
+    }
+  } catch (_) {}
+  return null;
+}
+
+// ---- which account is this window on? ----
+const ORG_BY_CTX = new Map();   // window -> org id (dropped whenever a login cookie changes)
+async function cookieOrgForCtx(ctx) {
+  try {
+    const details = { name: "lastActiveOrg", url: "https://claude.ai/" };
+    if (ctx !== "default") {
+      const sid = await storeIdForCtx(ctx);
+      if (!sid) return null;   // never fall back to the default window's cookie
+      details.storeId = sid;
+    }
+    const cookie = await chrome.cookies.get(details);
+    return cookie && cookie.value ? cookie.value : null;
+  } catch (_) { return null; }
+}
+async function orgForCtx(ctx) {
+  if (ORG_BY_CTX.has(ctx)) return ORG_BY_CTX.get(ctx);
+  const org = await cookieOrgForCtx(ctx);
+  if (org) ORG_BY_CTX.set(ctx, org);   // "unknown" is not cached: ask again next time
+  return org;
+}
+
+// Before 1.5.4 the account-level keys were stored un-prefixed. The first time
+// an org is seen, move that data under the org it is stamped with (usage_state
+// carries orgId), and only if it really is this org's - never another account's.
+const MIGRATED_ORGS = new Set();
+async function migrateLegacyAccountState(org) {
+  if (!org || MIGRATED_ORGS.has(org)) return;
+  MIGRATED_ORGS.add(org);
+  try {
+    const names = Object.keys(BASE_STORAGE_KEYS)
+      .filter((n) => !SHARED_STORAGE_KEYS.has(n) && !WINDOW_STORAGE_KEYS.has(n));
+    const legacyKeys = names.map((n) => BASE_STORAGE_KEYS[n]);
+    const prefix = `org:${org}:`;
+    const got = await chrome.storage.local.get([...legacyKeys, prefix + BASE_STORAGE_KEYS.usage]);
+    if (got[prefix + BASE_STORAGE_KEYS.usage]) return;            // already has its own state
+    const legacy = got[BASE_STORAGE_KEYS.usage];
+    if (!legacy || legacy.orgId !== org) return;                  // not provably this account's
+    const moved = {};
+    for (const k of legacyKeys) if (got[k] != null) moved[prefix + k] = got[k];
+    await chrome.storage.local.set(moved);
+    await chrome.storage.local.remove(legacyKeys);
+  } catch (_) {}
+}
+// The poll knows the org it actually read (it may differ from the cookie when
+// the cookie org had nothing); make that the account the keys point at.
+async function setCurrentOrg(org) {
+  if (!org) return;
+  CURRENT_ORG = org;
+  ORG_BY_CTX.set(CTX, org);
+  await migrateLegacyAccountState(org);
+}
+
+// In-memory caches that must not cross accounts (declared further down; they
+// are swapped in and out around each inCtx run).
+const ctxCaches = new Map();   // ctx -> { projectsCache, convosCache, bodyCache, chatTokensCache }
+let cacheEpoch = 0;
+function loadCtxCaches(ctx) {
+  const st = ctxCaches.get(ctx) || {
+    projectsCache: null, convosCache: null, bodyCache: new Map(), chatTokensCache: new Map()
+  };
+  projectsCache = st.projectsCache;
+  convosCache = st.convosCache;
+  bodyCache = st.bodyCache;
+  chatTokensCache = st.chatTokensCache;
+}
+function saveCtxCaches(ctx) {
+  ctxCaches.set(ctx, { projectsCache, convosCache, bodyCache, chatTokensCache });
+}
+function clearAllCtxCaches() {   // account/org switch in ANY jar: drop everything
+  ctxCaches.clear();
+  cacheEpoch++;
+}
+
+let ctxQueue = Promise.resolve();
+function inCtx(ctx, fn) {
+  const run = async () => {
+    const epoch = cacheEpoch;
+    CTX = ctx || "default";
+    loadCtxCaches(CTX);
+    CURRENT_ORG = await orgForCtx(CTX);
+    if (CURRENT_ORG) await migrateLegacyAccountState(CURRENT_ORG);
+    try {
+      return await fn();
+    } finally {
+      if (epoch === cacheEpoch) saveCtxCaches(CTX);
+      CTX = "default";
+      CURRENT_ORG = null;
+    }
+  };
+  const p = ctxQueue.then(run, run);
+  ctxQueue = p.catch(() => {});
+  return p;
+}
+
+// Every jar that currently has a claude.ai tab, plus "default" (which is
+// always polled, as before, so the toolbar badge works without a claude.ai tab).
+async function activeCtxs() {
+  const set = new Set(["default"]);
+  try {
+    const tabs = await chrome.tabs.query({ url: "https://claude.ai/*" });
+    for (const t of tabs) set.add(ctxOfTab(t));
+  } catch (_) {}
+  return [...set];
+}
+const pollCtx = (ctx) => inCtx(ctx, () => pollUsage());
+async function pollAll() {
+  const list = await activeCtxs();
+  await Promise.all(list.map((c) => pollCtx(c)));
+}
+
+// Requests for a non-default jar are executed by a claude.ai tab in that jar
+// (same-origin there, so the browser attaches THAT jar's cookies). Returns a
+// real Response so the callers' resp.ok / resp.status / resp.json() are unchanged.
+async function ctxFetch(url, init) {
+  if (CTX === "default") return fetch(url, init);
+  const ctx = CTX;
+  const tabs = (await chrome.tabs.query({ url: "https://claude.ai/*" }))
+    .filter((t) => ctxOfTab(t) === ctx)
+    .sort((a, b) => (b.active ? 1 : 0) - (a.active ? 1 : 0));
+  for (const t of tabs) {
+    let r = null;
+    try {
+      r = await chrome.tabs.sendMessage(t.id, {
+        type: "proxy-fetch", url, headers: (init && init.headers) || {}
+      });
+    } catch (_) { continue; }
+    if (r && typeof r.status === "number" && r.status >= 200 && r.status <= 599) {
+      const noBody = r.status === 204 || r.status === 205 || r.status === 304;
+      return new Response(noBody ? null : (r.body || ""), { status: r.status });
+    }
+  }
+  throw new Error("no_tab_for_context");
+}
+
 
 // ---------- storage helpers ----------
 
@@ -294,11 +515,7 @@ async function setSessionLock(lock) {
 async function getActiveOrgFromCookie() {
   if (!chrome.cookies || !chrome.cookies.get) return null;
   try {
-    const cookie = await chrome.cookies.get({
-      name: "lastActiveOrg",
-      url: "https://claude.ai/"
-    });
-    return cookie && cookie.value ? cookie.value : null;
+    return await cookieOrgForCtx(CTX);
   } catch (_) {
     return null;
   }
@@ -311,7 +528,7 @@ async function getActiveOrgFromCookie() {
 // now, not a decision: pollUsage() walks the list and keeps whichever org
 // actually returns readable usage.
 async function listOrgIds() {
-  const resp = await fetch("https://claude.ai/api/organizations", {
+  const resp = await ctxFetch("https://claude.ai/api/organizations", {
     credentials: "include",
     headers: { accept: "application/json" }
   });
@@ -369,7 +586,7 @@ async function getOrgId(forceRefresh = false, skipCookie = false) {
 // ---------- main poll ----------
 
 async function fetchUsageFor(orgId) {
-  return fetch(`https://claude.ai/api/organizations/${orgId}/usage`, {
+  return ctxFetch(`https://claude.ai/api/organizations/${orgId}/usage`, {
     credentials: "include",
     headers: { accept: "application/json", "X-Organization-UUID": orgId }
   });
@@ -1071,8 +1288,9 @@ function looksUnmetered(data) {
 }
 
 async function applyUnmetered(orgId) {
+  await setCurrentOrg(orgId);   // v1.5.4: state is stored per account (org id)
   let usage = await getUsage();
-  if (orgId && usage.orgId && usage.orgId !== orgId) {
+  if (orgId && usage.orgId && usage.orgId !== orgId) {   // defensive: state is per-org now, so this should not occur
     await setSessionLock(null);
     await saveLastFired({});
     await chrome.storage.local.set({
@@ -1111,6 +1329,7 @@ async function applyUnmetered(orgId) {
 }
 
 async function applyUsage(data, orgId) {
+  await setCurrentOrg(orgId);   // v1.5.4: state is stored per account (org id)
   let usage = await getUsage();
 
   // v1.2.14: account/org isolation. This function used to merge new data into
@@ -1132,10 +1351,8 @@ async function applyUsage(data, orgId) {
       updatedAt: null,
       forecast: null
     };
-    await setSessionLock(null);   // the old account's lockout must not pin the new one to 100%
-    await saveLastFired({});      // notification thresholds re-arm for the new account
-    // v1.2.17: and the pace history — updateForecast() also stamps the org, but
-    // clearing here keeps every cross-account side channel in one place.
+    await setSessionLock(null);   // defensive (v1.5.4: state is per-org now, so this should not occur)
+    await saveLastFired({});
     await chrome.storage.local.set({
       [STORAGE_KEYS.history]: null,
       [STORAGE_KEYS.forecastNotified]: null
@@ -1582,7 +1799,7 @@ async function applyMessageLimit(payload) {
   await saveUsage(usage);
   await maybeNotify(usage);
   await broadcastUsage(usage);
-  if (needsPoll) pollUsage();   // detached: settles the tier, then promotes the snapshot
+  if (needsPoll) pollCtx(CTX);   // queued (v1.5.4): settles the tier, then promotes the snapshot
 }
 
 // ---------- broadcast to claude.ai tabs ----------
@@ -1595,37 +1812,87 @@ function badgeBand(p) {
   if (p >= 50) return "amber";
   return "green";
 }
+function computeBadge(usage, settings) {
+  const s = usage && usage.session;
+  const pct = s && typeof s.percent === "number" && isFinite(s.percent) ? Math.round(s.percent) : null;
+  // A window whose reset has passed has no current figure until the next
+  // reading; show nothing rather than last window's number.
+  const expired = !!(s && s.resetsAt && Number(s.resetsAt) < Date.now());
+  if (settings.toolbarBadge === false || pct == null || expired) {
+    return { text: "", title: "Claude Usage Meter" };
+  }
+  const p = Math.max(0, pct);
+  return {
+    text: p >= 100 ? "MAX" : String(p),
+    color: BADGE_COLORS[badgeBand(p)],
+    title: p >= 100 ? "Claude Usage Meter: session limit reached"
+                    : `Claude Usage Meter: session ${p}% used`
+  };
+}
+async function paintBadge(b, tabId) {
+  const t = tabId == null ? {} : { tabId };
+  await chrome.action.setBadgeText({ ...t, text: b.text });
+  try { await chrome.action.setTitle({ ...t, title: b.title }); } catch (_) {}
+  if (!b.text) return;
+  await chrome.action.setBadgeBackgroundColor({ ...t, color: b.color });
+  try { if (chrome.action.setBadgeTextColor) await chrome.action.setBadgeTextColor({ ...t, color: "#ffffff" }); } catch (_) {}
+}
+// v1.5.4: the default jar paints the global badge, as before. Any other jar
+// paints tab-specific badges on ITS tabs only, so a private window never shows
+// the normal account's percentage (a tab-specific value wins over the global one).
 async function updateBadge(usageOpt, settingsOpt) {
+  const ctx = CTX;   // captured: this is often called detached, and CTX moves on
   try {
     const usage = usageOpt || await getUsage();
     const settings = settingsOpt || await getSettings();
-    const s = usage && usage.session;
-    const pct = s && typeof s.percent === "number" && isFinite(s.percent) ? Math.round(s.percent) : null;
-    // A window whose reset has passed has no current figure until the next
-    // reading; show nothing rather than last window's number.
-    const expired = !!(s && s.resetsAt && Number(s.resetsAt) < Date.now());
-    if (settings.toolbarBadge === false || pct == null || expired) {
-      await chrome.action.setBadgeText({ text: "" });
-      try { await chrome.action.setTitle({ title: "Claude Usage Meter" }); } catch (_) {}
-      return;
-    }
-    const p = Math.max(0, pct);
-    await chrome.action.setBadgeText({ text: p >= 100 ? "MAX" : String(p) });
-    await chrome.action.setBadgeBackgroundColor({ color: BADGE_COLORS[badgeBand(p)] });
-    try { if (chrome.action.setBadgeTextColor) await chrome.action.setBadgeTextColor({ color: "#ffffff" }); } catch (_) {}
-    try {
-      await chrome.action.setTitle({ title: p >= 100
-        ? "Claude Usage Meter: session limit reached"
-        : `Claude Usage Meter: session ${p}% used` });
-    } catch (_) {}
+    const b = computeBadge(usage, settings);
+    if (ctx === "default") { await paintBadge(b); return; }
+    const tabs = await chrome.tabs.query({});
+    for (const t of tabs) if (ctxOfTab(t) === ctx) { try { await paintBadge(b, t.id); } catch (_) {} }
   } catch (_) {}
+}
+async function refreshOtherBadges(settings, except) {
+  try {
+    for (const c of await activeCtxs()) {
+      if (c === except) continue;
+      inCtx(c, async () => { await updateBadge(await getUsage(), settings); });
+    }
+  } catch (_) {}
+}
+// Tab-specific badges reset when a tab navigates, and a new private tab would
+// otherwise inherit the global (normal-account) badge: repaint on tab events.
+async function refreshTabBadge(tab) {
+  try {
+    if (!tab || tab.id == null) return;
+    const ctx = ctxOfTab(tab);
+    if (ctx === "default") return;
+    await inCtx(ctx, async () => {
+      try { await paintBadge(computeBadge(await getUsage(), await getSettings()), tab.id); } catch (_) {}
+    });
+  } catch (_) {}
+}
+if (chrome.tabs && chrome.tabs.onActivated) {
+  chrome.tabs.onActivated.addListener(({ tabId }) => {
+    chrome.tabs.get(tabId).then(refreshTabBadge).catch(() => {});
+  });
+  chrome.tabs.onUpdated.addListener((_id, info, tab) => {
+    if (info.status === "complete" || info.status === "loading") refreshTabBadge(tab);
+  });
 }
 
 async function broadcastUsage(usageOpt) {
   const usage = usageOpt || await getUsage();
   updateBadge(usage);   // v1.5.0
   try {
-    const tabs = await chrome.tabs.query({ url: "https://claude.ai/*" });
+    // v1.5.4: a reading belongs to an ACCOUNT. Send it to this window's tabs and
+    // to tabs in other windows that are on the same account - never to another one.
+    const org = CURRENT_ORG;
+    const ctx = CTX;
+    const tabs = [];
+    for (const t of await chrome.tabs.query({ url: "https://claude.ai/*" })) {
+      const c = ctxOfTab(t);
+      if (c === ctx || (org && (await orgForCtx(c)) === org)) tabs.push(t);
+    }
     for (const tab of tabs) {
       if (!tab.id) continue;
       chrome.tabs.sendMessage(tab.id, { type: "usage-updated", usage }, () => {
@@ -1785,23 +2052,23 @@ if (chrome.cookies && chrome.cookies.onChanged) {
     if (!domain.endsWith("claude.ai")) return;
     if (cookie.name !== "lastActiveOrg" && cookie.name !== "sessionKey") return;
     // v1.3.1: the projects list is org-scoped, so it must not survive a switch.
-    clearProjectsCache();
     // v1.3.4: so is the chat list, and the scanned message text even more so —
     // searching one account and getting another account's chats back would be
-    // a genuine privacy failure, not just a stale cache.
-    clearConvosCache();
-    // v1.3.6: chat sizes are per-conversation, and conversations are per-org.
-    clearChatTokensCache();
+    // a genuine privacy failure, not just a stale cache. v1.3.6: chat sizes are
+    // per-conversation, and conversations are per-org. v1.5.4: this event can
+    // come from any cookie jar, so every jar's caches are dropped.
+    clearAllCtxCaches();
+    ORG_BY_CTX.clear();   // v1.5.4: re-read which account each window is on
     if (cookieSwitchTimer) clearTimeout(cookieSwitchTimer);
     cookieSwitchTimer = setTimeout(() => {
       cookieSwitchTimer = null;
-      pollUsage();
+      pollAll();
     }, 500);
   });
 }
 
 chrome.alarms.onAlarm.addListener((alarm) => {
-  if (alarm.name === POLL_ALARM) pollUsage();
+  if (alarm.name === POLL_ALARM) pollAll();
 });
 // ██ TEST BUILD — REVERT PROMPT_TEST to false before store packaging ██
 // Wipes the rating / share / support prompt state on every install, update or
@@ -1886,7 +2153,7 @@ chrome.runtime.onInstalled.addListener(async (details) => {
     } catch (_) {}
   }
   await rescheduleAlarm();
-  pollUsage();
+  pollAll();
 });
 // v1.4.7: uninstall feedback page. The browser opens it right after removal;
 // it gets version, browser and days installed so feedback can be read in
@@ -1914,7 +2181,7 @@ setUninstallPage();
 chrome.runtime.onStartup.addListener(async () => {
   try { await chrome.action.setBadgeText({ text: "" }); } catch (_) {}
   await rescheduleAlarm();
-  pollUsage();
+  pollAll();
 });
 
 // ---------- projects list (v1.3.1) ----------
@@ -1967,7 +2234,7 @@ function normalizeProjects(data) {
 }
 
 async function fetchProjectsFor(orgId) {
-  return fetch(`https://claude.ai/api/organizations/${orgId}/projects`, {
+  return ctxFetch(`https://claude.ai/api/organizations/${orgId}/projects`, {
     credentials: "include",
     headers: { accept: "application/json", "X-Organization-UUID": orgId }
   });
@@ -2076,7 +2343,7 @@ const BODY_TEXT_CAP = 40000;        // chars kept per conversation
 const SCAN_CONCURRENCY = 3;         // parallel conversation fetches
 
 let convosCache = null;             // { orgId, list, at }
-const bodyCache = new Map();        // uuid -> { text, at }
+let bodyCache = new Map();        // uuid -> { text, at }
 
 function clearConvosCache() {
   convosCache = null;
@@ -2130,7 +2397,7 @@ function fetchConvosPage(orgId, offset, limit) {
   const url =
     `https://claude.ai/api/organizations/${orgId}/chat_conversations` +
     `?limit=${limit}&offset=${offset}`;
-  return fetch(url, {
+  return ctxFetch(url, {
     credentials: "include",
     headers: { accept: "application/json", "X-Organization-UUID": orgId }
   });
@@ -2289,7 +2556,7 @@ async function conversationText(orgId, uuid) {
     `?tree=True&rendering_mode=messages&render_all_tools=false`;
   let resp;
   try {
-    resp = await fetch(url, {
+    resp = await ctxFetch(url, {
       credentials: "include",
       headers: { accept: "application/json", "X-Organization-UUID": orgId }
     });
@@ -2411,7 +2678,7 @@ const IMAGE_TOKENS = 1600;     // Anthropic's ceiling for a resized image (~1.15
 const PDF_PAGE_TOKENS = 1500;  // text + page image, rough middle of the published range
 const ROOT_PARENT = "00000000-0000-4000-8000-000000000000";
 
-const chatTokensCache = new Map();   // uuid -> { orgId, result, at }
+let chatTokensCache = new Map();   // uuid -> { orgId, result, at }
 
 function clearChatTokensCache() { chatTokensCache.clear(); }
 
@@ -2545,7 +2812,7 @@ function measureConversation(data) {
 }
 
 async function fetchConversationFor(orgId, uuid) {
-  return fetch(
+  return ctxFetch(
     `https://claude.ai/api/organizations/${orgId}/chat_conversations/${uuid}` +
     `?tree=True&rendering_mode=messages&render_all_tools=true`,
     { credentials: "include", headers: { accept: "application/json", "X-Organization-UUID": orgId } }
@@ -2591,7 +2858,7 @@ async function loadChatTokens(uuid, force) {
 
 // ---------- message router ----------
 
-chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+function handleMessage(msg, _sender, sendResponse) {
   if (!msg || !msg.type) return;
 
   if (msg.type === "get-state") {
@@ -2640,6 +2907,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       const usage = await getUsage();
       await maybeNotify(usage);
       await updateBadge(usage, next);   // v1.5.0: badge on/off applies at once
+      refreshOtherBadges(next, CTX);    // v1.5.4: ...in the other jars too
       sendResponse({ ok: true });
     })();
     return true;
@@ -2697,7 +2965,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
 
   if (msg.type === "force-refresh") {
-    (async () => { await pollUsage(); sendResponse({ ok: true }); })();
+    (async () => { await pollUsage(); sendResponse({ ok: true }); })();   // runs inside inCtx (see wrapper)
     return true;
   }
 
@@ -2780,10 +3048,36 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       clearProjectsCache();
       clearConvosCache();
       clearChatTokensCache();
-      try { await chrome.action.setBadgeText({ text: "" }); } catch (_) {}
-      pollUsage();
+      if (CTX === "default") { try { await chrome.action.setBadgeText({ text: "" }); } catch (_) {} }
+      pollCtx(CTX);
       sendResponse({ ok: true });
     })();
     return true;
   }
+}
+
+// v1.5.4: every message is handled inside the cookie jar it came from: the
+// sender's tab, or msg.tabId for the popup (which has no sender tab).
+const CTX_FREE_MESSAGES = new Set(["test-notification", "open-review", "open-options", "keepalive"]);
+async function ctxForMessage(msg, sender) {
+  if (sender && sender.tab) return ctxOfTab(sender.tab);
+  if (msg && typeof msg.tabId === "number") {
+    try { return ctxOfTab(await chrome.tabs.get(msg.tabId)); } catch (_) {}
+  }
+  return "default";
+}
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (!msg || !msg.type) return;
+  if (CTX_FREE_MESSAGES.has(msg.type)) return handleMessage(msg, sender, sendResponse);
+  (async () => {
+    const ctx = await ctxForMessage(msg, sender);
+    await inCtx(ctx, () => new Promise((resolve) => {
+      let replied = false;
+      const reply = (v) => { replied = true; try { sendResponse(v); } catch (_) {} resolve(); };
+      let ret;
+      try { ret = handleMessage(msg, sender, reply); } catch (_) { ret = undefined; }
+      if (ret !== true) { if (!replied) { try { sendResponse(); } catch (_) {} } resolve(); }
+    }));
+  })();
+  return true;
 });
