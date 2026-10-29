@@ -1,4 +1,12 @@
-// options.js (v1.4)
+// options.js (v1.6)
+// - v1.4.7: Extra usage card — `stripFields.extra` (show/hide the spend
+//   segment, E chip and popup card) and `extraAlerts`.
+// - v1.3.1: `projectsButton` toggle for the Projects button injected into
+//   claude.ai's composer. It writes into Claude's own UI rather than our strip,
+//   so it gets an explicit off switch even though it's on by default.
+// - v1.2.17: `forecastAlerts` toggle. Separate from the threshold notifications
+//   because it answers a different question ("will I run out early?" vs "have I
+//   crossed 75%?"), and some people want the milestones without the projection.
 
 const SCOPES = ["session", "weekly"];
 
@@ -6,6 +14,17 @@ let state = {
   sessionThresholds: [],
   weeklyThresholds:  [],
   notificationsEnabled: true,
+  // v1.2.17: the one-shot "on pace to hit your session limit in ~N minutes"
+  // heads-up. Separate from the threshold notifications because it answers a
+  // different question, and some people want the milestones without the
+  // projection (or the other way round).
+  forecastAlerts: true,
+  projectsButton: true,
+  chatSearch: true,
+  extraShow: true,
+  toolbarBadge: true,
+  tipsEnabled: true,
+  extraAlerts: true,
   pollMinutes: 1
 };
 
@@ -14,8 +33,22 @@ async function load() {
   state.sessionThresholds = settings.sessionThresholds || [];
   state.weeklyThresholds  = settings.weeklyThresholds  || [];
   state.notificationsEnabled = settings.notificationsEnabled !== false;
+  state.forecastAlerts = settings.forecastAlerts !== false;
+  state.projectsButton = settings.projectsButton !== false;
+  state.chatSearch = settings.chatSearch !== false;
+  state.extraShow = !(settings.stripFields && settings.stripFields.extra === false);
+  state.extraAlerts = settings.extraAlerts !== false;
+  state.toolbarBadge = settings.toolbarBadge !== false;
+  document.getElementById("toolbar-badge").checked = state.toolbarBadge;
+  state.tipsEnabled = settings.tipsEnabled !== false;
+  document.getElementById("tips-enabled").checked = state.tipsEnabled;
   state.pollMinutes = settings.pollMinutes || 1;
+  document.getElementById("extra-show").checked = state.extraShow;
+  document.getElementById("extra-alerts").checked = state.extraAlerts;
   document.getElementById("notifications-enabled").checked = state.notificationsEnabled;
+  document.getElementById("forecast-alerts").checked = state.forecastAlerts;
+  document.getElementById("projects-button").checked = state.projectsButton;
+  document.getElementById("chat-search").checked = state.chatSearch;
   document.getElementById("poll-minutes").value = state.pollMinutes;
   renderAll();
 }
@@ -58,6 +91,13 @@ function addThreshold(scope) {
 
 async function save() {
   state.notificationsEnabled = document.getElementById("notifications-enabled").checked;
+  state.forecastAlerts = document.getElementById("forecast-alerts").checked;
+  state.projectsButton = document.getElementById("projects-button").checked;
+  state.chatSearch = document.getElementById("chat-search").checked;
+  state.extraShow = document.getElementById("extra-show").checked;
+  state.extraAlerts = document.getElementById("extra-alerts").checked;
+  state.toolbarBadge = document.getElementById("toolbar-badge").checked;
+  state.tipsEnabled = document.getElementById("tips-enabled").checked;
   const pm = parseInt(document.getElementById("poll-minutes").value, 10);
   state.pollMinutes = isNaN(pm) ? 1 : Math.max(1, Math.min(60, pm));
   document.getElementById("poll-minutes").value = state.pollMinutes;
@@ -67,6 +107,15 @@ async function save() {
       sessionThresholds: state.sessionThresholds,
       weeklyThresholds:  state.weeklyThresholds,
       notificationsEnabled: state.notificationsEnabled,
+      forecastAlerts: state.forecastAlerts,
+      projectsButton: state.projectsButton,
+      chatSearch: state.chatSearch,
+      extraAlerts: state.extraAlerts,
+      toolbarBadge: state.toolbarBadge,
+      tipsEnabled: state.tipsEnabled,
+      // Merged into the stored stripFields by background (save-settings), so
+      // only this one key changes.
+      stripFields: { extra: state.extraShow },
       pollMinutes: state.pollMinutes
     }
   });

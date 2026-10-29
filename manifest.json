@@ -1,12 +1,13 @@
 {
   "manifest_version": 3,
   "name": "Claude Usage Meter",
-  "version": "1.0.9",
-  "description": "Display how much Claude.ai usage you've used and when it resets, above the Claude chat box.",
+  "version": "1.5.4",
+  "description": "Real time Claude usage tracker. See your session, weekly and Fable limits, reset times, just above the Claude.ai chatbox.",
   "permissions": [
     "storage",
     "alarms",
     "notifications",
+    "cookies",
     "tabs"
   ],
   "host_permissions": [
@@ -20,6 +21,10 @@
     "default_title": "Claude Usage Meter",
     "default_icon": {
       "16": "icons/icon16.png",
+      "19": "icons/icon19.png",
+      "24": "icons/icon24.png",
+      "32": "icons/icon32.png",
+      "38": "icons/icon38.png",
       "48": "icons/icon48.png",
       "128": "icons/icon128.png"
     }
@@ -27,27 +32,49 @@
   "options_page": "options/options.html",
   "icons": {
     "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
     "48": "icons/icon48.png",
     "128": "icons/icon128.png"
   },
   "content_scripts": [
     {
-      "matches": ["https://claude.ai/*"],
-      "js": ["content-script.js"],
-      "css": ["overlay.css"],
+      "matches": [
+        "https://claude.ai/*"
+      ],
+      "js": [
+        "content-script.js"
+      ],
+      "css": [
+        "overlay.css"
+      ],
       "run_at": "document_idle"
     },
     {
-      "matches": ["https://claude.ai/*"],
-      "js": ["page-injector.js"],
+      "matches": [
+        "https://claude.ai/*"
+      ],
+      "js": [
+        "page-injector.js"
+      ],
       "run_at": "document_start",
       "world": "MAIN"
     }
   ],
   "web_accessible_resources": [
     {
-      "resources": ["icons/icon16.png", "icons/icon48.png", "icons/icon128.png", "icons/icon-strip.png"],
-      "matches": ["https://claude.ai/*"]
+      "resources": [
+        "icons/icon16.png",
+        "icons/icon48.png",
+        "icons/icon128.png",
+        "icons/usage-meter-logo.svg",
+        "icons/tools/*.png",
+        "fonts/*.woff2",
+        "icons/chatgpt-usage-meter-logo.svg",
+        "icons/gemini-usage-meter-logo.svg"
+      ],
+      "matches": [
+        "https://claude.ai/*"
+      ]
     }
   ]
 }

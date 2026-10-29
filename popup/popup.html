@@ -4,6 +4,7 @@
   <meta charset="UTF-8" />
   <title>Claude Usage</title>
   <link rel="stylesheet" href="popup.css" />
+  <link rel="stylesheet" href="tools.css" />
 </head>
 <body>
   <header class="hdr">
@@ -24,11 +25,17 @@
   <main>
     <div id="error-banner" class="error-banner hidden"></div>
 
-    <button id="show-strip-btn" class="btn-strip-cta">
-      <span class="btn-strip-cta-glow"></span>
-      <svg class="btn-strip-cta-ic" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="9" x2="21" y2="9"></line><rect x="3" y="4" width="18" height="16" rx="2"></rect></svg>
-      <span class="btn-strip-cta-txt">Show Usage Strip above Chat</span>
-    </button>
+    <!-- v1.4.4: a real on/off switch replaces the pink/green CTA button. -->
+    <div class="strip-toggle-row" id="strip-toggle-row">
+      <div class="strip-toggle-text">
+        <label class="strip-toggle-lbl" for="show-strip-toggle">Show Usage Strip above Chat</label>
+        <div class="strip-toggle-sub" id="strip-toggle-sub">&nbsp;</div>
+      </div>
+      <label class="switch" title="Show or hide the usage strip on claude.ai">
+        <input type="checkbox" id="show-strip-toggle" role="switch" aria-describedby="strip-toggle-sub" />
+        <span class="switch-track"><span class="switch-thumb"></span></span>
+      </label>
+    </div>
 
     <section class="card" id="session-card">
       <div class="row">
@@ -37,6 +44,7 @@
       </div>
       <div class="bar"><div class="bar-fill" id="session-fill"></div></div>
       <div class="sub" id="session-sub">Fetching…</div>
+      <div class="fc" id="session-fc"></div>
     </section>
 
     <section class="card" id="weekly-card">
@@ -46,6 +54,18 @@
       </div>
       <div class="bar"><div class="bar-fill" id="weekly-fill"></div></div>
       <div class="sub" id="weekly-sub">Fetching…</div>
+      <div class="fc" id="weekly-fc"></div>
+    </section>
+
+    <!-- v1.4.7: extra usage (overage credits). Hidden unless the account has
+         extra usage switched on. -->
+    <section class="card hidden" id="extra-card">
+      <div class="row">
+        <span class="lbl">Extra usage · monthly</span>
+        <span class="pct" id="extra-pct">—</span>
+      </div>
+      <div class="bar" id="extra-bar"><div class="bar-fill" id="extra-fill"></div></div>
+      <div class="sub" id="extra-sub">—</div>
     </section>
 
     <div id="msgs-left" class="msgs-left hidden">
@@ -55,6 +75,95 @@
 
     <div id="empty-hint" class="empty-hint hidden">
       Sign in to <strong>claude.ai</strong> in this browser. Click the refresh icon to retry.
+    </div>
+
+    <!-- v1.2.9: shown INSTEAD of the sign-in hint when Claude reports no usage
+         for this account. Telling a Free user to "sign in" when they already are
+         blames them for a change Anthropic made. -->
+    <div id="unmetered-hint" class="empty-hint hidden">
+      <strong>Send your first message on claude.ai.</strong><br>
+      On the Free plan, Claude only reports your usage inside its replies, so the
+      meter fills in after your first message and updates with every message
+      after that.<br><br>
+      On <strong>Pro, Max and Team</strong> your usage shows straight away.
+    </div>
+
+    <button id="fields-toggle" class="fields-toggle" aria-expanded="false" aria-controls="fields-panel">
+      <svg class="fields-toggle-ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="21" x2="4" y2="14"></line><line x1="4" y1="10" x2="4" y2="3"></line><line x1="12" y1="21" x2="12" y2="12"></line><line x1="12" y1="8" x2="12" y2="3"></line><line x1="20" y1="21" x2="20" y2="16"></line><line x1="20" y1="12" x2="20" y2="3"></line><line x1="1" y1="14" x2="7" y2="14"></line><line x1="9" y1="8" x2="15" y2="8"></line><line x1="17" y1="16" x2="23" y2="16"></line></svg>
+      <span class="fields-toggle-txt">Show in strip</span>
+      <svg class="fields-toggle-chev" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+    </button>
+
+    <div id="fields-panel" class="fields-panel hidden">
+      <div class="fields-hint">Pick what appears in the strip above the chat box.</div>
+      <label class="field-row">
+        <input type="checkbox" id="field-session" data-field="session" />
+        <span class="field-txt">Session <span class="field-key">S</span></span>
+      </label>
+      <label class="field-row">
+        <input type="checkbox" id="field-weekly" data-field="weekly" />
+        <span class="field-txt">Weekly <span class="field-key">W</span></span>
+      </label>
+      <label class="field-row" id="field-fable-row">
+        <input type="checkbox" id="field-fable" data-field="fable" />
+        <span class="field-txt">Fable <span class="field-key">F</span></span>
+        <span class="field-note hidden" id="field-fable-note">not reported yet</span>
+      </label>
+      <label class="field-row" id="field-extra-row">
+        <input type="checkbox" id="field-extra" data-field="extra" />
+        <span class="field-txt">Extra usage <span class="field-key">E</span></span>
+        <span class="field-info" tabindex="0" role="note" aria-label="When does this show?">i<span class="field-tip"><b>Appears only if Extra usage is turned on for your account.</b><br>&bull; Pro / Max: you turn it on in Claude &rsaquo; Settings &rsaquo; Usage.<br>&bull; Team / Enterprise: your admin turns it on.<br>Then it shows how much you&rsquo;ve spent beyond your plan limit this month.</span></span>
+        <span class="field-note hidden" id="field-extra-note">not enabled on this account</span>
+      </label>
+      <div class="fields-sep"></div>
+      <label class="field-row">
+        <input type="checkbox" id="field-resetTimeSession" data-field="resetTimeSession" />
+        <span class="field-txt">Session reset time</span>
+      </label>
+      <label class="field-row">
+        <input type="checkbox" id="field-resetTimeWeekly" data-field="resetTimeWeekly" />
+        <span class="field-txt">Weekly reset time</span>
+      </label>
+      <label class="field-row">
+        <input type="checkbox" id="field-usageBars" data-field="usageBars" />
+        <span class="field-txt">Usage bars</span>
+      </label>
+      <label class="field-row">
+        <input type="checkbox" id="field-forecast" data-field="forecast" />
+        <span class="field-txt">Limit forecast</span>
+        <span class="field-info" tabindex="0" role="note" aria-label="When does this show?">i<span class="field-tip">Appears next to Session only when you&rsquo;re on pace to hit your limit before it resets (e.g. &ldquo;~1h 20m left&rdquo;). It needs about 12 minutes of usage to measure your pace, so while you&rsquo;re on track it stays hidden.</span></span>
+      </label>
+      <label class="field-row">
+        <input type="checkbox" id="field-chatTokens" data-field="chatTokens" />
+        <span class="field-txt">Chat tokens</span>
+      </label>
+      <div class="fields-sep"></div>
+      <div class="fields-hint">In Claude&rsquo;s chat box</div>
+      <label class="field-row">
+        <input type="checkbox" id="field-projectsButton" data-setting="projectsButton" />
+        <span class="field-txt">Projects button</span>
+      </label>
+      <div class="fields-hint">In Claude&rsquo;s sidebar</div>
+      <label class="field-row">
+        <input type="checkbox" id="field-chatSearch" data-setting="chatSearch" />
+        <span class="field-txt">Chat history search</span>
+      </label>
+      <div class="fields-hint">Alerts</div>
+      <label class="field-row">
+        <input type="checkbox" id="field-notificationsEnabled" data-setting="notificationsEnabled" />
+        <span class="field-txt">Desktop notifications</span>
+      </label>
+      <div class="fields-hint">Toolbar icon</div>
+      <label class="field-row">
+        <input type="checkbox" id="field-toolbarBadge" data-setting="toolbarBadge" />
+        <span class="field-txt">Session % on the icon</span>
+      </label>
+      <div class="fields-hint">Pop-up cards</div>
+      <label class="field-row">
+        <input type="checkbox" id="field-tipsEnabled" data-setting="tipsEnabled" />
+        <span class="field-txt">Tips &amp; requests</span>
+      </label>
+      <div class="fields-foot" id="fields-foot">Keep at least one meter on.</div>
     </div>
 
     <div id="test-result" class="test-result hidden"></div>
@@ -68,6 +177,58 @@
       <span class="btn-rate-star">⭐️</span>
       <span>Rate us</span>
     </button>
+    <button id="share-btn" class="btn-share" aria-expanded="false">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5" r="3"></circle><circle cx="6" cy="12" r="3"></circle><circle cx="18" cy="19" r="3"></circle><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"></line><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"></line></svg>
+      <span>Share with friends</span>
+    </button>
+    <div id="share-panel" class="share-panel hidden">
+      <div class="share-title">Share this extension</div>
+      <div class="share-btns">
+        <button class="share-net" data-net="linkedin" title="Share on LinkedIn" aria-label="Share on LinkedIn">
+          <svg viewBox="0 0 382 382" width="20" height="20"><path fill="#0077B7" d="M347.445,0H34.555C15.471,0,0,15.471,0,34.555v312.889C0,366.529,15.471,382,34.555,382h312.889 C366.529,382,382,366.529,382,347.444V34.555C382,15.471,366.529,0,347.445,0z M118.207,329.844c0,5.554-4.502,10.056-10.056,10.056 H65.345c-5.554,0-10.056-4.502-10.056-10.056V150.403c0-5.554,4.502-10.056,10.056-10.056h42.806 c5.554,0,10.056,4.502,10.056,10.056V329.844z M86.748,123.432c-22.459,0-40.666-18.207-40.666-40.666S64.289,42.1,86.748,42.1 s40.666,18.207,40.666,40.666S109.208,123.432,86.748,123.432z M341.91,330.654c0,5.106-4.14,9.246-9.246,9.246H286.73 c-5.106,0-9.246-4.14-9.246-9.246v-84.168c0-12.556,3.683-55.021-32.813-55.021c-28.309,0-34.051,29.066-35.204,42.11v97.079 c0,5.106-4.139,9.246-9.246,9.246h-44.426c-5.106,0-9.246-4.14-9.246-9.246V149.593c0-5.106,4.14-9.246,9.246-9.246h44.426 c5.106,0,9.246,4.14,9.246,9.246v15.655c10.497-15.753,26.097-27.912,59.312-27.912c73.552,0,73.131,68.716,73.131,106.472 L341.91,330.654L341.91,330.654z"/></svg>
+        </button>
+        <button class="share-net" data-net="x" title="Share on X" aria-label="Share on X">
+          <svg viewBox="0 0 24 24" width="20" height="20"><rect width="24" height="24" rx="5" fill="#000"/><path transform="translate(4.8 4.8) scale(0.6)" fill="#fff" d="M18.901 1.153h3.68l-8.04 9.19L24 22.846h-7.406l-5.8 -7.584 -6.638 7.584H0.474l8.6 -9.83L0 1.154h7.594l5.243 6.932ZM17.61 20.644h2.039L6.486 3.24H4.298Z"/></svg>
+        </button>
+        <button class="share-net" data-net="whatsapp" title="Share on WhatsApp" aria-label="Share on WhatsApp">
+          <svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="20.0 19.1 581.6 581.6" width="20" height="20"><defs><linearGradient x1=".5" y1="0" x2=".5" y2="1" id="pwa-a"><stop stop-color="#20B038" offset="0%"/><stop stop-color="#60D66A" offset="100%"/></linearGradient><linearGradient x1=".5" y1="0" x2=".5" y2="1" id="pwa-b"><stop stop-color="#F9F9F9" offset="0%"/><stop stop-color="#FFF" offset="100%"/></linearGradient><linearGradient xlink:href="#pwa-a" id="pwa-f" x1="270.265" y1="1.184" x2="270.265" y2="541.56" gradientTransform="scale(.99775 1.00225)" gradientUnits="userSpaceOnUse"/><linearGradient xlink:href="#pwa-b" id="pwa-g" x1="279.952" y1=".811" x2="279.952" y2="560.571" gradientTransform="scale(.99777 1.00224)" gradientUnits="userSpaceOnUse"/><filter x="-.056" y="-.062" width="1.112" height="1.11" filterUnits="objectBoundingBox" id="pwa-c"><feGaussianBlur stdDeviation="2" in="SourceGraphic"/></filter><filter x="-.082" y="-.088" width="1.164" height="1.162" filterUnits="objectBoundingBox" id="pwa-d"><feOffset dy="-4" in="SourceAlpha" result="shadowOffsetOuter1"/><feGaussianBlur stdDeviation="12.5" in="shadowOffsetOuter1" result="shadowBlurOuter1"/><feComposite in="shadowBlurOuter1" in2="SourceAlpha" operator="out" result="shadowBlurOuter1"/><feColorMatrix values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0.21 0" in="shadowBlurOuter1"/></filter><path d="M576.337 707.516c-.018-49.17 12.795-97.167 37.15-139.475L574 423.48l147.548 38.792c40.652-22.23 86.423-33.944 133.002-33.962h.12c153.395 0 278.265 125.166 278.33 278.98.025 74.548-28.9 144.642-81.446 197.373C999 957.393 929.12 986.447 854.67 986.48c-153.42 0-278.272-125.146-278.333-278.964z" id="pwa-e"/></defs><g fill="none" fill-rule="evenodd"><g transform="matrix(1 0 0 -1 -542.696 1013.504)" fill="#000" fill-rule="nonzero" filter="url(#pwa-c)"><use filter="url(#pwa-d)" xlink:href="#pwa-e" width="100%" height="100%"/><use fill-opacity=".2" xlink:href="#pwa-e" width="100%" height="100%"/></g><path transform="matrix(1 0 0 -1 41.304 577.504)" fill-rule="nonzero" fill="url(#pwa-f)" d="M2.325 274.421c-.014-47.29 12.342-93.466 35.839-134.166L.077 1.187l142.314 37.316C181.6 17.133 225.745 5.856 270.673 5.84h.12c147.95 0 268.386 120.396 268.447 268.372.03 71.707-27.87 139.132-78.559 189.858-50.68 50.726-118.084 78.676-189.898 78.708-147.968 0-268.398-120.386-268.458-268.358"/><path transform="matrix(1 0 0 -1 31.637 586.837)" fill-rule="nonzero" fill="url(#pwa-g)" d="M2.407 283.847c-.018-48.996 12.784-96.824 37.117-138.983L.072.814l147.419 38.654c40.616-22.15 86.346-33.824 132.885-33.841h.12c153.26 0 278.02 124.724 278.085 277.994.026 74.286-28.874 144.132-81.374 196.678-52.507 52.544-122.326 81.494-196.711 81.528-153.285 0-278.028-124.704-278.09-277.98zm87.789-131.724l-5.503 8.74C61.555 197.653 49.34 240.17 49.36 283.828c.049 127.399 103.73 231.044 231.224 231.044 61.74-.025 119.765-24.09 163.409-67.763 43.639-43.67 67.653-101.726 67.635-163.469-.054-127.403-103.739-231.063-231.131-231.063h-.09c-41.482.022-82.162 11.159-117.642 32.214l-8.444 5.004L66.84 66.86z"/><path d="M242.63 186.78c-5.205-11.57-10.684-11.803-15.636-12.006-4.05-.173-8.687-.162-13.316-.162-4.632 0-12.161 1.74-18.527 8.693-6.37 6.953-24.322 23.761-24.322 57.947 0 34.19 24.901 67.222 28.372 71.862 3.474 4.634 48.07 77.028 118.694 104.88 58.696 23.146 70.64 18.542 83.38 17.384 12.74-1.158 41.11-16.805 46.9-33.03 5.791-16.223 5.791-30.128 4.054-33.035-1.738-2.896-6.37-4.633-13.319-8.108-6.95-3.475-41.11-20.287-47.48-22.603-6.37-2.316-11.003-3.474-15.635 3.482-4.633 6.95-17.94 22.596-21.996 27.23-4.053 4.643-8.106 5.222-15.056 1.747-6.949-3.485-29.328-10.815-55.876-34.485-20.656-18.416-34.6-41.16-38.656-48.116-4.053-6.95-.433-10.714 3.052-14.178 3.12-3.113 6.95-8.11 10.424-12.168 3.467-4.057 4.626-6.953 6.942-11.586 2.316-4.64 1.158-8.698-.579-12.172-1.737-3.475-15.241-37.838-21.42-51.576" fill="#FFF"/></g></svg>
+        </button>
+        <button class="share-net" data-net="reddit" title="Share on Reddit" aria-label="Share on Reddit">
+          <svg viewBox="0 0 24 24" width="20" height="20"><rect width="24" height="24" rx="5" fill="#FF4500"/><ellipse cx="12" cy="14.2" rx="7.2" ry="5" fill="#fff"/><circle cx="4.6" cy="12.4" r="1.9" fill="#fff"/><circle cx="19.4" cy="12.4" r="1.9" fill="#fff"/><circle cx="17.6" cy="4.8" r="1.5" fill="#fff"/><path d="M12 9.6l1.1-4.6 3.4.8" stroke="#fff" stroke-width="1" fill="none" stroke-linecap="round"/><circle cx="9.3" cy="13.4" r="1.2" fill="#FF4500"/><circle cx="14.7" cy="13.4" r="1.2" fill="#FF4500"/><path d="M9.4 16.4c1.6 1.2 3.6 1.2 5.2 0" stroke="#FF4500" stroke-width="1" fill="none" stroke-linecap="round"/></svg>
+        </button>
+        <button class="share-net" data-net="facebook" title="Share on Facebook" aria-label="Share on Facebook">
+          <svg viewBox="0 0 16 16" width="20" height="20"><path fill="#1877F2" d="M15 8a7 7 0 0 0-7-7 7 7 0 0 0-1.094 13.915v-4.892H5.13V8h1.777V6.458c0-1.754 1.045-2.724 2.644-2.724.766 0 1.567.137 1.567.137v1.723h-.883c-.87 0-1.14.54-1.14 1.093V8h1.941l-.31 2.023H9.094v4.892A7 7 0 0 0 15 8"/><path fill="#fff" d="M10.725 10.023 11.035 8H9.094V6.687c0-.553.27-1.093 1.14-1.093h.883V3.87s-.801-.137-1.567-.137c-1.6 0-2.644.97-2.644 2.724V8H5.13v2.023h1.777v4.892a7 7 0 0 0 2.188 0v-4.892z"/></svg>
+        </button>
+      </div>
+      <div class="share-copy">
+        <span class="share-url" id="share-url"></span>
+        <button id="share-copy-btn" class="share-copy-btn">Copy</button>
+      </div>
+    </div>
+    <!-- v1.3.2: the full SelectorsHub catalogue lives here rather than in
+         claude.ai's sidebar. Cards are built in popup.js from one array so the
+         list has a single place to change. -->
+    <div id="sh-tools">
+      <button id="sh-tools-toggle" type="button" aria-expanded="false" aria-controls="sh-tools-grid">
+        <span class="sh-t-ico">
+          <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="5" r="1.9"/><circle cx="12" cy="5" r="1.9"/><circle cx="19" cy="5" r="1.9"/><circle cx="5" cy="12" r="1.9"/><circle cx="12" cy="12" r="1.9"/><circle cx="19" cy="12" r="1.9"/><circle cx="5" cy="19" r="1.9"/><circle cx="12" cy="19" r="1.9"/><circle cx="19" cy="19" r="1.9"/></svg>
+        </span>
+        <span class="sh-t-txt">More tools by SelectorsHub</span>
+        <span class="sh-t-chev">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg>
+        </span>
+      </button>
+      <div id="sh-tools-grid"></div>
+      <a id="sh-tools-all" target="_blank" rel="noopener noreferrer">See all tools →</a>
+    </div>
+
+    <!-- v1.3.9: Stripe pay-what-you-want. Passive, opt-in; never pulses. -->
+    <a href="https://buy.stripe.com/bJefZi0yR5Gh41pfzS0kE1a?utm_source=claude-usage-meter&amp;utm_medium=popup&amp;utm_campaign=support"
+       target="_blank" rel="noopener noreferrer" id="donate-btn" class="btn-donate"
+       title="Pay what you want. The meter stays free, and nothing is locked.">
+      <span class="btn-donate-icon">❤️</span>
+      <span>Donate to support this project</span>
+    </a>
     <div class="updated" id="updated"></div>
   </main>
 

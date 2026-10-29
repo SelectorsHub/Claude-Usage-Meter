@@ -101,7 +101,66 @@ html, body {
 
 main { padding: 12px; }
 
-/* ── Prominent "Show Usage Strip" CTA ── */
+/* ── v1.4.4: "Show Usage Strip" on/off switch ── */
+.strip-toggle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  background: var(--bg-elev);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  transition: border-color 0.15s;
+}
+.strip-toggle-row.is-on { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
+.strip-toggle-text { min-width: 0; }
+.strip-toggle-lbl {
+  display: block;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+  cursor: pointer;
+}
+.strip-toggle-sub {
+  margin-top: 3px;
+  font-size: 11px;
+  color: var(--text-mute);
+  line-height: 1.35;
+}
+.strip-toggle-sub a { color: var(--accent); text-decoration: none; font-weight: 600; }
+.strip-toggle-sub a:hover { text-decoration: underline; }
+
+.switch { position: relative; flex-shrink: 0; width: 40px; height: 22px; cursor: pointer; }
+.switch input {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  margin: 0; opacity: 0; cursor: pointer;
+}
+.switch-track {
+  position: absolute; inset: 0;
+  background: var(--bg-elev-2);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  transition: background 0.18s, border-color 0.18s;
+  pointer-events: none;
+}
+.switch-thumb {
+  position: absolute; top: 2px; left: 2px;
+  width: 16px; height: 16px;
+  background: var(--text-dim);
+  border-radius: 50%;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+  transition: transform 0.18s ease, background 0.18s;
+}
+.switch input:checked + .switch-track { background: var(--accent); border-color: var(--accent); }
+.switch input:checked + .switch-track .switch-thumb { transform: translateX(18px); background: #fff; }
+.switch input:focus-visible + .switch-track { outline: 2px solid var(--accent); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) {
+  .switch-track, .switch-thumb { transition: none; }
+}
+
+/* ── Prominent "Show Usage Strip" CTA (pre-1.4.4, no longer in the popup) ── */
 .btn-strip-cta {
   position: relative;
   display: flex;
@@ -178,11 +237,13 @@ main { padding: 12px; }
 
 .card {
   background: var(--bg-elev);
-  border: 1px solid var(--line);
+  border: 1px solid color-mix(in srgb, var(--accent) 38%, var(--line));
   border-radius: 8px;
-  padding: 12px 14px;
-  margin-bottom: 10px;
+  padding: 8px 12px;
+  margin-bottom: 8px;
 }
+
+.card .row { margin-bottom: 5px; }
 
 .card.hidden { display: none; }
 
@@ -229,10 +290,115 @@ main { padding: 12px; }
 .bar-fill.red    { background: var(--red); }
 
 .sub {
-  margin-top: 8px;
+  margin-top: 5px;
   font-size: 11px;
   color: var(--text-mute);
   font-variant-numeric: tabular-nums;
+}
+
+/* v1.2.17: the projected-pace line under each meter. Sits below .sub (which
+   states the measured reset time) and stays quiet by default — it only takes
+   on colour when the projection says the quota runs out before it resets. */
+.fc {
+  margin-top: 3px;
+  font-size: 11px;
+  color: var(--text-mute);
+  font-variant-numeric: tabular-nums;
+}
+.fc:empty { display: none; }
+.fc.warn   { color: #f59e0b; font-weight: 600; }
+.fc.danger { color: #ef4444; font-weight: 600; }
+
+/* ---- Share panel ---- */
+.share-panel {
+  background: var(--bg-elev);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-bottom: 10px;
+}
+
+.share-panel.hidden { display: none; }
+
+.share-title {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  margin-bottom: 8px;
+}
+
+.share-btns {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.share-net {
+  appearance: none;
+  border: none;
+  padding: 0;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  transition: transform 0.12s;
+}
+
+.share-net svg {
+  width: 28px;
+  height: 28px;
+  display: block;
+}
+
+.share-net:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+}
+
+.share-copy {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--bg-elev-2);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 6px 8px;
+}
+
+.share-url {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.share-copy-btn {
+  appearance: none;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 10px;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background 0.12s;
+  flex-shrink: 0;
+}
+
+.share-copy-btn:hover {
+  background: var(--accent-soft);
 }
 
 .error-banner {
@@ -379,3 +545,245 @@ footer { display: flex; gap: 8px; margin-top: 14px; }
 .btn-rate .btn-rate-star { font-size: 13px; line-height: 1; }
 
 .btn-rate.hidden { display: none; }
+
+/* ── Support/Donate button ── */
+.btn-donate {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  width: 100%;
+  margin: 8px 0 0;
+  padding: 9px 12px;
+  border: 1px solid rgba(217, 119, 87, 0.40);
+  border-radius: 7px;
+  background: rgba(217, 119, 87, 0.10);
+  color: var(--accent);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  cursor: pointer;
+  text-decoration: none;
+  transition: background 0.15s, border-color 0.15s, transform 0.15s;
+}
+
+.btn-share {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  width: 100%;
+  margin: 8px 0 0;
+  padding: 9px 12px;
+  border: 1px solid rgba(96, 165, 250, 0.40);
+  border-radius: 7px;
+  background: rgba(96, 165, 250, 0.10);
+  color: #60a5fa;
+  font-family: var(--font-ui);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, transform 0.15s;
+}
+
+.btn-share:hover {
+  background: rgba(96, 165, 250, 0.18);
+  border-color: rgba(96, 165, 250, 0.60);
+  transform: translateY(-1px);
+}
+
+.btn-share:active { transform: translateY(0); }
+
+.btn-share svg { flex-shrink: 0; }
+
+/* When the panel is open, connect it visually to the button */
+.share-panel { margin-top: 8px; margin-bottom: 0; }
+
+.btn-donate:hover {
+  background: rgba(217, 119, 87, 0.18);
+  border-color: rgba(217, 119, 87, 0.60);
+  transform: translateY(-1px);
+}
+
+.btn-donate:active { transform: translateY(0); }
+
+.btn-donate .btn-donate-icon { font-size: 13px; line-height: 1; }
+
+/* ---------------------------------------------------------------------------
+   v1.2.7 — "Show in strip" field picker.
+   Collapsed by default (the popup's job is at-a-glance usage; this is a
+   settings affordance, not a primary surface). Mirrors the share-panel
+   pattern: a header button toggles a .hidden panel below it.
+--------------------------------------------------------------------------- */
+
+.fields-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 10px;
+  margin-bottom: 10px;
+  background: var(--bg-elev);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--text-dim);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s;
+}
+
+.fields-toggle:hover {
+  color: var(--text);
+  border-color: #3a3a42;
+}
+
+.fields-toggle-ic { flex-shrink: 0; opacity: 0.8; }
+.fields-toggle-txt { flex: 1; text-align: left; }
+
+.fields-toggle-chev {
+  flex-shrink: 0;
+  opacity: 0.7;
+  transition: transform 0.18s;
+}
+
+.fields-toggle[aria-expanded="true"] {
+  margin-bottom: 0;
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+  border-bottom-color: transparent;
+  color: var(--text);
+}
+
+.fields-toggle[aria-expanded="true"] .fields-toggle-chev {
+  transform: rotate(180deg);
+}
+
+.fields-panel {
+  background: var(--bg-elev);
+  border: 1px solid var(--line);
+  border-top: none;
+  border-radius: 0 0 8px 8px;
+  padding: 4px 12px 10px;
+  margin-bottom: 10px;
+}
+
+.fields-panel.hidden { display: none; }
+
+.fields-hint {
+  font-size: 11px;
+  color: var(--text-mute);
+  padding: 4px 0 8px;
+  line-height: 1.35;
+}
+
+.field-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 5px 0;
+  cursor: pointer;
+  font-size: 12.5px;
+}
+
+.field-row input[type="checkbox"] {
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  flex-shrink: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+/* The last enabled meter is locked on, so its row reads as deliberately
+   unavailable rather than broken. */
+.field-row input[type="checkbox"]:disabled { cursor: not-allowed; opacity: 0.75; }
+.field-row.locked { cursor: default; }
+.field-row.locked .field-txt { color: var(--text-dim); }
+
+.field-txt {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* The letter used for this meter in the collapsed pill — makes the mapping
+   between the checkbox and what you see in the strip explicit. */
+.field-key {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 3px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--bg-elev-2);
+  color: var(--text-mute);
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  font-weight: 600;
+}
+
+.field-note {
+  font-size: 10px;
+  color: var(--text-mute);
+  font-style: italic;
+}
+
+.field-note.hidden { display: none; }
+
+.fields-sep {
+  height: 1px;
+  background: var(--line);
+  margin: 7px 0;
+}
+
+.fields-foot {
+  font-size: 10.5px;
+  color: var(--text-mute);
+  padding-top: 7px;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.fields-foot.show { opacity: 1; color: var(--amber); }
+
+/* v1.4.7: "when does this show?" hints (Limit forecast, Extra usage). */
+.field-info {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border: 1px solid var(--text-mute);
+  border-radius: 50%;
+  color: var(--text-mute);
+  font: italic 700 9.5px/1 Georgia, "Times New Roman", serif;
+  cursor: help;
+  flex-shrink: 0;
+}
+.field-info:hover, .field-info:focus-visible { color: var(--text); border-color: var(--text); outline: none; }
+.field-tip {
+  display: none;
+  position: absolute;
+  right: -4px;
+  top: calc(100% + 7px);
+  z-index: 20;
+  width: 230px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--bg-elev-2);
+  color: var(--text);
+  border: 1px solid var(--line);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3);
+  font: 400 11.5px/1.45 var(--font-body, Inter, system-ui, sans-serif);
+  font-style: normal;
+  text-align: left;
+}
+.field-info:hover .field-tip, .field-info:focus-visible .field-tip { display: block; }

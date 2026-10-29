@@ -8,6 +8,11 @@
   font-variant-numeric: tabular-nums;
   color: inherit;
   pointer-events: auto;
+  /* v1.1.1: the overlay is a size container so the strip can adapt to the
+     COMPOSER's width (small claude windows, side-by-side panes), not the
+     viewport's. Container queries below progressively compact the strip. */
+  container-type: inline-size;
+  container-name: cut-overlay;
 }
 
 #claude-usage-overlay .cut-strip {
@@ -21,8 +26,17 @@
   letter-spacing: 0.01em;
   user-select: none;
   max-width: 100%;
-  flex-wrap: wrap;
+  min-width: 0;
+  /* v1.1.1: never wrap to a second line — content is shed via the container
+     queries below instead, with horizontal scroll as the final safety net. */
+  flex-wrap: nowrap;
   transition: background 0.15s, border-color 0.15s;
+}
+
+/* Fallback for very old engines without container-query support: keep the
+   pre-1.1.1 wrapping behavior rather than overflowing the page. */
+@supports not (container-type: inline-size) {
+  #claude-usage-overlay .cut-strip { flex-wrap: wrap; }
 }
 
 @media (prefers-color-scheme: dark) {
@@ -48,7 +62,65 @@
   color: #ece9e3;
 }
 
+/* In dark theme the default dark tooltip blends into the page — invert it to
+   a light card so it stays readable. Media query covers the pre-JS flash;
+   the explicit theme classes take over after detection. */
+@media (prefers-color-scheme: dark) {
+  #claude-usage-overlay:not(.cut-theme-light) .cut-rate-tooltip,
+  #claude-usage-overlay:not(.cut-theme-light) .cut-donate-tooltip,
+  #claude-usage-overlay:not(.cut-theme-light) .cut-share-tooltip,
+  #claude-usage-overlay:not(.cut-theme-light) .cut-collapse-tooltip,
+  #claude-usage-overlay:not(.cut-theme-light) .cut-ctip,
+  #claude-usage-overlay:not(.cut-theme-light) .cut-close-tooltip {
+    background: #f5f3ef;
+    color: #2a2620;
+    box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.12);
+  }
+  #claude-usage-overlay:not(.cut-theme-light) .cut-rate-tooltip::after,
+  #claude-usage-overlay:not(.cut-theme-light) .cut-donate-tooltip::after,
+  #claude-usage-overlay:not(.cut-theme-light) .cut-share-tooltip::after,
+  #claude-usage-overlay:not(.cut-theme-light) .cut-collapse-tooltip::after,
+  #claude-usage-overlay:not(.cut-theme-light) .cut-ctip::after,
+  #claude-usage-overlay:not(.cut-theme-light) .cut-close-tooltip::after {
+    border-top-color: #f5f3ef;
+  }
+}
+
+#claude-usage-overlay.cut-theme-dark .cut-rate-tooltip,
+#claude-usage-overlay.cut-theme-dark .cut-donate-tooltip,
+#claude-usage-overlay.cut-theme-dark .cut-share-tooltip,
+#claude-usage-overlay.cut-theme-dark .cut-collapse-tooltip,
+#claude-usage-overlay.cut-theme-dark .cut-ctip,
+#claude-usage-overlay.cut-theme-dark .cut-close-tooltip {
+  background: #f5f3ef;
+  color: #2a2620;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.12);
+}
+
+#claude-usage-overlay.cut-theme-dark .cut-rate-tooltip::after,
+#claude-usage-overlay.cut-theme-dark .cut-donate-tooltip::after,
+#claude-usage-overlay.cut-theme-dark .cut-share-tooltip::after,
+#claude-usage-overlay.cut-theme-dark .cut-collapse-tooltip::after,
+#claude-usage-overlay.cut-theme-dark .cut-ctip::after,
+#claude-usage-overlay.cut-theme-dark .cut-close-tooltip::after {
+  border-top-color: #f5f3ef;
+}
+
+#claude-usage-overlay.cut-theme-light .cut-rate-tooltip,
+#claude-usage-overlay.cut-theme-light .cut-donate-tooltip,
+#claude-usage-overlay.cut-theme-light .cut-share-tooltip,
+#claude-usage-overlay.cut-theme-light .cut-collapse-tooltip,
+#claude-usage-overlay.cut-theme-light .cut-ctip,
+#claude-usage-overlay.cut-theme-light .cut-close-tooltip {
+  background: #1a1a1c;
+  color: #f4f4f5;
+}
+
 #claude-usage-overlay .cut-logo-wrap {
+  cursor: pointer;
+  text-decoration: none;
+  color: inherit;
+  -webkit-tap-highlight-color: transparent;
   position: relative;
   display: inline-flex;
   align-items: center;
@@ -60,10 +132,9 @@
   width: 16px;
   height: 16px;
   display: block;
-  object-fit: contain;
-  border-radius: 4px;
+  overflow: visible;
   opacity: 0.95;
-  transition: opacity 0.15s, transform 0.15s;
+  transition: opacity 0.15s, transform 0.15s, filter 0.3s;
 }
 
 #claude-usage-overlay .cut-logo-wrap:hover .cut-logo,
@@ -71,6 +142,99 @@
   opacity: 1;
   transform: scale(1.08);
 }
+
+/* ===== v1.2.8: LIVE-UPDATE NEEDLE SWEEP =================================
+   The mark is now inline SVG (see buildOverlay() in content-script.js) so its
+   needle is a rotatable node. On each arriving reading the needle drops to the
+   bottom-left end of the gauge and sweeps back up to rest — a tachometer blip.
+
+   Event-driven, never continuous: the meter polls, it does not stream, so
+   permanent motion would claim activity that isn't happening. It also keeps
+   the strip still while you type, which a perpetual animation 40px above the
+   composer would not, and which WCAG 2.2.2 asks for. Costs zero horizontal
+   space and works collapsed for free — the logo is one of the few things the
+   collapsed view keeps. */
+#claude-usage-overlay .cut-needle {
+  /* The gauge pivot, which is also the hub circle's centre. Rotating about
+     anything else makes the needle detach from the hub mid-sweep. */
+  transform-origin: 209.92px 194.56px;   /* v1.4.7: 256-unit mark */
+  transform-box: view-box;
+}
+
+/* Dashboard self-test: drop to the empty end of the scale, sweep full-scale to
+   the top, hold, then fall back and settle at 0deg — the pose the needle is
+   drawn in, where it lines up with the arc's fixed coral/grey split.
+
+   -53.3deg and 51.7deg are the arc's two termini expressed relative to that
+   drawn angle: the needle sits ~51.7 degrees round from twelve o'clock inside
+   an arc spanning 105 degrees, so the empty end is 105 - 51.7 below it and the
+   full end is 51.7 above. Negative is anticlockwise, because SVG's positive
+   rotation is clockwise. Keep these in step with the SVG geometry in
+   buildOverlay() if the mark is ever redrawn.
+
+   The 62% step is there purely to shape the fall, which is otherwise one long
+   linear slide. The last three steps overshoot and decay, which is what sells
+   it as a physical needle rather than a sliding graphic. */
+@keyframes cut-needle-sweep {
+  0%   { transform: rotate(-52.2deg); }
+  6%   { transform: rotate(-46deg); }
+  16%  { transform: rotate(-25deg); }
+  28%  { transform: rotate(12deg); }
+  36%  { transform: rotate(42deg); }
+  40%  { transform: rotate(52.2deg); }
+  50%  { transform: rotate(52.2deg); }
+  62%  { transform: rotate(28.4deg); }
+  76%  { transform: rotate(-5deg); }
+  86%  { transform: rotate(2deg); }
+  94%  { transform: rotate(-0.7deg); }
+  100% { transform: rotate(0deg); }
+}
+
+/* linear, because the motion curve is already carved into the keyframe spacing
+   above. Layering an easing function on top dumps the whole swing into the
+   first third and leaves the rest of it visibly dead. */
+#claude-usage-overlay .cut-logo.cut-logo-sweep .cut-needle {
+  animation: cut-needle-sweep 1250ms linear;
+}
+
+/* Nothing heard back in ~2.5 poll intervals: the numbers on screen are
+   history. The mark desaturates and dims, and the logo tooltip says so in
+   words. Deliberately confined to the logo — greying a percentage would read
+   as "0%", and the percentage colours are the only things on this strip that
+   should be raising an alarm. */
+#claude-usage-overlay .cut-logo.cut-logo-stale {
+  filter: grayscale(0.9);
+  opacity: 0.45;
+}
+#claude-usage-overlay .cut-logo.cut-logo-stale .cut-needle {
+  animation: none;
+}
+
+/* WCAG 2.2.2 / vestibular safety. The sweep IS the signal, so it degrades to a
+   brightness blink in place rather than vanishing: the message survives, the
+   movement doesn't. */
+@media (prefers-reduced-motion: reduce) {
+  /* No sweep at all. The needle holds its pose and a brightness dip carries the
+     "it refreshed" signal instead. */
+  #claude-usage-overlay .cut-logo.cut-logo-sweep .cut-needle {
+    animation: cut-needle-fade 900ms ease-out;
+  }
+  @keyframes cut-needle-fade {
+    0%, 100% { opacity: 1; }
+    25%, 45% { opacity: 0.3; }
+  }
+}
+
+/* "Live - updated 12s ago." appended to the logo tooltip, so the sweep is
+   self-explaining on hover instead of being an unexplained twitch. */
+#claude-usage-overlay .cut-tip-live {
+  display: block;
+  margin-top: 7px;
+  padding-top: 7px;
+  border-top: 1px solid rgba(128, 128, 128, 0.28);
+  opacity: 0.9;
+}
+#claude-usage-overlay .cut-tip-live:empty { display: none; }
 
 #claude-usage-overlay .cut-tooltip {
   position: absolute;
@@ -130,26 +294,12 @@
   flex-shrink: 0;
 }
 
-#claude-usage-overlay .cut-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: currentColor;
-  opacity: 0.4;
-  flex-shrink: 0;
-}
-
-#claude-usage-overlay .cut-dot.cut-color-green   { background: #10b981; opacity: 0.95; box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.16); }
-#claude-usage-overlay .cut-dot.cut-color-amber   { background: #f59e0b; opacity: 1;    box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.18); }
-#claude-usage-overlay .cut-dot.cut-color-orange  { background: #f97316; opacity: 1;    box-shadow: 0 0 0 2px rgba(249, 115, 22, 0.20); }
-#claude-usage-overlay .cut-dot.cut-color-red     { background: #ef4444; opacity: 1;    box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.22); }
-#claude-usage-overlay .cut-dot.cut-color-neutral { background: currentColor; opacity: 0.35; }
-
 #claude-usage-overlay .cut-label {
-  text-transform: uppercase;
-  font-size: 10px;
-  letter-spacing: 0.08em;
-  opacity: 0.7;
+  /* v1.2.10: match the % size and use title case. At this size all-caps reads
+     as shouting and widens the strip; title case pairs cleanly with the number,
+     which still leads via its heavier weight + color. */
+  font-size: 12px;
+  opacity: 0.62;
 }
 
 #claude-usage-overlay .cut-pct {
@@ -157,9 +307,146 @@
   font-size: 12px;
 }
 
+/* Color the % number to match its dot (text inherits by default; these only
+   apply once a usage value is known). Red kicks in at >= 90%. */
+#claude-usage-overlay .cut-pct.cut-color-green   { color: #10b981; }
+#claude-usage-overlay .cut-pct.cut-color-amber   { color: #f59e0b; }
+#claude-usage-overlay .cut-pct.cut-color-orange  { color: #f97316; }
+#claude-usage-overlay .cut-pct.cut-color-red     { color: #ef4444; font-weight: 700; }
+
+/* v1.2.5: reset-time span inside the expanded "Reset in <time>" meta. Neutral
+   reference text by default (inherits the muted meta color); only turns red in
+   the alert band (>= 90%) so it isn't everyday color noise. */
+#claude-usage-overlay .cut-meta-rt { font-weight: 600; }
+#claude-usage-overlay .cut-meta-rt.cut-color-red { color: #ef4444; font-weight: 700; }
+
+/* Red-alert state: any segment at >= 90% gets a subtle red wash so it's
+   unmissable even at a glance. */
+#claude-usage-overlay .cut-seg.cut-alert {
+  border-radius: 6px;
+  padding: 1px 5px;
+  margin: -1px -2px;
+  background: rgba(239, 68, 68, 0.10);
+  box-shadow: inset 0 0 0 1px rgba(239, 68, 68, 0.25);
+}
+
+/* Maxed out (100%): stronger red + a slow pulse to grab attention. */
+#claude-usage-overlay .cut-seg.cut-alert-max {
+  background: rgba(239, 68, 68, 0.16);
+  box-shadow: inset 0 0 0 1px rgba(239, 68, 68, 0.45);
+  animation: cut-alert-pulse 1.4s ease-in-out infinite;
+}
+#claude-usage-overlay .cut-seg.cut-alert-max .cut-pct { color: #ef4444; }
+
+@keyframes cut-alert-pulse {
+  0%, 100% {
+    background: rgba(239, 68, 68, 0.16);
+    box-shadow: inset 0 0 0 1px rgba(239, 68, 68, 0.45);
+  }
+  50% {
+    background: rgba(239, 68, 68, 0.30);
+    box-shadow: inset 0 0 0 1px rgba(239, 68, 68, 0.75);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #claude-usage-overlay .cut-seg.cut-alert-max { animation: none; }
+}
+
 #claude-usage-overlay .cut-sep { opacity: 0.35; font-weight: 400; }
 
 #claude-usage-overlay .cut-meta { opacity: 0.85; font-size: 11px; }
+
+/* v1.2.17: burn-rate forecast chip ("⧗ ~1h 20m left") on the Session segment.
+   Rendered as a tinted pill rather than plain meta text because it is a
+   different KIND of number from everything else on the strip — the rest is
+   measured, this is projected — and it only ever appears when it's telling you
+   something you might want to act on. Default display:none in the markup so it
+   never flashes in before the first forecast resolves; renderForecast() clears
+   the inline style to reveal it, leaving the container tiers below in charge of
+   whether there's room. */
+#claude-usage-overlay .cut-fc {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  padding: 1px 6px;
+  border-radius: 999px;
+  line-height: 1.5;
+  background: color-mix(in srgb, currentColor 9%, transparent);
+}
+/* The disambiguating word. Two durations sitting side by side ("Reset in 3h
+   10m · ~1h 20m left") need it — but Tier 1 has already shed the reset time by
+   the time this is under pressure, so below 600px there's nothing left to
+   confuse it with and the word can go before the number does. */
+#claude-usage-overlay .cut-fc-word { opacity: 0.9; }
+
+@container cut-overlay (max-width: 600px) {
+  #claude-usage-overlay .cut-fc-word { display: none; }
+}
+
+#claude-usage-overlay .cut-fc-ic {
+  width: 10px;
+  height: 10px;
+  flex-shrink: 0;
+  opacity: 0.9;
+}
+/* Colour tracks TIME LEFT, not percentage — 60% with 20 minutes of runway is
+   the more urgent state than 85% with three hours, and this chip is the only
+   thing on the strip that can say so. */
+#claude-usage-overlay .cut-fc.cut-color-amber {
+  color: #f59e0b;
+  background: rgba(245, 158, 11, 0.12);
+}
+#claude-usage-overlay .cut-fc.cut-color-orange {
+  color: #f97316;
+  background: rgba(249, 115, 22, 0.14);
+}
+#claude-usage-overlay .cut-fc.cut-color-red {
+  color: #ef4444;
+  background: rgba(239, 68, 68, 0.16);
+  font-weight: 700;
+}
+
+/* v1.3.6: chat size — "Chat ~36.9K tokens". Same label treatment as the
+   meters so it reads as one of them; the number stays neutral (it isn't a
+   quota) until the chat is long enough for a new one to matter. */
+#claude-usage-overlay .cut-chat {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+  cursor: help;
+  outline: none;
+}
+#claude-usage-overlay .cut-chat-val {
+  font-weight: 600;
+  font-size: 12px;
+}
+#claude-usage-overlay .cut-chat-word {
+  font-size: 11px;
+  opacity: 0.62;
+}
+/* The bubble glyph stands in for the "Chat" label wherever space is short —
+   in the collapsed pill always, in the expanded strip only in its compact form
+   (see the width tiers and fit level 4 below). */
+#claude-usage-overlay .cut-chat-ic {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+  opacity: 0.7;
+}
+#claude-usage-overlay .cut-chat .cut-chat-ic { display: none; }
+#claude-usage-overlay .cut-cchat .cut-cval { gap: 4px; cursor: help; }
+#claude-usage-overlay .cut-chat-val.cut-chat-long { color: #f59e0b; }
+#claude-usage-overlay .cut-chat-val.cut-chat-huge { color: #f97316; }
+#claude-usage-overlay .cut-chat:focus-visible {
+  border-radius: 4px;
+  box-shadow: 0 0 0 2px rgba(217, 119, 87, 0.45);
+}
 
 #claude-usage-overlay .cut-msgs {
   color: #d97757;
@@ -174,16 +461,84 @@
   align-items: center;
 }
 
+#claude-usage-overlay .cut-rate-wrap,
+#claude-usage-overlay .cut-donate-wrap,
+#claude-usage-overlay .cut-share-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+#claude-usage-overlay .cut-rate-tooltip,
+#claude-usage-overlay .cut-donate-tooltip,
+#claude-usage-overlay .cut-share-tooltip,
+#claude-usage-overlay .cut-collapse-tooltip,
+#claude-usage-overlay .cut-ctip {
+  position: absolute;
+  bottom: calc(100% + 10px);
+  left: 50%;
+  transform: translateX(-50%);
+  background: #1a1a1c;
+  color: #f4f4f5;
+  padding: 8px 11px;
+  border-radius: 7px;
+  font-size: 11.5px;
+  line-height: 1.45;
+  font-weight: 400;
+  letter-spacing: 0.01em;
+  white-space: normal;
+  width: 190px;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity 0.15s ease, visibility 0.15s ease, transform 0.15s ease;
+  z-index: 2147483647;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35), 0 1px 3px rgba(0, 0, 0, 0.2);
+  text-align: left;
+  text-transform: none;
+}
+
+#claude-usage-overlay .cut-rate-tooltip::after,
+#claude-usage-overlay .cut-donate-tooltip::after,
+#claude-usage-overlay .cut-share-tooltip::after,
+#claude-usage-overlay .cut-collapse-tooltip::after,
+#claude-usage-overlay .cut-ctip::after {
+  content: '';
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 0;
+  height: 0;
+  border: 6px solid transparent;
+  border-top-color: #1a1a1c;
+}
+
+#claude-usage-overlay .cut-rate-wrap:hover .cut-rate-tooltip,
+#claude-usage-overlay .cut-rate:focus-visible + .cut-rate-tooltip,
+#claude-usage-overlay .cut-donate-wrap:hover .cut-donate-tooltip,
+#claude-usage-overlay .cut-donate:focus-visible + .cut-donate-tooltip,
+#claude-usage-overlay .cut-share-wrap:not(.cut-pop-open):hover .cut-share-tooltip,
+#claude-usage-overlay .cut-share:focus-visible + .cut-share-tooltip,
+#claude-usage-overlay .cut-collapse-wrap:hover .cut-collapse-tooltip,
+#claude-usage-overlay .cut-collapse:focus-visible + .cut-collapse-tooltip,
+#claude-usage-overlay .cut-cwrap:hover .cut-ctip,
+#claude-usage-overlay .cut-cval:focus-visible + .cut-ctip {
+  opacity: 1;
+  visibility: visible;
+  transform: translateX(-50%) translateY(-2px);
+}
+
 #claude-usage-overlay .cut-rate {
   appearance: none;
   background: transparent;
   border: none;
   color: inherit;
   cursor: pointer;
-  padding: 2px 4px;
+  padding: 2px 3px;
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: 3px;
   border-radius: 999px;
   font: inherit;
   font-weight: 600;
@@ -201,11 +556,137 @@
 }
 
 #claude-usage-overlay .cut-rate .cut-rate-star {
-  font-size: 12px;
+  font-size: 11px;
   line-height: 1;
 }
 
 #claude-usage-overlay .cut-rate .cut-rate-txt {
+  letter-spacing: 0.01em;
+}
+
+#claude-usage-overlay .cut-share {
+  appearance: none;
+  background: transparent;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  padding: 2px 3px;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  border-radius: 999px;
+  font: inherit;
+  font-weight: 600;
+  font-size: 11px;
+  line-height: 1;
+  opacity: 0.85;
+  white-space: nowrap;
+  transition: opacity 0.15s, background 0.15s, transform 0.15s;
+}
+
+#claude-usage-overlay .cut-share:hover {
+  opacity: 1;
+  transform: translateY(-0.5px);
+  background: color-mix(in srgb, currentColor 10%, transparent);
+}
+
+#claude-usage-overlay .cut-share .cut-share-ic {
+  flex-shrink: 0;
+}
+
+#claude-usage-overlay .cut-share-pop {
+  position: absolute;
+  bottom: calc(100% + 10px);
+  left: 50%;
+  transform: translateX(-50%);
+  display: none;
+  align-items: center;
+  gap: 8px;
+  background: #1a1a1c;
+  padding: 7px 9px;
+  border-radius: 9px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35), 0 1px 3px rgba(0, 0, 0, 0.2);
+  z-index: 2147483647;
+}
+
+#claude-usage-overlay .cut-share-pop::after {
+  content: '';
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 0;
+  height: 0;
+  border: 6px solid transparent;
+  border-top-color: #1a1a1c;
+}
+
+#claude-usage-overlay.cut-theme-dark .cut-share-pop {
+  background: #f5f3ef;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.12);
+}
+
+#claude-usage-overlay.cut-theme-dark .cut-share-pop::after {
+  border-top-color: #f5f3ef;
+}
+
+#claude-usage-overlay .cut-share-net {
+  appearance: none;
+  border: none;
+  padding: 0;
+  width: 22px;
+  height: 22px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  transition: transform 0.12s;
+}
+
+#claude-usage-overlay .cut-share-net svg {
+  width: 22px;
+  height: 22px;
+  display: block;
+}
+
+#claude-usage-overlay .cut-share-net:hover {
+  transform: translateY(-1px) scale(1.08);
+}
+
+#claude-usage-overlay .cut-donate {
+  appearance: none;
+  background: transparent;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  padding: 2px 3px;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  border-radius: 999px;
+  font: inherit;
+  font-weight: 600;
+  font-size: 11px;
+  line-height: 1;
+  opacity: 0.85;
+  white-space: nowrap;
+  transition: opacity 0.15s, background 0.15s, transform 0.15s;
+  text-decoration: none;
+}
+
+#claude-usage-overlay .cut-donate:hover {
+  opacity: 1;
+  transform: translateY(-0.5px);
+  background: color-mix(in srgb, currentColor 10%, transparent);
+}
+
+#claude-usage-overlay .cut-donate .cut-donate-icon {
+  font-size: 11px;
+  line-height: 1;
+}
+
+#claude-usage-overlay .cut-donate .cut-donate-txt {
   letter-spacing: 0.01em;
 }
 
@@ -276,3 +757,2365 @@
   opacity: 1;
   background: color-mix(in srgb, currentColor 12%, transparent);
 }
+
+/* ---------------------------------------------------------------------------
+   v1.1.1 — responsive compaction for narrow composers / small Claude windows.
+   Tiers shed the least-important content first so the strip ALWAYS fits on
+   one line. Widths refer to the composer column (container), not viewport.
+   Full strip needs roughly 620px; tiers below trim it down to ~190px.
+--------------------------------------------------------------------------- */
+
+/* Tier 1 (< 640px): drop the "resets in …" meta text and its "·" separator.
+   Dots + percentages keep all the at-a-glance signal; reset times remain one
+   click away in the popup. */
+/* v1.4.7: the 640px tier no longer hides reset times — a ticked field must
+   never vanish for width. fitStrip() switches to the collapsed pill instead,
+   which keeps the reset countdowns. Only the cosmetic "tokens" word goes. */
+@container cut-overlay (max-width: 640px) {
+  #claude-usage-overlay .cut-chat-word {
+    display: none;
+  }
+}
+
+/* v1.2.12 (replaces the v1.2.10/11 band rules): the Fable segment renders as
+   just "F <pct>" at EVERY width — its full name and reset time live in its
+   hover tooltip ("Fable usage 1% · Reset in 4d"). Its inline meta is therefore
+   suppressed permanently, not by breakpoint. Two consequences:
+   (a) "Rate us" keeps its full wording again — the v1.2.11 star-only collapse
+       in this band is reverted; Tier 2 (< 480px) remains the only place it
+       shrinks, as before Fable existed.
+   (b) The three-segment strip now costs only ~50px more than the classic
+       two-segment one, so Session and Weekly keep their reset times down to
+       the unchanged 640px base tier. */
+#claude-usage-overlay [data-cut="fable"] .cut-meta,
+#claude-usage-overlay [data-cut="fable"] .cut-sep {
+  display: none !important;
+}
+
+/* v1.4.7: Extra usage reads "Extra $12.40 / $50". The cap is the segment's
+   meta (so the width tiers and fit level 2 shed it with the reset times) and
+   joins the amount with "/" rather than the usual "·" separator. */
+#claude-usage-overlay [data-cut="extra"] .cut-sep { display: none !important; }
+#claude-usage-overlay [data-cut="extra"] .cut-meta { margin-left: -2px; }
+#claude-usage-overlay [data-cut="extra"] .cut-meta:empty { display: none !important; }
+
+/* v1.2.7a: an earlier cut of this shed the reset times at 780px whenever the
+   Fable segment and the forecast chip were both up, on the reasoning that the
+   chip was the more actionable number. That was the wrong call to make on the
+   user's behalf: reset times have their own checkboxes, and a field someone
+   ticked should not silently disappear because a different field appeared.
+   The rule is gone. When the content genuinely exceeds the composer the strip
+   now scrolls (below) instead of hiding anything — the strip can't be wider
+   than the composer it sits above, so scrolling is the only way to "widen" it
+   without pushing the page around. */
+
+/* Narrow safety band while the F chip is up: tighten the gap one notch and,
+   if it still can't fit, scroll horizontally (scrollbar hidden) instead of
+   clipping or wrapping — same escape hatch as the 330px tier. */
+/* v1.4.7: the has-forecast / has-fable / has-extra scroll bands are gone.
+   A crowded strip now switches to the collapsed pill (fitStrip) rather than
+   scrolling, and a scroll container clipped the strip's own tooltips. */
+
+/* v1.2.7a: the chip sheds in LOCKSTEP with the reset times at Tier 1, rather
+   than outliving them to 480px as it first did. Outliving them produced exactly
+   the state that got reported — a forecast on screen with no reset time beside
+   it — which reads as the reset time being broken rather than deliberately
+   dropped. Both are "when does this end?" answers; they belong together, and
+   below Tier 1 the projection is still on the segment tooltip. */
+/* v1.4.7: (the forecast chip is no longer hidden at 640px — see fitStrip.) */
+
+/* Tier 2 (< 480px): tighten spacing and shrink "Rate us" and "Support" to just icons. */
+@container cut-overlay (max-width: 480px) {
+  #claude-usage-overlay .cut-strip { gap: 7px; }
+  #claude-usage-overlay .cut-rate .cut-rate-txt { display: none; }
+  #claude-usage-overlay .cut-rate { padding: 2px 3px; }
+  #claude-usage-overlay .cut-donate .cut-donate-txt { display: none; }
+  #claude-usage-overlay .cut-donate { padding: 2px 3px; }
+  #claude-usage-overlay .cut-share { padding: 2px 3px; }
+  /* v1.3.6: chat size goes to its collapsed-pill form — glyph + number. */
+  #claude-usage-overlay .cut-chat { gap: 4px; }
+  #claude-usage-overlay .cut-chat .cut-chat-label,
+  #claude-usage-overlay .cut-chat .cut-chat-word { display: none; }
+  #claude-usage-overlay .cut-chat .cut-chat-ic { display: inline-block; }
+}
+
+/* Tier 3 (< 400px): drop the "N left" messages counter and legacy donate
+   button. The Rate us star and Share icon stay (as icons, per their own
+   rated/shared availability) since they're tiny. */
+@container cut-overlay (max-width: 400px) {
+  #claude-usage-overlay .cut-donate,
+  #claude-usage-overlay .cut-donate-divider,
+  #claude-usage-overlay .cut-msgs,
+  #claude-usage-overlay .cut-msgs-divider {
+    display: none !important;
+  }
+}
+
+/* Tier 4 (< 330px): ultra-compact. Smaller labels and gaps; if it STILL
+   can't fit, the strip becomes horizontally scrollable (scrollbar hidden)
+   instead of ever wrapping. Hover tooltips are disabled here because the
+   scroll clip would cut them off — and at this width they'd overflow the
+   panel anyway. */
+@container cut-overlay (max-width: 330px) {
+  #claude-usage-overlay .cut-strip {
+    gap: 6px;
+    padding: 5px 8px;
+    overflow-x: auto;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+  #claude-usage-overlay .cut-strip::-webkit-scrollbar { display: none; }
+  #claude-usage-overlay .cut-label {
+    font-size: 11px;
+  }
+  #claude-usage-overlay .cut-pct { font-size: 11px; }
+  #claude-usage-overlay .cut-tooltip,
+  #claude-usage-overlay .cut-close-tooltip,
+  #claude-usage-overlay .cut-rate-tooltip,
+  #claude-usage-overlay .cut-donate-tooltip,
+  #claude-usage-overlay .cut-share-tooltip,
+  #claude-usage-overlay .cut-collapse-tooltip,
+  #claude-usage-overlay .cut-ctip {
+    display: none;
+  }
+}
+
+
+/* ---- Collapse / compact mode ---- */
+#claude-usage-overlay .cut-collapse-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+#claude-usage-overlay .cut-collapse {
+  appearance: none;
+  background: transparent;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  padding: 2px 3px;
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  line-height: 1;
+  opacity: 0.7;
+  transition: opacity 0.15s, background 0.15s;
+}
+
+#claude-usage-overlay .cut-collapse:hover {
+  opacity: 1;
+  background: color-mix(in srgb, currentColor 10%, transparent);
+}
+
+#claude-usage-overlay .cut-collapse svg {
+  display: block;
+  transition: transform 0.2s ease;
+}
+
+/* When collapsed, flip the chevrons to point outward (expand) */
+#claude-usage-overlay.cut-collapsed .cut-collapse svg {
+  transform: rotate(180deg);
+}
+
+#claude-usage-overlay .cut-compact {
+  display: none;
+  align-items: center;
+  gap: 10px;
+}
+
+#claude-usage-overlay .cut-cwrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+#claude-usage-overlay .cut-cval {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 3px;
+  white-space: nowrap;
+  cursor: default;
+  outline: none;
+}
+
+/* S / W letters: full-size capitals, default label color */
+#claude-usage-overlay .cut-clabel {
+  text-transform: uppercase;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  opacity: 0.7;
+}
+
+/* % values match the expanded view's percentage styling */
+#claude-usage-overlay .cut-cpct {
+  font-weight: 600;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* | separator between S and W, same look as the strip dividers */
+#claude-usage-overlay .cut-cdivider {
+  display: inline-block;
+  width: 1px;
+  height: 13px;
+  background: color-mix(in srgb, currentColor 22%, transparent);
+  flex-shrink: 0;
+}
+
+/* Collapsed mode: show only the compact block between the brand and the
+   collapse/close controls. !important is needed to beat inline display
+   styles set by the JS visibility functions. */
+#claude-usage-overlay.cut-collapsed .cut-seg,
+#claude-usage-overlay.cut-collapsed .cut-divider:not(.cut-rate-divider):not(.cut-share-divider),
+#claude-usage-overlay.cut-collapsed .cut-msgs,
+#claude-usage-overlay.cut-collapsed .cut-chat {
+  display: none !important;
+}
+
+/* The rate/share dividers stay in collapsed mode: they follow their button's
+   inline visibility, giving a | separator between the W value and the star
+   or share icon whenever one of those buttons is present. */
+
+/* Rate us / Share stay in collapsed mode (their own rated/shared visibility
+   rules still apply via inline styles) — but Rate us shrinks to just its star. */
+#claude-usage-overlay.cut-collapsed .cut-rate .cut-rate-txt {
+  display: none;
+}
+#claude-usage-overlay.cut-collapsed .cut-rate {
+  padding: 2px 3px;
+}
+
+#claude-usage-overlay.cut-collapsed .cut-compact {
+  display: inline-flex;
+}
+
+/* Minimal compact tooltips size to their short text */
+#claude-usage-overlay .cut-ctip {
+  width: auto;
+  white-space: nowrap;
+  padding: 5px 9px;
+}
+
+/* Compact % colors mirror the full-view % colors */
+#claude-usage-overlay .cut-cpct.cut-color-green  { color: #10b981; }
+#claude-usage-overlay .cut-cpct.cut-color-amber  { color: #f59e0b; }
+#claude-usage-overlay .cut-cpct.cut-color-orange { color: #f97316; }
+#claude-usage-overlay .cut-cpct.cut-color-red    { color: #ef4444; font-weight: 700; }
+
+/* ---- Share popover, portaled to <body> ----
+   While open, the popover is moved out of the strip (see content-script.js)
+   so it can't be clipped by the overlay's containment or the narrow-mode
+   scroll. These styles are self-contained since the #claude-usage-overlay
+   scope no longer applies. */
+.cut-share-pop-portal {
+  align-items: center;
+  gap: 8px;
+  background: #1a1a1c;
+  padding: 7px 9px;
+  border-radius: 9px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35), 0 1px 3px rgba(0, 0, 0, 0.2);
+  z-index: 2147483647;
+  font: 500 11.5px/1 ui-sans-serif, -apple-system, sans-serif;
+}
+
+.cut-share-pop-portal::after {
+  content: '';
+  position: absolute;
+  top: 100%;
+  left: var(--cut-arrow-x, 50%);
+  transform: translateX(-50%);
+  width: 0;
+  height: 0;
+  border: 6px solid transparent;
+  border-top-color: #1a1a1c;
+}
+
+/* Flipped: popover below the button, arrow on top pointing up */
+.cut-share-pop-portal.cut-pop-below::after {
+  top: auto;
+  bottom: 100%;
+  border-top-color: transparent;
+  border-bottom-color: #1a1a1c;
+}
+
+.cut-share-pop-portal.cut-pop-dark {
+  background: #f5f3ef;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.12);
+}
+
+.cut-share-pop-portal.cut-pop-dark::after {
+  border-top-color: #f5f3ef;
+}
+
+.cut-share-pop-portal.cut-pop-dark.cut-pop-below::after {
+  border-top-color: transparent;
+  border-bottom-color: #f5f3ef;
+}
+
+.cut-share-pop-portal .cut-share-net {
+  appearance: none;
+  border: none;
+  padding: 0;
+  width: 22px;
+  height: 22px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  transition: transform 0.12s;
+}
+
+.cut-share-pop-portal .cut-share-net svg {
+  width: 22px;
+  height: 22px;
+  display: block;
+}
+
+.cut-share-pop-portal .cut-share-net:hover {
+  transform: translateY(-1px) scale(1.08);
+}
+
+/* ---- Portal tooltip system ----
+   In-strip tooltip spans are text sources only; the visible tooltip is a
+   single fixed-position .cut-portal-tip under <body> (content-script.js),
+   which escapes ancestor overflow clipping in small/design-mode windows.
+   Force-hide the spans so the legacy CSS hover rules can never show them. */
+#claude-usage-overlay .cut-tooltip,
+#claude-usage-overlay .cut-close-tooltip,
+#claude-usage-overlay .cut-rate-tooltip,
+#claude-usage-overlay .cut-donate-tooltip,
+#claude-usage-overlay .cut-share-tooltip,
+#claude-usage-overlay .cut-collapse-tooltip,
+#claude-usage-overlay .cut-ctip {
+  display: none !important;
+}
+
+.cut-portal-tip {
+  position: fixed;
+  background: #1a1a1c;
+  color: #f4f4f5;
+  padding: 8px 11px;
+  border-radius: 7px;
+  font: 400 11.5px/1.45 ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  letter-spacing: 0.01em;
+  max-width: 230px;
+  width: max-content;
+  white-space: normal;
+  pointer-events: none;
+  z-index: 2147483647;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35), 0 1px 3px rgba(0, 0, 0, 0.2);
+  text-align: left;
+}
+
+.cut-portal-tip::after {
+  content: '';
+  position: absolute;
+  top: 100%;
+  left: var(--cut-arrow-x, 50%);
+  transform: translateX(-50%);
+  width: 0;
+  height: 0;
+  border: 6px solid transparent;
+  border-top-color: #1a1a1c;
+}
+
+.cut-portal-tip.cut-pop-below::after {
+  top: auto;
+  bottom: 100%;
+  border-top-color: transparent;
+  border-bottom-color: #1a1a1c;
+}
+
+/* Dark site theme → light tooltip card, matching the old inversion */
+.cut-portal-tip.cut-pop-dark {
+  background: #f5f3ef;
+  color: #2a2620;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.12);
+}
+
+.cut-portal-tip.cut-pop-dark::after {
+  border-top-color: #f5f3ef;
+}
+
+.cut-portal-tip.cut-pop-dark.cut-pop-below::after {
+  border-top-color: transparent;
+  border-bottom-color: #f5f3ef;
+}
+
+/* ===========================================================================
+   v1.2.2 — usage progress indicators
+   (a) expanded: thin linear bar under the Session / Weekly label
+   (b) collapsed: circular ring around the S / W letter
+   Both are driven from content-script.js (renderSegment / renderCompact) and
+   share the colorClass() thresholds: green <50, amber 50-74, orange 75-89,
+   red >=90.
+   =========================================================================== */
+
+/* --- (a) circular ring around S / W (collapsed view) --------------------- */
+
+#claude-usage-overlay .cut-cring {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  /* 16px keeps the collapsed strip exactly the same height as the expanded
+     one (the 12px % text already sets an 18px line box) — a taller ring would
+     make the strip grow by ~2px on every collapse. */
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+}
+
+#claude-usage-overlay .cut-cring-svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  transform: rotate(-90deg);   /* start the arc at 12 o'clock */
+  overflow: visible;
+}
+
+/* v1.2.2: 1.5 viewBox units over a 16px box (24 -> 16 = x0.667) renders as a
+   ~1px stroke — a fine hairline that keeps the ring quiet around the letter. */
+#claude-usage-overlay .cut-cring-track {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  opacity: 0.2;
+}
+
+#claude-usage-overlay .cut-cring-fill {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  opacity: 0.35;
+  stroke-dasharray: 62.83;
+  stroke-dashoffset: 62.83;    /* empty until JS supplies a percentage */
+  transition: stroke-dashoffset 0.45s cubic-bezier(0.4, 0, 0.2, 1), stroke 0.25s ease;
+}
+
+#claude-usage-overlay .cut-cring-fill.cut-color-green  { stroke: #10b981; opacity: 1; }
+#claude-usage-overlay .cut-cring-fill.cut-color-amber  { stroke: #f59e0b; opacity: 1; }
+#claude-usage-overlay .cut-cring-fill.cut-color-orange { stroke: #f97316; opacity: 1; }
+#claude-usage-overlay .cut-cring-fill.cut-color-red    { stroke: #ef4444; opacity: 1; }
+
+/* The letter now sits INSIDE the ring, so it shrinks to fit. */
+#claude-usage-overlay .cut-cring .cut-clabel {
+  position: relative;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0;
+  opacity: 0.75;
+}
+
+/* ring + % need center alignment, not baseline */
+#claude-usage-overlay .cut-cval {
+  align-items: center;
+  gap: 5px;
+}
+
+/* Red ring at >= 90% gets a soft halo, mirroring the expanded alert wash. */
+#claude-usage-overlay .cut-cring:has(.cut-cring-fill.cut-color-red) {
+  border-radius: 50%;
+  box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.14);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #claude-usage-overlay .cut-cring-fill {
+    transition: none;
+  }
+}
+
+/* Ultra-compact tier: shave the ring so the collapsed pill stays tiny. */
+@container cut-overlay (max-width: 330px) {
+  #claude-usage-overlay .cut-cring { width: 15px; height: 15px; }
+  #claude-usage-overlay .cut-cring .cut-clabel { font-size: 8.5px; }
+}
+
+/* --- (d) collapsed: inline reset countdown ------------------------------- */
+
+/* Icon + short time, e.g. ⟳ 4h 3m. Kept deliberately small and muted so the
+   percentage still reads first; the gap is 3px, not the 5px used elsewhere. */
+/* v1.2.7a: collapsed-mode forecast chip. Mirrors .cut-creset's geometry so the
+   two "when does this end?" numbers sit as a matched pair — measured reset on
+   the left, projection on the right — rather than looking like two unrelated
+   widgets. Colour comes from the same time-based bands as the expanded chip. */
+#claude-usage-overlay .cut-cfc {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: 5px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+#claude-usage-overlay .cut-cfc-ic {
+  width: 9px;
+  height: 9px;
+  flex-shrink: 0;
+  opacity: 0.75;
+}
+#claude-usage-overlay .cut-cfc-txt {
+  font-size: 10.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+#claude-usage-overlay .cut-cfc-txt.cut-color-amber  { color: #f59e0b; }
+#claude-usage-overlay .cut-cfc-txt.cut-color-orange { color: #f97316; }
+#claude-usage-overlay .cut-cfc-txt.cut-color-red    { color: #ef4444; font-weight: 700; }
+
+#claude-usage-overlay .cut-creset {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: 4px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+/* The rotate icon stays muted. The reset-time text is muted/neutral by default
+   too (v1.2.5) so the percentage still reads first; it only pops to full-strength
+   red in the alert band. Muting lives on the icon + text rather than the group so
+   the red alert isn't washed out by a group opacity. */
+#claude-usage-overlay .cut-creset-ic {
+  width: 9px;
+  height: 9px;
+  flex-shrink: 0;
+  opacity: 0.55;
+}
+
+#claude-usage-overlay .cut-creset-txt {
+  font-size: 9.5px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.01em;
+  opacity: 0.6;
+}
+
+/* v1.2.5: alert-only — collapsed reset time goes red (full strength) at >= 90%. */
+#claude-usage-overlay .cut-creset-txt.cut-color-red {
+  color: #ef4444;
+  font-weight: 700;
+  opacity: 1;
+}
+
+/* Below the ultra-compact tier the pill has to stay tiny — the reset time
+   drops out and lives in the tooltip instead. */
+@container cut-overlay (max-width: 330px) {
+  #claude-usage-overlay .cut-creset,
+  #claude-usage-overlay .cut-cfc { display: none; }
+}
+
+/* ---------------------------------------------------------------------------
+   v1.2.12 — in-strip settings gear + "Show in strip" popover.
+   The gear sits between Share and the collapse chevron, styled like the other
+   icon buttons. EXPANDED MODE ONLY: in collapsed mode the whole point is
+   minimalism, and the popup's panel still covers configuration there.
+--------------------------------------------------------------------------- */
+
+#claude-usage-overlay .cut-settings-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+#claude-usage-overlay .cut-settings {
+  appearance: none;
+  background: transparent;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  padding: 2px 3px;
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  line-height: 1;
+  opacity: 0.65;
+  transition: opacity 0.12s, transform 0.15s;
+}
+
+#claude-usage-overlay .cut-settings:hover {
+  opacity: 1;
+  transform: rotate(20deg);
+}
+
+#claude-usage-overlay .cut-settings[aria-expanded="true"] { opacity: 1; }
+
+/* v1.4.7: the gear stays in collapsed mode — the collapsed pill is now what
+   a crowded strip turns into, so its settings must stay one click away. */
+
+/* The popover itself. Base look while nested (rarely visible — it's portaled
+   to <body> on open); the portal class carries the same look at fixed
+   position, matching the share popover's conventions (.cut-pop-dark /
+   .cut-pop-below / --cut-arrow-x). */
+#claude-usage-overlay .cut-settings-pop,
+.cut-settings-pop-portal {
+  background: #1a1a1c;
+  color: #f1f1f2;
+  padding: 9px 12px 8px;
+  border-radius: 10px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35), 0 1px 3px rgba(0, 0, 0, 0.2);
+  z-index: 2147483647;
+  font: 500 12px/1.35 ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  min-width: 158px;
+}
+
+.cut-settings-pop-portal::after {
+  content: '';
+  position: absolute;
+  top: 100%;
+  left: var(--cut-arrow-x, 50%);
+  transform: translateX(-50%);
+  width: 0;
+  height: 0;
+  border: 6px solid transparent;
+  border-top-color: #1a1a1c;
+}
+
+.cut-settings-pop-portal.cut-pop-below::after {
+  top: auto;
+  bottom: 100%;
+  border-top-color: transparent;
+  border-bottom-color: #1a1a1c;
+}
+
+/* claude.ai dark theme → light popover, same inversion as the share pop. */
+.cut-settings-pop-portal.cut-pop-dark {
+  background: #f5f3ef;
+  color: #1a1a1c;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.12);
+}
+.cut-settings-pop-portal.cut-pop-dark::after { border-top-color: #f5f3ef; }
+.cut-settings-pop-portal.cut-pop-dark.cut-pop-below::after {
+  border-top-color: transparent;
+  border-bottom-color: #f5f3ef;
+}
+
+.cut-settings-pop-portal .cut-sp-title,
+#claude-usage-overlay .cut-sp-title {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  opacity: 0.6;
+  margin-bottom: 6px;
+}
+
+.cut-settings-pop-portal .cut-sp-row,
+#claude-usage-overlay .cut-sp-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 0;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.cut-settings-pop-portal .cut-sp-row input[type="checkbox"],
+#claude-usage-overlay .cut-sp-row input[type="checkbox"] {
+  width: 13px;
+  height: 13px;
+  margin: 0;
+  flex-shrink: 0;
+  accent-color: #d97757;
+  cursor: pointer;
+}
+
+.cut-settings-pop-portal .cut-sp-row input[type="checkbox"]:disabled {
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+.cut-settings-pop-portal .cut-sp-locked { cursor: default; opacity: 0.75; }
+
+/* The strip letter for a meter, mirroring the popup's .field-key chips. */
+.cut-settings-pop-portal .cut-sp-key,
+#claude-usage-overlay .cut-sp-key {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 13px;
+  height: 13px;
+  padding: 0 2px;
+  margin-left: 4px;
+  border: 1px solid currentColor;
+  border-radius: 3px;
+  font-size: 8.5px;
+  font-weight: 700;
+  opacity: 0.55;
+}
+
+.cut-settings-pop-portal .cut-sp-sep,
+#claude-usage-overlay .cut-sp-sep {
+  height: 1px;
+  background: currentColor;
+  opacity: 0.15;
+  margin: 5px 0;
+}
+
+.cut-settings-pop-portal .cut-sp-foot,
+#claude-usage-overlay .cut-sp-foot {
+  font-size: 9.5px;
+  padding-top: 5px;
+  opacity: 0;
+  transition: opacity 0.15s;
+  color: #fbbf24;
+}
+.cut-settings-pop-portal .cut-sp-foot-show { opacity: 1; }
+
+/* Ultra-compact tier: the gear tooltip joins the other suppressed tooltips
+   (the popover itself is portaled to <body>, so it is NOT clipped and stays
+   fully usable at every width). */
+@container cut-overlay (max-width: 330px) {
+  #claude-usage-overlay .cut-settings-tooltip { display: none; }
+}
+
+/* The gear's tooltip text is a source node for the JS portal tip only — never
+   render it in place (the portal tip positions itself and can't be clipped). */
+#claude-usage-overlay .cut-settings-tooltip { display: none; }
+
+/* ===== v1.2.16: the "Rate us" nudge card =====
+   Lives under <body> (portaled, like .cut-portal-tip and the share popover), so
+   it is NOT scoped to #claude-usage-overlay and cannot be clipped by the
+   overlay's size containment or the narrow-mode scroller. Colour conventions
+   match the other popovers: dark card by default, inverted to light when
+   claude.ai is in dark mode via .cut-pop-dark, arrow flipped by .cut-pop-below,
+   arrow x-offset driven by --cut-arrow-x. */
+.cut-rate-nudge {
+  position: fixed;
+  z-index: 2147483647;
+  box-sizing: border-box;
+  width: 272px;
+  padding: 13px 14px 12px;
+  background: #1a1a1c;
+  color: #f1f1f2;
+  border-radius: 12px;
+  box-shadow: 0 12px 38px rgba(0, 0, 0, 0.45), 0 1px 3px rgba(0, 0, 0, 0.25);
+  font: 500 12px/1.45 ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  text-align: left;
+  opacity: 0;
+  transform: translateY(6px);
+  transition: opacity 0.18s ease, transform 0.18s ease;
+}
+
+.cut-rate-nudge.cut-nudge-in {
+  opacity: 1;
+  transform: none;
+}
+
+.cut-rate-nudge::after {
+  content: '';
+  position: absolute;
+  top: 100%;
+  left: var(--cut-arrow-x, 50%);
+  transform: translateX(-50%);
+  width: 0;
+  height: 0;
+  border: 7px solid transparent;
+  border-top-color: #1a1a1c;
+}
+
+.cut-rate-nudge.cut-pop-below::after {
+  top: auto;
+  bottom: 100%;
+  border-top-color: transparent;
+  border-bottom-color: #1a1a1c;
+}
+
+/* claude.ai dark theme -> light card, same inversion as the other popovers. */
+.cut-rate-nudge.cut-pop-dark {
+  background: #f5f3ef;
+  color: #1a1a1c;
+  box-shadow: 0 12px 38px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.12);
+}
+.cut-rate-nudge.cut-pop-dark::after { border-top-color: #f5f3ef; }
+.cut-rate-nudge.cut-pop-dark.cut-pop-below::after {
+  border-top-color: transparent;
+  border-bottom-color: #f5f3ef;
+}
+
+.cut-rate-nudge .cut-nudge-x {
+  appearance: none;
+  position: absolute;
+  top: 7px;
+  right: 8px;
+  background: transparent;
+  border: none;
+  color: inherit;
+  opacity: 0.45;
+  cursor: pointer;
+  font: inherit;
+  font-size: 15px;
+  line-height: 1;
+  padding: 2px 4px;
+  border-radius: 5px;
+  transition: opacity 0.15s;
+}
+.cut-rate-nudge .cut-nudge-x:hover { opacity: 0.9; }
+
+.cut-rate-nudge .cut-nudge-title {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  padding-right: 18px;
+}
+
+/* v1.4.1: the rating card is a touch wider so its title fits on one line.
+   Share/Support cards reuse .cut-rate-nudge and keep 272px. */
+.cut-rate-nudge.cut-rate-card { width: 308px; }
+.cut-rate-nudge.cut-rate-card .cut-nudge-title { white-space: nowrap; }
+.cut-rate-nudge.cut-rate-card .cut-nudge-body { text-wrap: pretty; }
+
+/* The stars are a call to action in their own right — people click them
+   expecting to rate, so they open the store page exactly like the CTA does. */
+.cut-rate-nudge .cut-nudge-stars {
+  display: flex;
+  gap: 2px;
+  margin: 7px 0 6px;
+  font-size: 17px;
+  line-height: 1;
+  color: #f5a623;
+  cursor: pointer;
+  width: max-content;
+}
+.cut-rate-nudge .cut-nudge-stars span {
+  opacity: 0;
+  transform: scale(0.5);
+  animation: cut-nudge-star 0.32s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+}
+.cut-rate-nudge .cut-nudge-stars span:nth-child(1) { animation-delay: 0.10s; }
+.cut-rate-nudge .cut-nudge-stars span:nth-child(2) { animation-delay: 0.18s; }
+.cut-rate-nudge .cut-nudge-stars span:nth-child(3) { animation-delay: 0.26s; }
+.cut-rate-nudge .cut-nudge-stars span:nth-child(4) { animation-delay: 0.34s; }
+.cut-rate-nudge .cut-nudge-stars span:nth-child(5) { animation-delay: 0.42s; }
+.cut-rate-nudge .cut-nudge-stars:hover span { color: #ffb733; }
+
+@keyframes cut-nudge-star {
+  from { opacity: 0; transform: scale(0.5) rotate(-25deg); }
+  to   { opacity: 1; transform: none; }
+}
+
+.cut-rate-nudge .cut-nudge-body {
+  font-size: 11.5px;
+  line-height: 1.5;
+  opacity: 0.78;
+  margin-bottom: 10px;
+}
+
+/* v1.4.1: creator's sign-off under the rating ask */
+.cut-rate-nudge .cut-nudge-by {
+  display: block;
+  margin-top: 6px;
+  font-style: italic;
+  font-size: 10.5px;
+  opacity: 1;
+}
+.cut-rate-nudge .cut-nudge-by a {
+  color: #d97757;
+  font-weight: 600;
+  text-decoration: none;
+}
+.cut-rate-nudge .cut-nudge-by a:hover { text-decoration: underline; }
+
+.cut-rate-nudge .cut-nudge-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.cut-rate-nudge .cut-nudge-cta {
+  appearance: none;
+  border: none;
+  background: #d97757;
+  color: #fff;
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 700;
+  line-height: 1;
+  padding: 8px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.15s, transform 0.15s;
+}
+.cut-rate-nudge .cut-nudge-cta:hover {
+  background: #c96846;
+  transform: translateY(-0.5px);
+}
+
+.cut-rate-nudge .cut-nudge-later {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 11px;
+  line-height: 1;
+  opacity: 0.55;
+  padding: 8px 6px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+.cut-rate-nudge .cut-nudge-later:hover { opacity: 0.9; }
+
+/* v1.3.8: the 👎 answer on the first step. Outlined, so it reads as an equal
+   answer rather than a dismissal, without competing with the coral 👍. */
+.cut-rate-nudge .cut-nudge-alt {
+  appearance: none;
+  background: transparent;
+  color: inherit;
+  border: 1px solid currentColor;
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 600;
+  line-height: 1;
+  padding: 7px 11px;
+  border-radius: 8px;
+  cursor: pointer;
+  opacity: 0.7;
+  transition: opacity 0.15s;
+}
+.cut-rate-nudge .cut-nudge-alt:hover { opacity: 1; }
+
+/* While the card is up, the button it points at pulses — without this the eye
+   reads the card as a page element rather than as "this thing, here". */
+#claude-usage-overlay .cut-rate-wrap.cut-rate-pulse .cut-rate {
+  opacity: 1;
+  background: color-mix(in srgb, #d97757 26%, transparent);
+  animation: cut-rate-pulse 1.7s ease-in-out infinite;
+}
+
+@keyframes cut-rate-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(217, 119, 87, 0.55); }
+  50%      { box-shadow: 0 0 0 5px rgba(217, 119, 87, 0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cut-rate-nudge { transition: none; }
+  .cut-rate-nudge .cut-nudge-stars span { opacity: 1; transform: none; animation: none; }
+  #claude-usage-overlay .cut-rate-wrap.cut-rate-pulse .cut-rate { animation: none; }
+}
+
+/* ===== v1.2.8: FIT-TO-WIDTH ==============================================
+   Escalating shed levels driven by MEASUREMENT, not by fixed breakpoints —
+   fitStrip() in content-script.js adds cut-fit-1 .. cut-fit-6 one at a time
+   until the last child sits inside the pill. The container-query tiers above
+   still handle genuinely narrow windows; this layer exists because the strip's
+   natural width depends on which optional pieces are switched on, so no fixed
+   threshold can be right for every combination.
+
+   Order matches the tiers' own priority, cheapest loss first. !important
+   throughout because most of these carry inline display values written by
+   renderForecast() / renderCompact() / applyFieldVisibility(), and this layer
+   has to be able to override them. */
+
+/* 1. The trailing "left" after the forecast time. Costs nothing to lose. */
+#claude-usage-overlay.cut-fit-1 .cut-fc-word,
+#claude-usage-overlay.cut-fit-1 .cut-chat-word { display: none !important; }
+
+/* 2. Inline reset times, both views. Still on the segment tooltips and in the
+      popup, so this is a relocation rather than a loss. Biggest single saving
+      on the row — roughly 220px with two meters showing. */
+#claude-usage-overlay.cut-fit-2 .cut-meta,
+#claude-usage-overlay.cut-fit-2 .cut-sep,
+#claude-usage-overlay.cut-fit-2 .cut-creset { display: none !important; }
+
+/* 3. The forecast chip. Also still on the tooltip. */
+#claude-usage-overlay.cut-fit-3 .cut-fc,
+#claude-usage-overlay.cut-fit-3 .cut-cfc { display: none !important; }
+
+/* 4. "Rate us" and "Support" shrink to their icons. The star still reads. */
+#claude-usage-overlay.cut-fit-4 .cut-rate .cut-rate-txt,
+#claude-usage-overlay.cut-fit-4 .cut-donate .cut-donate-txt { display: none !important; }
+#claude-usage-overlay.cut-fit-4 .cut-rate,
+#claude-usage-overlay.cut-fit-4 .cut-donate { padding: 2px 3px; }
+/*    v1.3.6: …and the chat size takes its collapsed-pill form. It is never
+      shed outright — the glyph + number costs about as much as a meter. */
+#claude-usage-overlay.cut-fit-4 .cut-chat { gap: 4px; }
+#claude-usage-overlay.cut-fit-4 .cut-chat .cut-chat-label,
+#claude-usage-overlay.cut-fit-4 .cut-chat .cut-chat-word { display: none !important; }
+#claude-usage-overlay.cut-fit-4 .cut-chat .cut-chat-ic { display: inline-block !important; }
+
+/* 5. The messages counter. */
+#claude-usage-overlay.cut-fit-5 .cut-msgs,
+#claude-usage-overlay.cut-fit-5 .cut-msgs-divider { display: none !important; }
+
+/* 6. Share. Last promotional element standing, dropped before anything
+      functional — the gear, collapse and close all outrank it. */
+#claude-usage-overlay.cut-fit-6 .cut-share-wrap,
+#claude-usage-overlay.cut-fit-6 .cut-share-divider { display: none !important; }
+
+/* Final fallback, set only when all six levels weren't enough. Scrolling clips
+   the tooltips that hang above the strip, which is why it isn't used earlier —
+   but an unreachable close button is worse. */
+/* v1.3.6: auto-collapsed (narrow window) — the expand button would only
+   overflow again, so it steps aside until the width comes back. */
+#claude-usage-overlay.cut-auto-collapsed .cut-collapse-wrap { display: none !important; }
+
+#claude-usage-overlay.cut-fit-scroll .cut-strip {
+  overflow-x: auto;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+#claude-usage-overlay.cut-fit-scroll .cut-strip::-webkit-scrollbar { display: none; }
+
+/* ===== v1.3.0 — the shared sidebar promo slot (generalised in v1.3.2) =====
+   Carries the SelectorsHub gold gradient so it reads as ours and not as one of
+   Claude's own nav rows — the point is for it to be noticed. It sits low in the
+   sidebar (beside Customize/Settings) rather than at the top, so it stands out
+   without pushing anyone's chats down. */
+.cut-promo-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  /* v1.3.7: never wider than its column, never shrunk to nothing in a row. */
+  box-sizing: border-box;
+  width: auto;
+  max-width: 100%;
+  min-width: 0;
+  flex: 0 0 auto;
+  align-self: stretch;
+  position: relative;
+  z-index: 0;
+  margin: 6px 0;
+  border-radius: 10px;
+  font-family: inherit;
+  /* v1.3.8: dark card inside a gold outline. White on the old solid gold was
+     ~2.3:1 and the 10px second line was hard to read; white on this card is
+     15:1 and the gold subtitle 7.5:1, and the gold edge keeps it ours. The
+     two-layer background paints the gold only under the transparent border. */
+  background:
+    linear-gradient(#2a2620, #2a2620) padding-box,
+    linear-gradient(135deg, #f0a93a 0%, #e89b2d 50%, #ca7702 100%) border-box;
+  border: 1.5px solid transparent;
+  box-shadow: 0 2px 12px rgba(232, 155, 45, 0.30);
+  padding: 0;
+  transition: box-shadow 0.16s ease, transform 0.16s ease;
+}
+.cut-promo-row:hover {
+  box-shadow: 0 4px 18px rgba(232, 155, 45, 0.48);
+  transform: translateY(-1px);
+}
+.cut-promo-row .cut-desktop-link-a {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 7px 10px;
+  border-radius: 9px;
+  color: #fff;
+  text-decoration: none;
+  letter-spacing: 0.01em;
+}
+.cut-promo-row .cut-desktop-label {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.cut-promo-row .cut-desktop-title {
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.25;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cut-promo-row .cut-desktop-sub {
+  font-size: 11.5px;
+  font-weight: 600;
+  line-height: 1.3;
+  letter-spacing: 0.01em;
+  color: #f0a93a;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cut-promo-row .cut-desktop-link-a:hover,
+.cut-promo-row .cut-desktop-link-a:visited { color: #fff; text-decoration: none; }
+.cut-promo-row .cut-desktop-ico {
+  display: inline-flex;
+  flex: 0 0 auto;
+  color: #f0a93a;
+}
+.cut-promo-row .cut-desktop-ico svg { width: 15px; height: 15px; display: block; }
+.cut-promo-row .cut-desktop-x {
+  appearance: none;
+  background: rgba(255, 255, 255, 0.08);
+  border: 0;
+  color: #fff;
+  cursor: pointer;
+  opacity: 0.7;
+  font-size: 15px;
+  line-height: 1;
+  width: 20px;
+  height: 20px;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  margin-right: 4px;
+  transition: opacity 0.14s ease, background 0.14s ease;
+}
+.cut-promo-row:hover .cut-desktop-x { opacity: 0.85; }
+.cut-promo-row .cut-desktop-x:hover { opacity: 1; background: rgba(255, 255, 255, 0.16); }
+.cut-promo-row .cut-desktop-x:focus-visible { opacity: 1; outline: 2px solid #f0a93a; }
+
+/* A collapsed sidebar shrinks to an icon rail; drop the text so we never force
+   it wider than Claude intends. */
+@media (max-width: 220px) {
+  .cut-promo-row .cut-desktop-label { display: none; }
+  .cut-promo-row .cut-desktop-link-a { justify-content: center; padding: 8px 6px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .cut-promo-row, .cut-promo-row:hover { transform: none; transition: none; }
+}
+
+/* ===== v1.3.1 — Projects quick-picker in claude.ai's composer =====
+   Unlike the sidebar link, this one deliberately does NOT wear the SelectorsHub
+   gold. It sits inside Claude's own composer chrome next to Chat/Cowork, and a
+   branded button there reads as an ad wedged into the app; a native-looking one
+   reads as a feature and actually gets used. The brand shows up where it costs
+   nothing: the coral focus ring on the search field. */
+#cut-projects-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: 0 0 auto;
+  height: 28px;
+  padding: 0 8px;
+  margin: 0 0 0 2px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  cursor: pointer;
+  white-space: nowrap;
+  font: 500 12px/1 ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: rgba(28, 25, 23, 0.62);
+  transition: background 0.12s ease, color 0.12s ease;
+}
+#cut-projects-btn.cut-theme-dark { color: rgba(255, 255, 255, 0.62); }
+#cut-projects-btn:hover { background: rgba(28, 25, 23, 0.07); color: rgba(28, 25, 23, 0.92); }
+#cut-projects-btn.cut-theme-dark:hover { background: rgba(255, 255, 255, 0.09); color: #fff; }
+#cut-projects-btn[aria-expanded="true"] { background: rgba(28, 25, 23, 0.09); color: rgba(28, 25, 23, 0.95); }
+#cut-projects-btn.cut-theme-dark[aria-expanded="true"] { background: rgba(255, 255, 255, 0.12); color: #fff; }
+#cut-projects-btn:focus-visible { outline: 2px solid #d97757; outline-offset: 1px; }
+#cut-projects-btn .cut-proj-ico,
+#cut-projects-btn .cut-proj-caret { display: inline-flex; flex: 0 0 auto; }
+#cut-projects-btn .cut-proj-ico svg { width: 15px; height: 15px; display: block; }
+#cut-projects-btn .cut-proj-caret svg { width: 10px; height: 10px; display: block; opacity: 0.65; }
+
+/* Narrow composer (preview panel open, split window): the label goes first —
+   driven by a measured composer width, not a viewport media query, because the
+   two have nothing to do with each other here. */
+#cut-projects-btn.cut-proj-icononly .cut-proj-text,
+#cut-projects-btn.cut-proj-icononly .cut-proj-caret { display: none; }
+#cut-projects-btn.cut-proj-icononly { padding: 0 6px; }
+
+/* The menu. Portaled to <body> at fixed position (the composer clips and
+   scrolls its own subtree), so every selector here is top-level. It follows the
+   PAGE theme rather than inverting like the strip's tooltips — a list of the
+   user's own project names is a menu, and a menu that fights the surface it
+   opens over looks like it belongs to another app. */
+.cut-proj-pop {
+  position: fixed;
+  z-index: 2147483646;
+  display: flex;
+  flex-direction: column;
+  width: 300px;
+  max-width: calc(100vw - 20px);
+  padding: 8px;
+  box-sizing: border-box;
+  border-radius: 12px;
+  background: #ffffff;
+  color: #1c1917;
+  box-shadow: 0 14px 38px rgba(0, 0, 0, 0.18), 0 0 0 1px rgba(28, 25, 23, 0.08);
+  font: 500 12.5px/1.35 ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+.cut-proj-pop.cut-proj-dark {
+  background: #262320;
+  color: #f2efec;
+  box-shadow: 0 14px 38px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(255, 255, 255, 0.1);
+}
+
+.cut-proj-head { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; }
+.cut-proj-search {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 30px;
+  box-sizing: border-box;
+  padding: 0 9px;
+  border-radius: 8px;
+  border: 1px solid rgba(28, 25, 23, 0.14);
+  background: rgba(28, 25, 23, 0.03);
+  color: inherit;
+  font: inherit;
+  outline: none;
+}
+.cut-proj-pop.cut-proj-dark .cut-proj-search {
+  border-color: rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.05);
+}
+.cut-proj-search::placeholder { color: currentColor; opacity: 0.45; }
+.cut-proj-search:focus { border-color: #d97757; box-shadow: 0 0 0 2px rgba(217, 119, 87, 0.22); }
+
+.cut-proj-refresh {
+  appearance: none;
+  flex: 0 0 auto;
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  opacity: 0.6;
+  cursor: pointer;
+  transition: opacity 0.12s ease, background 0.12s ease;
+}
+.cut-proj-refresh:hover { opacity: 1; background: rgba(28, 25, 23, 0.07); }
+.cut-proj-pop.cut-proj-dark .cut-proj-refresh:hover { background: rgba(255, 255, 255, 0.1); }
+.cut-proj-refresh svg { width: 14px; height: 14px; display: block; }
+
+.cut-proj-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  margin-top: 6px;
+  scrollbar-width: thin;
+}
+.cut-proj-group {
+  padding: 6px 8px 3px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  opacity: 0.45;
+}
+.cut-proj-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 8px;
+  border-radius: 8px;
+  color: inherit;
+  text-decoration: none;
+  cursor: pointer;
+}
+.cut-proj-item:hover,
+.cut-proj-item.cut-proj-active { background: rgba(28, 25, 23, 0.07); }
+.cut-proj-pop.cut-proj-dark .cut-proj-item:hover,
+.cut-proj-pop.cut-proj-dark .cut-proj-item.cut-proj-active { background: rgba(255, 255, 255, 0.09); }
+.cut-proj-item:visited { color: inherit; }
+.cut-proj-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cut-proj-when { flex: 0 0 auto; font-size: 10.5px; opacity: 0.42; }
+
+.cut-proj-note { padding: 16px 8px; text-align: center; opacity: 0.75; }
+.cut-proj-note-sub { margin-top: 4px; font-size: 11px; font-weight: 500; opacity: 0.7; }
+
+.cut-proj-foot {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 6px;
+  padding: 7px 8px 2px;
+  border-top: 1px solid rgba(28, 25, 23, 0.09);
+}
+.cut-proj-pop.cut-proj-dark .cut-proj-foot { border-top-color: rgba(255, 255, 255, 0.1); }
+.cut-proj-all { color: inherit; text-decoration: none; font-size: 11.5px; opacity: 0.75; }
+.cut-proj-all:hover { opacity: 1; text-decoration: underline; }
+.cut-proj-hint { font-size: 10.5px; opacity: 0.4; }
+
+/* ---- v1.3.1: Projects row inside the strip's settings popover ---- */
+.cut-settings-pop-portal .cut-sp-title-sub,
+#claude-usage-overlay .cut-sp-title-sub { margin-top: 2px; }
+
+/* Arriving here from the menu's "hide it from its settings" link: the popover
+   opens with several rows and the one they came for should be the one they see.
+   Two slow pulses, then it stops — a permanent highlight would just look like a
+   selected state. */
+@keyframes cut-sp-flash {
+  0%, 100% { background: transparent; }
+  25%, 75% { background: rgba(217, 119, 87, 0.28); }
+}
+.cut-settings-pop-portal .cut-sp-row.cut-sp-flash,
+#claude-usage-overlay .cut-sp-row.cut-sp-flash {
+  border-radius: 6px;
+  animation: cut-sp-flash 1.2s ease-in-out 2;
+}
+@media (prefers-reduced-motion: reduce) {
+  .cut-settings-pop-portal .cut-sp-row.cut-sp-flash,
+  #claude-usage-overlay .cut-sp-row.cut-sp-flash {
+    animation: none;
+    background: rgba(217, 119, 87, 0.22);
+  }
+}
+
+/* ---- v1.3.1: "who added this" line at the foot of the Projects menu ----
+   The menu opens inside Claude's own composer, so without this a user fairly
+   assumes Anthropic shipped the button — and has nowhere to go when they want
+   it gone. Muted and one line: it's an answer for the person who goes looking,
+   not a banner. */
+.cut-proj-brand {
+  flex: 0 0 auto;
+  margin-top: 2px;
+  padding: 0 8px 2px;
+  font-size: 10.5px;
+  line-height: 1.45;
+  opacity: 0.55;
+}
+.cut-proj-brand-link {
+  appearance: none;
+  border: 0;
+  padding: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  vertical-align: baseline;
+}
+.cut-proj-brand-link svg { width: 11px; height: 11px; display: block; }
+.cut-proj-brand:hover { opacity: 0.8; }
+.cut-proj-brand-link:hover { color: #d97757; }
+.cut-proj-brand-link:focus-visible { outline: 2px solid #d97757; outline-offset: 2px; border-radius: 3px; }
+
+/* ===== v1.3.4 — chat history search in claude.ai's sidebar =====
+   Like the Projects button and unlike the promo row, this one deliberately does
+   NOT wear the SelectorsHub gold. It sits above Claude's own "Chats and tasks"
+   heading as a piece of navigation, and a branded search box there reads as an
+   ad wedged into the sidebar; a native-looking one reads as a feature and gets
+   used. The brand shows where it costs nothing: the coral focus ring, and the
+   attribution line at the foot of the results panel. */
+.cut-cs-wrap {
+  display: flex;
+  align-items: center;
+  /* Tighter than the 6px it started with: the row now carries a logo, a
+     divider and the magnifier before the field, and typing space in a ~230px
+     sidebar is the scarcest thing here. */
+  gap: 5px;
+  box-sizing: border-box;
+  /* Belt and braces with csInsertionPoint(): even if we somehow land in a row,
+     these stop the box from stealing width from the heading next to it. */
+  flex: 0 0 auto;
+  align-self: stretch;
+  width: 100%;
+  margin: 4px 0 8px;
+  padding: 0 8px;
+  height: 32px;
+  border-radius: 9px;
+  border: 1px solid rgba(28, 25, 23, 0.14);
+  background: rgba(28, 25, 23, 0.035);
+  color: #1c1917;
+  font: 500 12.5px/1.35 ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  transition: border-color 0.14s ease, box-shadow 0.14s ease, background 0.14s ease;
+}
+.cut-cs-wrap.cut-theme-dark {
+  border-color: rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.05);
+  color: #f2efec;
+}
+.cut-cs-wrap:hover { border-color: rgba(217, 119, 87, 0.45); }
+.cut-cs-wrap:focus-within {
+  border-color: #d97757;
+  box-shadow: 0 0 0 2px rgba(217, 119, 87, 0.22);
+}
+/* The meter's mark, then a hairline, then the magnifier. The logo keeps its
+   colour — it's the thing that has to be noticed — while the magnifier stays a
+   muted utility glyph, so the two read as "brand, then function" rather than as
+   two competing icons. The divider is what makes that grouping legible at
+   14px; without it they look like clutter. */
+/* Sizing only. The artwork comes from icons/usage-meter-logo.svg, fetched by
+   the content script and injected into this slot — see loadMeterLogo() for why
+   neither an <img src> nor a background-image here can render on claude.ai. No
+   background colour and no radius: the file is transparent, so the mark sits in
+   the row rather than on a tile. */
+.cut-cs-mark-logo {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  width: 15px;
+  height: 15px;
+}
+.cut-cs-gauge { width: 15px; height: 15px; display: block; }
+.cut-cs-sep {
+  width: 1px;
+  height: 14px;
+  flex: 0 0 auto;
+  background: currentColor;
+  opacity: 0.16;
+}
+.cut-cs-ico { display: inline-flex; flex: 0 0 auto; opacity: 0.5; }
+.cut-cs-ico svg { width: 13px; height: 13px; display: block; }
+.cut-cs-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 100%;
+  border: 0;
+  padding: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  outline: none;
+}
+.cut-cs-input::placeholder { color: currentColor; opacity: 0.45; }
+.cut-cs-clear {
+  appearance: none;
+  display: none;
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(28, 25, 23, 0.1);
+  color: inherit;
+  font-size: 13px;
+  line-height: 1;
+  opacity: 0.6;
+  cursor: pointer;
+}
+.cut-cs-wrap.cut-theme-dark .cut-cs-clear { background: rgba(255, 255, 255, 0.12); }
+.cut-cs-wrap.cut-cs-has-text .cut-cs-clear { display: grid; }
+.cut-cs-clear:hover { opacity: 1; }
+.cut-cs-clear:focus-visible { opacity: 1; outline: 2px solid #d97757; }
+
+/* The results panel is portaled to <body> — the sidebar scrolls and clips its
+   own subtree, which would trap the panel inside the chat list. */
+.cut-cs-pop {
+  position: fixed;
+  z-index: 2147483646;
+  display: flex;
+  flex-direction: column;
+  max-width: calc(100vw - 20px);
+  padding: 6px;
+  box-sizing: border-box;
+  border-radius: 12px;
+  background: #ffffff;
+  color: #1c1917;
+  box-shadow: 0 14px 38px rgba(0, 0, 0, 0.18), 0 0 0 1px rgba(28, 25, 23, 0.08);
+  font: 500 12.5px/1.35 ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+.cut-cs-pop.cut-cs-dark {
+  background: #262320;
+  color: #f2efec;
+  box-shadow: 0 14px 38px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(255, 255, 255, 0.1);
+}
+
+.cut-cs-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+.cut-cs-list::-webkit-scrollbar { width: 8px; }
+.cut-cs-list::-webkit-scrollbar-thumb { background: rgba(28, 25, 23, 0.18); border-radius: 8px; }
+.cut-cs-pop.cut-cs-dark .cut-cs-list::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.18); }
+
+.cut-cs-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  color: inherit;
+  text-decoration: none;
+  cursor: pointer;
+}
+.cut-cs-item:hover,
+.cut-cs-item.cut-cs-active { background: rgba(28, 25, 23, 0.07); }
+.cut-cs-pop.cut-cs-dark .cut-cs-item:hover,
+.cut-cs-pop.cut-cs-dark .cut-cs-item.cut-cs-active { background: rgba(255, 255, 255, 0.09); }
+.cut-cs-item:visited { color: inherit; }
+.cut-cs-top { display: flex; align-items: baseline; gap: 8px; }
+.cut-cs-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cut-cs-when { flex: 0 0 auto; font-size: 10.5px; opacity: 0.42; }
+.cut-cs-mark {
+  background: rgba(217, 119, 87, 0.26);
+  color: inherit;
+  border-radius: 3px;
+  padding: 0 1px;
+}
+.cut-cs-pop.cut-cs-dark .cut-cs-mark { background: rgba(217, 119, 87, 0.38); }
+
+/* The only thing the panel ever says besides results, and only when there is
+   nothing to list. Kept tight — it replaces a row, it does not headline one. */
+.cut-cs-note { padding: 7px 8px; text-align: center; opacity: 0.7; font-size: 11.5px; }
+.cut-cs-note-sub { margin-top: 4px; font-size: 11px; font-weight: 500; opacity: 0.7; }
+
+/* One line, always. The panel is only as wide as the sidebar, so this is set
+   small and kept from wrapping — a two-line credit under three results reads as
+   a banner rather than a footnote. */
+.cut-cs-brand {
+  flex: 0 0 auto;
+  display: flex;
+  /* Centred rather than baseline-aligned now the row carries a close glyph
+     twice the size of the text beside it. */
+  align-items: center;
+  margin-top: 2px;
+  padding: 3px 4px 0;
+  font-size: 9.5px;
+  font-weight: 500;
+  line-height: 1.4;
+  white-space: nowrap;
+  opacity: 0.5;
+}
+/* The label may shrink if the sidebar is unusually narrow; the settings link
+   must not, because it is the way out of the feature. */
+.cut-cs-brand > span {
+  min-width: 0;
+  flex: 0 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cut-cs-brand-link { flex: 0 0 auto; }
+.cut-cs-brand-link {
+  appearance: none;
+  border: 0;
+  padding: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.cut-cs-brand:hover { opacity: 0.8; }
+.cut-cs-brand-link:hover { color: #d97757; }
+.cut-cs-brand-link:focus-visible { outline: 2px solid #d97757; outline-offset: 2px; border-radius: 3px; }
+
+/* Pushed to the far end of the row by margin-left, so it holds the corner
+   whatever the credit line does. Sized for a pointer (18px box) even though the
+   text beside it is 9.5px — a close control that is hard to hit is the same
+   problem as no close control. Full opacity on hover: the row sits at 0.5, and
+   the one thing in it that must never look disabled is the way out. */
+.cut-cs-close {
+  appearance: none;
+  flex: 0 0 auto;
+  margin-left: auto;
+  padding-left: 8px;
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  box-sizing: content-box;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0.75;
+}
+.cut-cs-close:hover { opacity: 1; }
+.cut-cs-close:focus-visible { opacity: 1; outline: 2px solid #d97757; outline-offset: 1px; border-radius: 4px; }
+
+/* No breakpoint for a collapsed sidebar on purpose: a viewport media query says
+   nothing about the sidebar's width, and the rail can't be reached with a
+   container query because the sidebar isn't ours to declare as a container.
+   The real guard is in JS — a collapsed rail doesn't render the "Chats and
+   tasks" heading at all, so findChatsHeading() finds nothing and we mount
+   nothing. */
+
+/* ===== v1.3.7: "by SelectorsHub" byline, logo menu, limit-reached line ===== */
+
+/* Byline: part of the logo's hit area, so hover/click behave as one control.
+   First thing to go when space is tight (fit-1, narrow tiers, collapsed). */
+#claude-usage-overlay .cut-byline {
+  margin-left: 6px;
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  opacity: 0.55;
+  transition: opacity 0.15s, color 0.15s;
+}
+#claude-usage-overlay .cut-logo-wrap:hover .cut-byline,
+#claude-usage-overlay .cut-logo-wrap:focus-visible .cut-byline {
+  opacity: 1;
+  color: #d97757;
+}
+#claude-usage-overlay .cut-logo-wrap:focus-visible {
+  border-radius: 4px;
+  box-shadow: 0 0 0 2px rgba(217, 119, 87, 0.45);
+}
+#claude-usage-overlay.cut-collapsed .cut-byline,
+#claude-usage-overlay.cut-fit-1 .cut-byline { display: none !important; }
+@container cut-overlay (max-width: 640px) {
+  #claude-usage-overlay .cut-byline { display: none !important; }
+}
+
+/* The live "updated …" line inside the portaled logo tip (the overlay-scoped
+   rule above doesn't reach <body>). */
+.cut-portal-tip .cut-tip-live {
+  display: block;
+  margin-top: 7px;
+  padding-top: 7px;
+  border-top: 1px solid rgba(128, 128, 128, 0.28);
+  opacity: 0.9;
+}
+.cut-portal-tip .cut-tip-live:empty { display: none; }
+
+/* Limit-reached line. Quiet coral text, not a button: it sits next to the
+   numbers during a lockout and must not read as an alert of its own. */
+#claude-usage-overlay .cut-lp-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+#claude-usage-overlay .cut-lp-wrap[hidden],
+#claude-usage-overlay .cut-lp-divider[hidden] { display: none !important; }
+#claude-usage-overlay .cut-lp {
+  color: inherit;
+  text-decoration: none;
+  font-size: 11.5px;
+  font-weight: 500;
+  padding: 1px 4px;
+  border-radius: 5px;
+  transition: background 0.15s;
+}
+#claude-usage-overlay .cut-lp-lead { opacity: 0.7; }
+#claude-usage-overlay .cut-lp-name { color: #d97757; font-weight: 600; }
+#claude-usage-overlay .cut-lp-arrow { color: #d97757; }
+#claude-usage-overlay .cut-lp:hover,
+#claude-usage-overlay .cut-lp:focus-visible {
+  background: rgba(217, 119, 87, 0.12);
+  outline: none;
+}
+#claude-usage-overlay .cut-lp:hover .cut-lp-name { text-decoration: underline; }
+#claude-usage-overlay .cut-lp-x {
+  all: unset;
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+  padding: 1px 3px;
+  border-radius: 4px;
+  opacity: 0.45;
+}
+#claude-usage-overlay .cut-lp-x:hover,
+#claude-usage-overlay .cut-lp-x:focus-visible { opacity: 1; background: rgba(128, 128, 128, 0.18); }
+#claude-usage-overlay .cut-lp-tooltip { display: none; }
+/* At the limit the line is worth more than the byline or the "left"/"tokens"
+   words, so it survives fit-1 in a shorter form ("Try X →") and only goes at
+   fit-2 — the same step that drops the inline reset text. */
+#claude-usage-overlay .cut-lp-short { display: none; }
+#claude-usage-overlay.cut-fit-1 .cut-lp-lead { display: none; }
+#claude-usage-overlay.cut-fit-1 .cut-lp-short { display: inline; opacity: 0.7; }
+#claude-usage-overlay.cut-collapsed .cut-lp-wrap,
+#claude-usage-overlay.cut-collapsed .cut-lp-divider,
+#claude-usage-overlay.cut-fit-1 .cut-lp-wrap,
+#claude-usage-overlay.cut-fit-1 .cut-lp-divider { display: none !important; }
+/* ≤640px the tiers already drop the inline reset time; the promo must not
+   outlive the one number that matters during a lockout. */
+@container cut-overlay (max-width: 640px) {
+  #claude-usage-overlay .cut-lp-wrap,
+  #claude-usage-overlay .cut-lp-divider { display: none !important; }
+}
+
+/* Logo menu. Same look and theme inversion as the gear popover:
+   dark card on light claude.ai, light card (.cut-pop-dark) on dark claude.ai. */
+.cut-lm {
+  position: fixed;
+  z-index: 2147483647;
+  width: 452px;
+  max-width: calc(100vw - 16px);
+  box-sizing: border-box;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  background: #1a1a1c;
+  color: #f1f1f2;
+  padding: 12px 12px 10px;
+  border-radius: 12px;
+  box-shadow: 0 10px 32px rgba(0, 0, 0, 0.38), 0 1px 3px rgba(0, 0, 0, 0.2);
+  font: 500 12px/1.35 ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  text-align: left;
+  animation: cut-lm-in 0.14s ease-out;
+}
+@keyframes cut-lm-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: none; }
+}
+.cut-lm.cut-pop-below { animation-name: cut-lm-in-below; }
+@keyframes cut-lm-in-below {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .cut-lm { animation: none; }
+}
+.cut-lm.cut-pop-dark {
+  background: #f5f3ef;
+  color: #1a1a1c;
+  box-shadow: 0 10px 32px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.12);
+}
+.cut-lm *, .cut-lm *::before, .cut-lm *::after { box-sizing: border-box; }
+
+.cut-lm-head { padding: 0 4px 10px; }
+.cut-lm-brand {
+  font-size: 14px;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  color: #d97757;
+}
+.cut-lm-sub { font-size: 11.5px; opacity: 0.65; margin-top: 1px; }
+
+.cut-lm-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 2px;
+}
+@media (max-width: 460px) {
+  .cut-lm-grid { grid-template-columns: 1fr; }
+}
+.cut-lm-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 7px 8px;
+  border-radius: 8px;
+  color: inherit !important;
+  text-decoration: none !important;
+  min-width: 0;
+  outline: none;
+  transition: background 0.12s;
+}
+.cut-lm-item:hover,
+.cut-lm-item:focus-visible { background: rgba(217, 119, 87, 0.16); }
+.cut-lm-item:focus-visible { box-shadow: inset 0 0 0 1.5px rgba(217, 119, 87, 0.7); }
+.cut-lm-badge {
+  flex: 0 0 26px;
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(217, 119, 87, 0.16);
+  color: #d97757;
+  font-size: 13px;
+  font-weight: 800;
+}
+.cut-lm-txt { display: flex; flex-direction: column; min-width: 0; }
+.cut-lm-name {
+  font-size: 12.5px;
+  font-weight: 650;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cut-lm-desc {
+  font-size: 11px;
+  font-weight: 400;
+  opacity: 0.62;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cut-lm-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 8px;
+  padding: 9px 4px 0;
+  border-top: 1px solid rgba(128, 128, 128, 0.25);
+}
+.cut-lm-about,
+.cut-lm-all {
+  color: inherit !important;
+  text-decoration: none !important;
+  font-size: 11.5px;
+  border-radius: 4px;
+  outline: none;
+}
+.cut-lm-about { opacity: 0.6; }
+.cut-lm-about:hover, .cut-lm-about:focus-visible { opacity: 1; text-decoration: underline !important; }
+.cut-lm-all { color: #d97757 !important; font-weight: 700; }
+.cut-lm-all:hover, .cut-lm-all:focus-visible { text-decoration: underline !important; }
+
+/* v1.3.7 fix: .cut-divider's display beat the [hidden] attribute, so the
+   messages-left divider showed as a stray second "|" before Rate us. */
+#claude-usage-overlay .cut-msgs[hidden],
+#claude-usage-overlay .cut-msgs-divider[hidden] { display: none !important; }
+
+/* v1.3.7: real tool icons (painted to canvas) replace the letter badge. */
+.cut-lm-badge.cut-lm-badge-img { background: transparent; }
+.cut-lm-icon { width: 26px; height: 26px; display: block; border-radius: 6px; }
+
+
+/* ===== v1.3.8: Share popup pulse + "Share my usage" card ===== */
+#claude-usage-overlay .cut-share-wrap.cut-rate-pulse .cut-share {
+  opacity: 1;
+  background: color-mix(in srgb, #d97757 26%, transparent);
+  animation: cut-rate-pulse 1.7s ease-in-out infinite;
+  border-radius: 6px;
+}
+
+.cut-sp-share {
+  appearance: none;
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  color: inherit;
+  font: inherit;
+  font-weight: 600;
+  padding: 6px 4px 2px;
+  cursor: pointer;
+  opacity: 0.9;
+}
+.cut-sp-share:hover { color: #d97757; opacity: 1; }
+
+.cut-sc-panel {
+  position: fixed;
+  z-index: 2147483647;
+  box-sizing: border-box;
+  width: min(480px, calc(100vw - 16px));
+  padding: 16px 16px 14px;
+  background: #1a1a1c;
+  color: #f1f1f2;
+  border-radius: 14px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5), 0 1px 3px rgba(0, 0, 0, 0.25);
+  font: 500 12px/1.45 ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  opacity: 0;
+  transform: translateY(6px);
+  transition: opacity 0.18s ease, transform 0.18s ease;
+}
+.cut-sc-panel.cut-sc-in { opacity: 1; transform: none; }
+.cut-sc-panel.cut-pop-dark {
+  background: #f5f3ef;
+  color: #1a1a1c;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(255, 255, 255, 0.12);
+}
+.cut-sc-panel .cut-sc-x {
+  appearance: none;
+  position: absolute;
+  top: 9px;
+  right: 10px;
+  background: transparent;
+  border: none;
+  color: inherit;
+  opacity: 0.5;
+  cursor: pointer;
+  font: inherit;
+  font-size: 17px;
+  line-height: 1;
+  padding: 2px 5px;
+}
+.cut-sc-panel .cut-sc-x:hover { opacity: 0.95; }
+.cut-sc-panel .cut-sc-title { font-size: 14px; font-weight: 700; margin-bottom: 10px; }
+.cut-sc-panel .cut-sc-frame {
+  aspect-ratio: 1200 / 630;
+  border-radius: 10px;
+  overflow: hidden;
+  background: #1b1917;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.cut-sc-panel .cut-sc-loading { color: #a39c93; font-size: 12px; }
+.cut-sc-panel .cut-sc-canvas { display: block; width: 100%; height: auto; }
+.cut-sc-panel .cut-sc-note { font-size: 11px; opacity: 0.6; margin: 8px 0 10px; }
+.cut-sc-panel .cut-sc-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.cut-sc-panel .cut-sc-btn {
+  appearance: none;
+  border: 1px solid currentColor;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+  padding: 9px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  opacity: 0.8;
+  transition: opacity 0.15s, background 0.15s;
+}
+.cut-sc-panel .cut-sc-btn:hover { opacity: 1; }
+.cut-sc-panel .cut-sc-primary {
+  border-color: #d97757;
+  background: #d97757;
+  color: #fff;
+  opacity: 1;
+}
+.cut-sc-panel .cut-sc-primary:hover { background: #c96846; border-color: #c96846; }
+.cut-sc-panel .cut-sc-toast {
+  margin-top: 10px;
+  padding: 7px 10px;
+  border-radius: 8px;
+  background: color-mix(in srgb, #d97757 22%, transparent);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+.cut-sc-panel .cut-sc-toast[hidden] { display: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  .cut-sc-panel { transition: none; }
+  #claude-usage-overlay .cut-share-wrap.cut-rate-pulse .cut-share { animation: none; }
+}
+
+/* ===== v1.3.9: Support card + gear pulse + ⚙ menu item ===== */
+/* The card points at the gear, where "Support this project" always lives. */
+#claude-usage-overlay .cut-settings-wrap.cut-rate-pulse .cut-settings {
+  opacity: 1;
+  color: #d97757;
+  background: color-mix(in srgb, #d97757 22%, transparent);
+  animation: cut-rate-pulse 1.7s ease-in-out infinite;
+  border-radius: 6px;
+}
+/* The reassurance line: small, quiet, but readable. */
+.cut-rate-nudge .cut-nudge-fine {
+  margin-top: 9px;
+  font-size: 10.5px;
+  line-height: 1.4;
+  opacity: 0.55;
+}
+.cut-sp-support { padding-top: 2px; }
+
+/* ===== v1.4.2: "Explore more tools" card + logo pulse ===== */
+/* The card points at the logo, which opens the tools menu. */
+#claude-usage-overlay .cut-logo-wrap.cut-rate-pulse {
+  background: color-mix(in srgb, #d97757 22%, transparent);
+  border-radius: 6px;
+  animation: cut-rate-pulse 1.7s ease-in-out infinite;
+}
+#claude-usage-overlay .cut-logo-wrap.cut-rate-pulse .cut-logo { color: #d97757; opacity: 1; }
+/* The card already says what the logo does: no hover tooltip on top of it. */
+#claude-usage-overlay .cut-logo-wrap.cut-pop-open .cut-tooltip { opacity: 0 !important; visibility: hidden !important; }
+@media (prefers-reduced-motion: reduce) {
+  #claude-usage-overlay .cut-logo-wrap.cut-rate-pulse { animation: none; }
+}
+
+/* ===== v1.4.4: "Hide the usage strip?" confirm card for the × button =====
+   Styled as a red warning. "Keep it" is the filled, focused default; "Hide
+   strip" is the red outlined secondary. Light card on dark pages (as the
+   share card), dark card on light pages. */
+.cut-hc-panel {
+  position: fixed;
+  z-index: 2147483647;
+  box-sizing: border-box;
+  width: min(300px, calc(100vw - 16px));
+  padding: 14px 14px 12px;
+  background: #1a1a1c;
+  color: #f1f1f2;
+  border: 1px solid rgba(239, 68, 68, 0.55);
+  border-top: 4px solid #ef4444;
+  border-radius: 12px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5), 0 0 0 4px rgba(239, 68, 68, 0.12);
+  font: 500 12px/1.45 ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  text-align: left;
+  opacity: 0;
+  transform: translateY(6px);
+  transition: opacity 0.18s ease, transform 0.18s ease;
+}
+.cut-hc-panel.cut-hc-in { opacity: 1; transform: none; }
+.cut-hc-panel.cut-pop-dark {
+  background: #fdf6f5;
+  color: #1a1a1c;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.55), 0 0 0 4px rgba(239, 68, 68, 0.18);
+}
+.cut-hc-panel .cut-hc-head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+.cut-hc-panel .cut-hc-ic {
+  display: inline-flex; align-items: center; justify-content: center;
+  flex-shrink: 0; width: 26px; height: 26px; border-radius: 50%;
+  background: rgba(239, 68, 68, 0.16); color: #ef4444;
+}
+.cut-hc-panel.cut-pop-dark .cut-hc-ic { color: #dc2626; background: rgba(220, 38, 38, 0.12); }
+.cut-hc-panel .cut-hc-title { font-size: 14px; font-weight: 700; color: #f87171; }
+.cut-hc-panel.cut-pop-dark .cut-hc-title { color: #b91c1c; }
+.cut-hc-panel .cut-hc-body { opacity: 0.88; margin-bottom: 10px; }
+.cut-hc-panel .cut-hc-dur-lbl {
+  font-size: 10.5px; font-weight: 700; letter-spacing: 0.06em;
+  text-transform: uppercase; opacity: 0.6; margin-bottom: 5px;
+}
+.cut-hc-panel .cut-hc-dur {
+  display: flex; gap: 4px; padding: 3px; margin-bottom: 10px;
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+}
+.cut-hc-panel.cut-pop-dark .cut-hc-dur {
+  background: rgba(0, 0, 0, 0.04);
+  border-color: rgba(0, 0, 0, 0.10);
+}
+.cut-hc-panel .cut-hc-opt { position: relative; flex: 1 1 auto; cursor: pointer; }
+.cut-hc-panel .cut-hc-opt input {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  margin: 0; opacity: 0; cursor: pointer;
+}
+.cut-hc-panel .cut-hc-opt span {
+  display: block; padding: 6px 6px; border-radius: 6px;
+  text-align: center; white-space: nowrap;
+  font-size: 11.5px; font-weight: 600; opacity: 0.75;
+  transition: background 0.15s, color 0.15s, opacity 0.15s;
+}
+.cut-hc-panel .cut-hc-opt:hover span { opacity: 1; }
+.cut-hc-panel .cut-hc-opt input:checked + span {
+  opacity: 1; background: #45454c; color: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.45), inset 0 0 0 1px rgba(255, 255, 255, 0.14);
+}
+.cut-hc-panel.cut-pop-dark .cut-hc-opt input:checked + span {
+  background: #fff; color: #1a1a1c;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
+}
+.cut-hc-panel .cut-hc-opt input:focus-visible + span { outline: 2px solid #d97757; outline-offset: 1px; }
+.cut-hc-panel .cut-hc-tip {
+  padding: 8px 10px;
+  border-radius: 8px;
+  border-left: 3px solid #ef4444;
+  background: rgba(239, 68, 68, 0.12);
+  font-size: 11.5px;
+  margin-bottom: 12px;
+}
+.cut-hc-panel .cut-hc-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.cut-hc-panel .cut-hc-btn {
+  appearance: none;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+  padding: 9px 14px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s, box-shadow 0.15s;
+}
+/* Secondary, destructive: red text/outline, fills red on hover. */
+.cut-hc-panel .cut-hc-danger {
+  border: 1px solid #ef4444;
+  background: transparent;
+  color: #f87171;
+}
+.cut-hc-panel.cut-pop-dark .cut-hc-danger { color: #dc2626; border-color: #dc2626; }
+.cut-hc-panel .cut-hc-danger:hover { background: #dc2626; border-color: #dc2626; color: #fff; }
+/* Primary, default: the one we want them to press. */
+.cut-hc-panel .cut-hc-keep {
+  border: 1px solid #d97757;
+  background: #d97757;
+  color: #fff;
+  min-width: 84px;
+}
+.cut-hc-panel .cut-hc-keep:hover { background: #c96846; border-color: #c96846; }
+/* :focus (not only :focus-visible) so the default ring shows after a mouse
+   click on × — that's when it's focused programmatically. */
+.cut-hc-panel .cut-hc-keep:focus {
+  outline: 2px solid #d97757;
+  outline-offset: 3px;
+  box-shadow: 0 0 16px rgba(217, 119, 87, 0.55);
+}
+.cut-hc-panel .cut-hc-danger:focus-visible { outline: 2px solid #ef4444; outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) {
+  .cut-hc-panel { transition: none; }
+}
+
+/* ---------------------------------------------------------------------------
+   v1.4.5 — Claude Code session tokens. On claude.ai/code/session_… the chat
+   segment reads "Code 2.4M tokens  in 12K · out 48K · cache 2.3M". The
+   in/out/cache detail is the first thing to go for width (fit level 1, and
+   the 820px container tier), the label and word follow the chat segment's
+   own rules. The terminal glyph replaces the bubble wherever a glyph shows.
+--------------------------------------------------------------------------- */
+#claude-usage-overlay .cut-chat-detail {
+  display: none;
+  font-size: 11px;
+  opacity: 0.62;
+  margin-left: 2px;
+  font-variant-numeric: tabular-nums;
+}
+#claude-usage-overlay .cut-chat.cut-code .cut-chat-detail:not(:empty) { display: inline; }
+#claude-usage-overlay .cut-code-ic {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+  opacity: 0.7;
+  display: none;
+}
+#claude-usage-overlay .cut-code .cut-chat-ic { display: none !important; }
+#claude-usage-overlay .cut-cchat.cut-code .cut-code-ic { display: inline-block; }
+@container cut-overlay (max-width: 820px) {
+  #claude-usage-overlay .cut-chat.cut-code .cut-chat-detail:not(:empty) { display: none; }
+}
+@container cut-overlay (max-width: 480px) {
+  #claude-usage-overlay .cut-chat.cut-code .cut-code-ic { display: inline-block; }
+}
+#claude-usage-overlay.cut-fit-1 .cut-chat.cut-code .cut-chat-detail { display: none !important; }
+#claude-usage-overlay.cut-fit-4 .cut-chat.cut-code .cut-code-ic { display: inline-block !important; }
+
+/* ---------------------------------------------------------------------------
+   v1.4.5 — usage bars. A 36x5 bar beside each meter's label: the fill is % used
+   (same green/amber/orange/red as the number). Pace lives in the tooltip.
+   Shed with the reset times (fit level 2 / 640px tier); collapsed pill keeps
+   its rings instead. Hidden while a meter has no number, so an empty track is
+   never mistaken for 0%.
+--------------------------------------------------------------------------- */
+/* v1.4.8: the usage bar is a 2px line UNDER the label (v1.2.2 style), not a
+   block beside it. Absolutely positioned inside .cut-lwrap, so it costs no
+   width or height and the strip's layout is identical with it on or off. */
+#claude-usage-overlay .cut-lwrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+#claude-usage-overlay .cut-bar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -6px;            /* v1.4.9: 3px gap below the label, then the bar */
+  min-width: 8px;          /* "F" is one letter wide; keep the line readable */
+  height: 3px;             /* v1.4.9: was 2px */
+  border-radius: 2px;
+  overflow: hidden;
+  pointer-events: none;
+  background: rgba(127, 127, 127, 0.22);
+}
+#claude-usage-overlay .cut-bar-fill {
+  position: absolute;
+  left: 0; top: 0; bottom: 0;
+  width: 0%;
+  border-radius: 3px;
+  background: rgba(127, 127, 127, 0.5);
+  transition: width 0.45s cubic-bezier(0.4, 0, 0.2, 1), background-color 0.25s ease;
+}
+#claude-usage-overlay .cut-bar-fill.cut-color-green  { background: #10b981; }
+#claude-usage-overlay .cut-bar-fill.cut-color-amber  { background: #f59e0b; }
+#claude-usage-overlay .cut-bar-fill.cut-color-orange { background: #f97316; }
+#claude-usage-overlay .cut-bar-fill.cut-color-red    { background: #ef4444; }
+#claude-usage-overlay .cut-bar.cut-bar-empty,
+#claude-usage-overlay.cut-no-bars .cut-bar,
+#claude-usage-overlay.cut-collapsed .cut-bar { display: none !important; }
+/* Fable reads "F 3%"; a full-size bar would outweigh its one-letter label. */
+/* v1.4.7: every bar is 18px now, so Fable and Extra no longer need a smaller one. */
+/* v1.4.7: (bars are no longer hidden at 640px — see fitStrip.) */
+/* v1.4.8: no longer shed for width: the underline takes no space. */
+/* v1.4.9: while a bar is actually showing under a label, the label drops to
+   11px (pre-v1.2.10 size) and lifts 2px so label + gap + bar sit centred in
+   the strip. Labels without a bar (setting off, no data yet, collapsed) keep
+   the normal 12px. Still no layout change: transform doesn't move siblings. */
+#claude-usage-overlay:not(.cut-no-bars):not(.cut-collapsed) .cut-lwrap:has(> .cut-bar:not(.cut-bar-empty)) {
+  transform: translateY(-2px);
+}
+#claude-usage-overlay:not(.cut-no-bars):not(.cut-collapsed) .cut-lwrap:has(> .cut-bar:not(.cut-bar-empty)) .cut-label {
+  font-size: 11px;
+}
+@media (prefers-reduced-motion: reduce) {
+  #claude-usage-overlay .cut-bar-fill { transition: none; }
+}
+
+/* v1.4.7: "when does this show?" hints in the gear popover (Limit forecast,
+   Extra usage). Hover or keyboard focus opens a small bubble under the ⓘ. */
+.cut-settings-pop-portal .cut-sp-info,
+#claude-usage-overlay .cut-sp-info {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 13px;
+  height: 13px;
+  margin-left: auto;
+  border: 1px solid rgba(127, 127, 127, 0.75);
+  border-radius: 50%;
+  color: rgba(127, 127, 127, 0.95);
+  font: italic 700 9px/1 Georgia, "Times New Roman", serif;
+  cursor: help;
+  flex-shrink: 0;
+}
+/* Colour, not opacity, for the muted icon — opacity would fade the bubble too. */
+.cut-settings-pop-portal .cut-sp-info:hover,
+.cut-settings-pop-portal .cut-sp-info:focus-visible { color: inherit; border-color: currentColor; outline: none; }
+.cut-settings-pop-portal .cut-sp-tip,
+#claude-usage-overlay .cut-sp-tip {
+  display: none;
+  position: fixed;   /* placed by placeSpTip() — escapes the menu's scroll box */
+  z-index: 2147483647;
+  width: 220px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: #2b2b2e;
+  color: #f5f3ef;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35), 0 0 0 1px rgba(255, 255, 255, 0.12);
+  font: 400 11.5px/1.45 Inter, system-ui, -apple-system, sans-serif;
+  font-style: normal;
+  letter-spacing: 0;
+  text-transform: none;
+  text-align: left;
+  white-space: normal;
+}
+.cut-settings-pop-portal .cut-sp-info:hover .cut-sp-tip,
+.cut-settings-pop-portal .cut-sp-info:focus-visible .cut-sp-tip { display: block; }
+
+/* v1.4.7: the settings menu scrolls when it's taller than the room beside the
+   gear. The scroll box is an INNER wrapper so the popover's arrow (::after)
+   isn't clipped by it; max-height is set by positionSettingsPop(). */
+.cut-settings-pop-portal .cut-sp-scroll {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  margin-right: -8px;
+  padding-right: 8px;
+}
+/* Styling ::-webkit-scrollbar is what makes Chrome/Edge on macOS show the bar
+   all the time instead of only while scrolling. (Setting the standard
+   scrollbar-width/-color would switch Chrome back to overlay bars, so those
+   are kept for Firefox only.) */
+.cut-settings-pop-portal .cut-sp-scroll::-webkit-scrollbar { width: 6px; }
+.cut-settings-pop-portal .cut-sp-scroll::-webkit-scrollbar-track { background: transparent; }
+.cut-settings-pop-portal .cut-sp-scroll::-webkit-scrollbar-thumb {
+  background: rgba(127, 127, 127, 0.55);
+  border-radius: 3px;
+}
+@supports not selector(::-webkit-scrollbar) {
+  .cut-settings-pop-portal .cut-sp-scroll {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(127, 127, 127, 0.55) transparent;
+  }
+}
+/* "More below" fade while the list is scrolled short of its end. */
+.cut-settings-pop-portal .cut-sp-fade {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 8px;
+  height: 28px;
+  border-radius: 0 0 10px 10px;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+  background: linear-gradient(to bottom, rgba(26, 26, 28, 0), #1a1a1c);
+}
+.cut-settings-pop-portal.cut-pop-dark .cut-sp-fade {
+  background: linear-gradient(to bottom, rgba(245, 243, 239, 0), #f5f3ef);
+}
+.cut-settings-pop-portal.cut-sp-has-more .cut-sp-fade { opacity: 1; }
+
+/* v1.4.9: What's new card (reuses the .cut-rate-nudge look). */
+.cut-wn-nudge .cut-wn-list { margin: 6px 0 6px 18px; padding: 0; font-size: 13px; line-height: 1.45; }
+.cut-wn-nudge .cut-wn-list li { margin: 2px 0; }
+.cut-wn-nudge .cut-wn-list b { font-weight: 600; }
+
+/* v1.5.1: "Now available" card: ChatGPT / Gemini Usage Meter. Fixed on the
+   right of claude.ai, deliberately quiet: one small title, one row each. */
+.cut-mp {
+  position: fixed;
+  top: 50%;
+  right: 16px;
+  z-index: 2147482000;
+  width: max-content;   /* full product names, never cut off */
+  max-width: calc(100vw - 32px);
+  padding: 10px 10px 8px 12px;
+  border-radius: 12px;
+  background: #ffffff;
+  color: #1f1e1d;
+  border: 1px solid rgba(31, 30, 29, 0.12);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.08);
+  font: 500 12.5px/1.3 ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  opacity: 0;
+  transform: translate(8px, -50%);   /* vertically centred on the right edge */
+  transition: opacity .18s ease, transform .18s ease;
+}
+.cut-mp.cut-mp-in { opacity: 1; transform: translate(0, -50%); }
+.cut-mp.cut-mp-dark {
+  background: #262624;
+  color: #ece9e3;
+  border-color: rgba(255, 255, 255, 0.10);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
+}
+.cut-mp-title {
+  margin: 0 22px 6px 0;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  opacity: 0.55;
+}
+.cut-mp-x {
+  position: absolute;
+  top: 5px;
+  right: 6px;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: inherit;
+  font-size: 15px;
+  line-height: 20px;
+  opacity: 0.45;
+  cursor: pointer;
+}
+.cut-mp-x:hover, .cut-mp-x:focus-visible { opacity: 1; background: rgba(127, 127, 127, 0.15); outline: none; }
+.cut-mp-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 2px;
+  border-radius: 8px;
+  color: inherit !important;
+  text-decoration: none !important;
+}
+.cut-mp-row + .cut-mp-row { border-top: 1px solid rgba(127, 127, 127, 0.14); }
+.cut-mp-logo { flex: 0 0 20px; width: 20px; height: 20px; display: inline-flex; }
+.cut-mp-logo svg { width: 20px; height: 20px; display: block; }
+.cut-mp-name { flex: 1; white-space: nowrap; padding-right: 6px; }
+.cut-mp-btn {
+  flex-shrink: 0;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: #fff;
+  background: #d97757;
+  transition: background .15s;
+}
+.cut-mp-row:hover .cut-mp-btn, .cut-mp-row:focus-visible .cut-mp-btn { background: #c4633f; }
+.cut-mp-row:focus-visible { outline: 2px solid #d97757; outline-offset: 1px; }
+@media (prefers-reduced-motion: reduce) { .cut-mp { transition: none; } }
+/* The ChatGPT meter's needle is near-black: give both logos a light tile in
+   the dark theme so they read. */
+.cut-mp.cut-mp-dark .cut-mp-logo { background: #f4f2ee; border-radius: 6px; padding: 2px; box-sizing: border-box; }
+.cut-mp.cut-mp-dark .cut-mp-logo svg { width: 16px; height: 16px; }
+
+/* v1.5.2: "Don't show these cards" — quiet text link under every card's
+   buttons. Turns off settings.tipsEnabled. */
+.cut-nudge-quiet {
+  display: block;
+  margin: 8px auto 0;
+  padding: 2px 4px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 11px;
+  opacity: 0.55;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+.cut-nudge-quiet:hover, .cut-nudge-quiet:focus-visible { opacity: 0.9; outline: none; }
+/* v1.5.2: Free-plan hint: a touch wider so the title stays on one line. */
+.cut-rate-nudge.cut-free-hint { width: auto; max-width: calc(100vw - 16px); }
+.cut-free-hint .cut-nudge-title { white-space: nowrap; }
