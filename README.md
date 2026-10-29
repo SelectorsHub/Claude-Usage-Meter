@@ -4,6 +4,7 @@ A Chrome extension (Manifest V3) that tracks your Claude.ai usage with:
 
 - **In-composer strip** — a small pill embedded inside the chat composer (just under the project chip), showing session %, reset time, and messages-left when known.
 - **Toolbar popup** — Session (5-hour) + Weekly card auto-labelled with whichever Claude model you're actively using. Clicking the toolbar icon immediately fetches fresh data.
+- **Second account in incognito / private windows** (v1.5.4): an incognito window signed in to a different Claude account now shows that account's limits, not the normal window's. Usage is stored per account; see "Several accounts" below. Based on a community PR.
 - **No Share prompts** (v1.5.3): the Share button that appeared in the strip after rating, and the Share card, are gone. Sharing lives in the gear menu ("Share my usage card") and the toolbar popup.
 - **Free-plan first-message hint** (v1.5.2): Free accounts only get usage from Claude's replies, so before the first message a small card at the Usage segment says "Send your first message". Shown once (`free_hint_done`); the popup's Free-plan text now says the same instead of "Claude no longer shares usage data". Weekly stays hidden on Free until a reply reports it.
 - **Fewer pop-up cards** (v1.5.2): at most one card a week; the rating card is asked at most twice (first after 7 days, then 14 days later), share/tools once, donate twice (30 days apart). New "Tips & requests" switch in the gear menu, popup and Settings (`tipsEnabled`), and a "Don't show these cards" link on every card.

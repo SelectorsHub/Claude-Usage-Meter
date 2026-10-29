@@ -1,4 +1,10 @@
 // background.js (service worker, v1.21)
+// - v1.5.4: SECOND ACCOUNT IN INCOGNITO / PRIVATE WINDOWS. Usage, history,
+//   fired thresholds and lockout are stored per Claude account (org id), and a
+//   private window's API requests are made by a claude.ai tab in that window
+//   (proxy-fetch), so it is never shown the normal window's account. Based on
+//   a community PR (#3); see "browsing contexts" below. Adds freeze guards
+//   (job / request time limits) around the one-at-a-time context queue.
 // - v1.5.2: tipsEnabled setting (pop-up cards on/off), default on.
 // - v1.5.1: TEST_BUILD flags cut_test_build for the content script's
 //   "Now available" card (shows at once, resets on reload).
@@ -232,9 +238,18 @@ function normalizeStripFields(sf) {
 //                  the normal jar's cookies), so the request is run by the
 //                  content script of a claude.ai tab that lives in that jar.
 //
-// The "default" jar keeps the original, un-prefixed storage keys, so nothing
-// already stored is lost or migrated. Settings and the notify-error flag are
-// user-level and stay shared.
+// Account-level keys are stored under the account's org id for EVERY jar,
+// the normal one included; pre-1.5.4 un-prefixed data is moved there the first
+// time its org is seen (migrateLegacyAccountState). Settings and the
+// notify-error flag are user-level and stay shared.
+//
+// Freeze guards (v1.5.4): the queue is a single lane, so one job that never
+// settles would stall polling and every message for all windows. So:
+//   - each job has a hard time limit (CTX_JOB_TIMEOUT_MS); past it the queue
+//     moves on regardless;
+//   - every request has its own, shorter limit (CTX_FETCH_TIMEOUT_MS);
+//   - a request that finishes after its job was given up on is discarded
+//     (ctx_expired), so it can never write into the account that runs next.
 let CTX = "default";
 
 const BASE_STORAGE_KEYS = {
@@ -383,25 +398,60 @@ function clearAllCtxCaches() {   // account/org switch in ANY jar: drop everythi
   cacheEpoch++;
 }
 
+const CTX_JOB_TIMEOUT_MS = 60 * 1000;    // longest a single queued job may hold the lane
+const CTX_FETCH_TIMEOUT_MS = 20 * 1000;  // longest a single claude.ai request may take
 let ctxQueue = Promise.resolve();
+let RUN_ID = 0;   // id of the job currently holding the lane (0 = none)
+let runSeq = 0;
 function inCtx(ctx, fn) {
-  const run = async () => {
+  const run = () => {
+    const myRun = ++runSeq;
+    RUN_ID = myRun;
     const epoch = cacheEpoch;
-    CTX = ctx || "default";
+    const theCtx = ctx || "default";
+    CTX = theCtx;
     loadCtxCaches(CTX);
-    CURRENT_ORG = await orgForCtx(CTX);
-    if (CURRENT_ORG) await migrateLegacyAccountState(CURRENT_ORG);
-    try {
+    let timer = null;
+    const work = (async () => {
+      CURRENT_ORG = await orgForCtx(CTX);
+      if (CURRENT_ORG) await migrateLegacyAccountState(CURRENT_ORG);
       return await fn();
-    } finally {
-      if (epoch === cacheEpoch) saveCtxCaches(CTX);
+    })();
+    const watchdog = new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error("ctx_job_timeout")), CTX_JOB_TIMEOUT_MS);
+    });
+    return Promise.race([work, watchdog]).finally(() => {
+      clearTimeout(timer);
+      if (RUN_ID !== myRun) return;   // should not happen; never touch another job's state
+      if (epoch === cacheEpoch) saveCtxCaches(theCtx);
       CTX = "default";
       CURRENT_ORG = null;
-    }
+      RUN_ID = 0;
+    });
   };
   const p = ctxQueue.then(run, run);
   ctxQueue = p.catch(() => {});
   return p;
+}
+
+// fetch with a time limit; also refuses to hand back a response once the job
+// that asked for it is no longer the one holding the lane.
+async function guardedFetch(url, init) {
+  const myRun = RUN_ID;
+  const ctl = typeof AbortController === "function" ? new AbortController() : null;
+  const timer = setTimeout(() => { try { ctl && ctl.abort(); } catch (_) {} }, CTX_FETCH_TIMEOUT_MS);
+  try {
+    const resp = await fetch(url, ctl ? { ...(init || {}), signal: ctl.signal } : init);
+    if (myRun && RUN_ID !== myRun) throw new Error("ctx_expired");
+    return resp;
+  } finally { clearTimeout(timer); }
+}
+function withTimeout(promise, ms, label) {
+  let t = null;
+  return Promise.race([
+    promise,
+    new Promise((_, rej) => { t = setTimeout(() => rej(new Error(label || "timeout")), ms); })
+  ]).finally(() => clearTimeout(t));
 }
 
 // Every jar that currently has a claude.ai tab, plus "default" (which is
@@ -424,18 +474,20 @@ async function pollAll() {
 // (same-origin there, so the browser attaches THAT jar's cookies). Returns a
 // real Response so the callers' resp.ok / resp.status / resp.json() are unchanged.
 async function ctxFetch(url, init) {
-  if (CTX === "default") return fetch(url, init);
+  if (CTX === "default") return guardedFetch(url, init);
   const ctx = CTX;
+  const myRun = RUN_ID;
   const tabs = (await chrome.tabs.query({ url: "https://claude.ai/*" }))
     .filter((t) => ctxOfTab(t) === ctx)
     .sort((a, b) => (b.active ? 1 : 0) - (a.active ? 1 : 0));
   for (const t of tabs) {
     let r = null;
     try {
-      r = await chrome.tabs.sendMessage(t.id, {
+      r = await withTimeout(chrome.tabs.sendMessage(t.id, {
         type: "proxy-fetch", url, headers: (init && init.headers) || {}
-      });
+      }), CTX_FETCH_TIMEOUT_MS + 2000, "proxy_timeout");
     } catch (_) { continue; }
+    if (myRun && RUN_ID !== myRun) throw new Error("ctx_expired");
     if (r && typeof r.status === "number" && r.status >= 200 && r.status <= 599) {
       const noBody = r.status === 204 || r.status === 205 || r.status === 304;
       return new Response(noBody ? null : (r.body || ""), { status: r.status });
@@ -2863,6 +2915,7 @@ function handleMessage(msg, _sender, sendResponse) {
 
   if (msg.type === "get-state") {
     (async () => {
+     try {
       const [usage, settings, errState, currentModel, permission, notifyErrState] =
         await Promise.all([
           getUsage(),
@@ -2880,12 +2933,14 @@ function handleMessage(msg, _sender, sendResponse) {
         lastError: errState[STORAGE_KEYS.lastError] || null,
         lastNotifyError: notifyErrState[STORAGE_KEYS.lastNotifyError] || null
       });
+     } catch (err) { sendResponse({ ok: false, error: (err && err.message) || "state_failed" }); }
     })();
     return true;
   }
 
   if (msg.type === "save-settings") {
     (async () => {
+     try {
       // v1.2.7: MERGE rather than overwrite. Previously this replaced the whole
       // settings object, which was fine while the options page was the only
       // writer (it always sent every key). The popup now saves just
@@ -2909,6 +2964,7 @@ function handleMessage(msg, _sender, sendResponse) {
       await updateBadge(usage, next);   // v1.5.0: badge on/off applies at once
       refreshOtherBadges(next, CTX);    // v1.5.4: ...in the other jars too
       sendResponse({ ok: true });
+     } catch (err) { sendResponse({ ok: false, error: (err && err.message) || "save_failed" }); }
     })();
     return true;
   }
@@ -2965,7 +3021,10 @@ function handleMessage(msg, _sender, sendResponse) {
   }
 
   if (msg.type === "force-refresh") {
-    (async () => { await pollUsage(); sendResponse({ ok: true }); })();   // runs inside inCtx (see wrapper)
+    (async () => {   // runs inside inCtx (see wrapper)
+      try { await pollUsage(); sendResponse({ ok: true }); }
+      catch (err) { sendResponse({ ok: false, error: (err && err.message) || "poll_failed" }); }
+    })();
     return true;
   }
 
@@ -3029,6 +3088,7 @@ function handleMessage(msg, _sender, sendResponse) {
 
   if (msg.type === "reset-usage") {
     (async () => {
+     try {
       await chrome.storage.local.set({
         [STORAGE_KEYS.usage]: {
           session: null, weekly: null, fable: null, weeklyByFamily: {},
@@ -3051,6 +3111,7 @@ function handleMessage(msg, _sender, sendResponse) {
       if (CTX === "default") { try { await chrome.action.setBadgeText({ text: "" }); } catch (_) {} }
       pollCtx(CTX);
       sendResponse({ ok: true });
+     } catch (err) { sendResponse({ ok: false, error: (err && err.message) || "reset_failed" }); }
     })();
     return true;
   }
@@ -3069,15 +3130,18 @@ async function ctxForMessage(msg, sender) {
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (!msg || !msg.type) return;
   if (CTX_FREE_MESSAGES.has(msg.type)) return handleMessage(msg, sender, sendResponse);
+  let replied = false;
+  const replyOnce = (v) => { if (replied) return; replied = true; try { sendResponse(v); } catch (_) {} };
   (async () => {
     const ctx = await ctxForMessage(msg, sender);
     await inCtx(ctx, () => new Promise((resolve) => {
-      let replied = false;
-      const reply = (v) => { replied = true; try { sendResponse(v); } catch (_) {} resolve(); };
+      const reply = (v) => { replyOnce(v); resolve(); };
       let ret;
       try { ret = handleMessage(msg, sender, reply); } catch (_) { ret = undefined; }
-      if (ret !== true) { if (!replied) { try { sendResponse(); } catch (_) {} } resolve(); }
+      if (ret !== true) { replyOnce(); resolve(); }
     }));
-  })();
+  })().catch((err) => {   // v1.5.4: job timed out / failed: still answer, never leave the caller hanging
+    replyOnce({ ok: false, error: (err && err.message) || "failed" });
+  });
   return true;
 });

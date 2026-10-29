@@ -7290,8 +7290,12 @@
         try {
           const u = new URL(String(msg.url), location.href);
           if (u.origin !== location.origin || !u.pathname.startsWith("/api/")) { sendResponse({ status: 0 }); return; }
-          const resp = await fetch(u.href, { credentials: "include", headers: msg.headers || {} });
-          sendResponse({ status: resp.status, body: await resp.text() });
+          const ctl = new AbortController();
+          const timer = setTimeout(() => ctl.abort(), 20000);   // v1.5.4: never hang the background's queue
+          try {
+            const resp = await fetch(u.href, { credentials: "include", headers: msg.headers || {}, signal: ctl.signal });
+            sendResponse({ status: resp.status, body: await resp.text() });
+          } finally { clearTimeout(timer); }
         } catch (_) { sendResponse({ status: 0 }); }
       })();
       return true;
