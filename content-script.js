@@ -7282,6 +7282,20 @@
       ensureMounted();
       return;
     }
+    // v1.5.4: the background cannot read a private / container window's cookies,
+    // so for those windows it asks THIS tab (same-origin, so the browser sends
+    // this window's cookies) to make the claude.ai API request.
+    if (msg.type === "proxy-fetch") {
+      (async () => {
+        try {
+          const u = new URL(String(msg.url), location.href);
+          if (u.origin !== location.origin || !u.pathname.startsWith("/api/")) { sendResponse({ status: 0 }); return; }
+          const resp = await fetch(u.href, { credentials: "include", headers: msg.headers || {} });
+          sendResponse({ status: resp.status, body: await resp.text() });
+        } catch (_) { sendResponse({ status: 0 }); }
+      })();
+      return true;
+    }
     if (msg.type !== "usage-updated") return;
     latestUsage = msg.usage;
     // v1.3.8: feeds the rating prompt's "session just reset" moment.
