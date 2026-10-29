@@ -1,4 +1,7 @@
 // content-script.js (isolated world, v1.29)
+// - v1.5.3: Share button (after rating) and the "Know someone who hits Claude
+//   limits?" card removed from the strip (SHARE_IN_STRIP). Sharing stays in
+//   the gear menu ("Share my usage card") and the toolbar popup.
 // - v1.5.2: Free-plan first-message hint (freeHintDue / maybeShowFreeHint):
 //   "Send your first message" card at the Usage segment, once per user.
 // - v1.5.2: far fewer pop-up cards (7-day gap between any two, rating asked
@@ -836,7 +839,7 @@
   //     "Don't show these" link that turns it off.
   //   • a 7-day quiet period between ANY two cards (was 1–2 days)
   //   • rating card: first after 7 days, at most twice ever, 14 days apart
-  //   • share once, tools once, donate twice (60 days apart)
+  //   • share once, tools once, donate twice (30 days apart since v1.5.3)
   let tipsOn = true;
   let mpShownAt = 0;     // when the "Now available" card last appeared
   const QUIET_HTML = `<button class="cut-nudge-quiet" type="button" data-cut="nudge-quiet">Don\u2019t show these cards</button>`;
@@ -984,6 +987,7 @@
     scheduleFit(root);
   }
   const SHARE_KEY = "share_clicked";
+  const SHARE_IN_STRIP = false;   // v1.5.3: Share button + Share card retired
 
   // Share is offered only once the 5-day cooldown after rating has elapsed.
   // ratedAt === 0 while rated is true can only happen for someone who rated on
@@ -3049,6 +3053,7 @@
     return ["session", "weekly"].some((k) => u[k] && Number(u[k].percent) >= SHARE_MOMENT_MIN);
   }
   function shareNudgeDue() {
+    if (!SHARE_IN_STRIP) return false;   // v1.5.3: the Share card is gone
     if (!rated || shared || !rateStateLoaded || shareNudgeAt === null) return false;
     if (cardsQuiet()) return false;   // v1.5.2
     if (!shareUnlocked()) return false;
@@ -3175,7 +3180,7 @@
   const SUPPORT_NUDGE_DISMISS_KEY = "support_nudge_dismissals";
   const SUPPORT_FIRST = RATE_TEST ? 0 : 15 * DAY_MS;
   const SUPPORT_AFTER_RATE = RATE_TEST ? 30 * 1000 : 5 * DAY_MS;
-  const SUPPORT_REPEAT = RATE_TEST ? 90 * 1000 : 60 * DAY_MS;   // v1.5.2: was 30 days
+  const SUPPORT_REPEAT = RATE_TEST ? 90 * 1000 : 30 * DAY_MS;   // v1.5.3: back to 30 days (60 was too long; many never saw it)
   const SUPPORT_MAX_SHOWS = 2;   // v1.5.2: was 5
   let supportNudgeAt = null;      // null = not loaded, 0 = never shown
   let supportNudgeDismissals = 0;
@@ -3665,8 +3670,9 @@
   // each with its logo and an Install link. Rules:
   //   • existing users (install_at 0 = installed before the stamp existed)
   //     see it now; new installs only once 2 days have passed
-  //   • × closes it for good; Install hides that row (and the card once both
-  //     rows are used)
+  //   • × closes the whole card for good; Install hides just that row for
+  //     good (the card goes once both rows are used). Both keys live in
+  //     storage.local, which survives updates, so neither ever returns.
   //   • only while the strip is on the page, on a visible tab, at a width
   //     where it won't cover the conversation, and never while the What's new
   //     card is showing or due
@@ -3712,7 +3718,7 @@
   function metersPromoDue() {
     if (!mpLoaded || mpClosed || installAt === null) return false;
     if (!mpTest && cardsQuiet()) return false;   // v1.5.2
-    if (!mpItemsLeft().length) return false;
+    if (!mpItemsLeft().length) return false;   // both installed
     if (!mpTest && installAt && Date.now() - installAt < MP_WAIT) return false;
     return true;
   }
@@ -3779,6 +3785,8 @@
     el.addEventListener("click", (ev) => {
       const row = ev.target.closest && ev.target.closest(".cut-mp-row");
       if (!row) return;
+      // Install hides THAT row for good; the other row stays. The card goes
+      // once both have been used.
       mpClicked = { ...mpClicked, [row.dataset.mp]: Date.now() };
       try { chrome.storage.local.set({ [MP_CLICKED_KEY]: mpClicked }); } catch (_) {}
       setTimeout(() => {   // after the link has opened
@@ -3965,7 +3973,9 @@
     // Visible only once the post-rating cooldown has elapsed, and before they
     // have shared. While the network popover is open, keep the wrap visible so
     // the popover stays anchored, even though the shared flag is already set.
-    const show = (shareUnlocked() && !shared) || sharePopOpen;
+    // v1.5.3: no Share button in the strip any more (users: "too many
+    // prompts"). Sharing stays in the gear menu and the toolbar popup.
+    const show = SHARE_IN_STRIP && ((shareUnlocked() && !shared) || sharePopOpen);
     const display = show ? "" : "none";
     sw.style.display = display;
     sd.style.display = display;
