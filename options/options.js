@@ -8,6 +8,11 @@
 //   because it answers a different question ("will I run out early?" vs "have I
 //   crossed 75%?"), and some people want the milestones without the projection.
 
+// v1.5.5: translations (i18n/i18n.js). Only ever called at render time.
+const tx = (k, v) => CUM_I18N.t(k, v);
+const txh = (k, v) => CUM_I18N.th(k, v);
+const txp = (k, n, v) => CUM_I18N.tp(k, n, v);
+
 const SCOPES = ["session", "weekly"];
 
 let state = {
@@ -25,7 +30,8 @@ let state = {
   toolbarBadge: true,
   tipsEnabled: true,
   extraAlerts: true,
-  pollMinutes: 1
+  pollMinutes: 1,
+  language: "auto"   // v1.5.5
 };
 
 async function load() {
@@ -50,7 +56,38 @@ async function load() {
   document.getElementById("projects-button").checked = state.projectsButton;
   document.getElementById("chat-search").checked = state.chatSearch;
   document.getElementById("poll-minutes").value = state.pollMinutes;
+  state.language = settings.language || "auto";
+  renderLanguage();
   renderAll();
+}
+
+// v1.5.5: language picker. "Automatic" names the language it would pick now;
+// the other options show each language in its own name (never translated).
+function renderLanguage() {
+  const sel = document.getElementById("language");
+  if (!sel) return;
+  const nameOf = (code) => (CUM_I18N.LANGS.find((l) => l.code === code) || CUM_I18N.LANGS[0]).name;
+  sel.textContent = "";
+  const auto = document.createElement("option");
+  auto.value = "auto";
+  auto.textContent = tx("o.lang.auto", { lang: nameOf(CUM_I18N.detected()) });
+  sel.appendChild(auto);
+  for (const l of CUM_I18N.LANGS) {
+    const o = document.createElement("option");
+    o.value = l.code;
+    o.textContent = l.name;
+    sel.appendChild(o);
+  }
+  sel.value = state.language || "auto";
+}
+
+async function saveLanguage() {
+  const sel = document.getElementById("language");
+  state.language = sel.value || "auto";
+  CUM_I18N.setPref(state.language);   // re-translates the page now (onChange)
+  try {
+    await chrome.runtime.sendMessage({ type: "save-settings", settings: { language: state.language } });
+  } catch (_) {}
 }
 
 function renderAll() {
@@ -62,12 +99,13 @@ function renderAll() {
 function renderChips(containerId, list, scope) {
   const container = document.getElementById(containerId);
   container.innerHTML = "";
+  container.setAttribute("data-empty", tx("o.thresholds.empty"));
   for (const value of [...list].sort((a, b) => a - b)) {
     const chip = document.createElement("div");
     chip.className = "chip";
     chip.innerHTML = `<span>${value}%</span>`;
     const btn = document.createElement("button");
-    btn.setAttribute("aria-label", `Remove ${value}%`);
+    btn.setAttribute("aria-label", tx("o.chip.remove", { value }));
     btn.textContent = "×";
     btn.addEventListener("click", () => {
       const i = list.indexOf(value);
@@ -116,7 +154,8 @@ async function save() {
       // Merged into the stored stripFields by background (save-settings), so
       // only this one key changes.
       stripFields: { extra: state.extraShow },
-      pollMinutes: state.pollMinutes
+      pollMinutes: state.pollMinutes,
+      language: state.language || "auto"
     }
   });
   const msg = document.getElementById("saved-msg");
@@ -131,5 +170,17 @@ for (const scope of SCOPES) {
   });
 }
 document.getElementById("save").addEventListener("click", save);
+document.getElementById("language").addEventListener("change", saveLanguage);
 
-load();
+// v1.5.5: re-translate the static page and the dynamic bits on a language change.
+CUM_I18N.onChange(() => {
+  CUM_I18N.applyDom(document);
+  renderLanguage();
+  renderAll();
+});
+
+(async () => {
+  await CUM_I18N.ready();
+  CUM_I18N.applyDom(document);
+  load();
+})();

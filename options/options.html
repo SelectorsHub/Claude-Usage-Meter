@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>Claude Usage Meter · Settings</title>
+  <title data-i18n="o.docTitle">Claude Usage Meter · Settings</title>
   <link rel="stylesheet" href="options.css" />
 </head>
 <body>
@@ -10,110 +10,135 @@
     <header>
       <div class="brand-dot"></div>
       <h1>Claude Usage Meter</h1>
-      <p class="tagline">Configure notifications and chat behaviour.</p>
+      <p class="tagline" data-i18n="o.tagline">Configure notifications and chat behaviour.</p>
     </header>
 
+    <!-- v1.5.5: interface language. Options are filled in by options.js. -->
     <section class="card">
       <div class="card-head">
-        <h2>Session (5-hour) thresholds</h2>
-        <p>Notifications for the rolling 5-hour message window.</p>
+        <h2 data-i18n="o.lang.title">Language</h2>
       </div>
-      <div class="threshold-grid" id="session-grid"></div>
+      <select id="language" class="lang-select" data-i18n-aria="o.lang.title" aria-label="Language">
+        <option value="auto">Automatic</option>
+      </select>
+      <p class="lang-hint" data-i18n="o.lang.hint">Pick a language, or let it follow the language you use on Claude.ai.</p>
+    </section>
+
+    <section class="card">
+      <div class="card-head">
+        <h2 data-i18n="o.session.title">Session (5-hour) thresholds</h2>
+        <p data-i18n="o.session.desc">Notifications for the rolling 5-hour message window.</p>
+      </div>
+      <div class="threshold-grid" id="session-grid" data-empty="No thresholds configured."></div>
       <div class="add-row">
-        <input type="number" id="session-input" min="1" max="100" placeholder="e.g. 70" />
-        <button id="session-add" class="btn-primary">Add</button>
+        <input type="number" id="session-input" min="1" max="100" placeholder="e.g. 70" data-i18n-placeholder="o.session.placeholder" />
+        <button id="session-add" class="btn-primary" data-i18n="o.add">Add</button>
       </div>
     </section>
 
     <section class="card">
       <div class="card-head">
-        <h2>Weekly thresholds</h2>
-        <p>Applied to whichever weekly quota you're using (Sonnet, Opus, Haiku). Each fires once per cycle when crossed.</p>
+        <h2 data-i18n="o.weekly.title">Weekly thresholds</h2>
+        <p data-i18n="o.weekly.desc">Applied to whichever weekly quota you're using (Sonnet, Opus, Haiku). Each fires once per cycle when crossed.</p>
       </div>
-      <div class="threshold-grid" id="weekly-grid"></div>
+      <div class="threshold-grid" id="weekly-grid" data-empty="No thresholds configured."></div>
       <div class="add-row">
-        <input type="number" id="weekly-input" min="1" max="100" placeholder="e.g. 60" />
-        <button id="weekly-add" class="btn-primary">Add</button>
+        <input type="number" id="weekly-input" min="1" max="100" placeholder="e.g. 60" data-i18n-placeholder="o.weekly.placeholder" />
+        <button id="weekly-add" class="btn-primary" data-i18n="o.add">Add</button>
       </div>
     </section>
 
     <section class="card">
       <div class="card-head">
-        <h2>Polling &amp; notifications</h2>
+        <h2 data-i18n="o.poll.title">Polling &amp; notifications</h2>
       </div>
       <label class="row-label">
-        <span>Refresh every</span>
+        <span data-i18n="o.poll.label">Refresh every</span>
         <span class="inline-num">
           <input type="number" id="poll-minutes" min="1" max="60" />
-          <span>minutes</span>
+          <span data-i18n="o.poll.unit">minutes</span>
         </span>
       </label>
       <label class="toggle-row">
-        <span>Enable desktop notifications</span>
+        <span data-i18n="o.poll.notifications">Enable desktop notifications</span>
         <input type="checkbox" id="notifications-enabled" />
       </label>
       <label class="toggle-row">
-        <span>Warn me when I&rsquo;m on pace to run out early</span>
+        <span data-i18n="o.poll.forecastAlerts">Warn me when I&rsquo;m on pace to run out early</span>
         <input type="checkbox" id="forecast-alerts" />
       </label>
       <label class="toggle-row">
-        <span>Show session % on the toolbar icon</span>
+        <span data-i18n="o.poll.toolbarBadge">Show session % on the toolbar icon</span>
         <input type="checkbox" id="toolbar-badge" />
       </label>
       <label class="toggle-row">
-        <span>Show tips &amp; requests (review, share, what&rsquo;s new) on claude.ai</span>
+        <span data-i18n="o.poll.tips">Show tips &amp; requests (review, share, what&rsquo;s new) on claude.ai</span>
         <input type="checkbox" id="tips-enabled" />
       </label>
     </section>
 
     <section class="card">
       <div class="card-head">
-        <h2>Extra usage</h2>
-        <p>For accounts with extra usage turned on (Team, Enterprise, Max): how much you&rsquo;ve spent past your plan limits this month, against your monthly limit. Shows only when Claude reports it for your account.</p>
+        <h2 data-i18n="o.extra.title">Extra usage</h2>
+        <p data-i18n="o.extra.desc">For accounts with extra usage turned on (Team, Enterprise, Max): how much you&rsquo;ve spent past your plan limits this month, against your monthly limit. Shows only when Claude reports it for your account.</p>
       </div>
       <label class="toggle-row">
-        <span>Show extra usage in the strip and popup</span>
+        <span data-i18n="o.extra.show">Show extra usage in the strip and popup</span>
         <input type="checkbox" id="extra-show" />
       </label>
       <label class="toggle-row">
-        <span>Alert me as extra usage nears my monthly limit</span>
+        <span data-i18n="o.extra.alerts">Alert me as extra usage nears my monthly limit</span>
         <input type="checkbox" id="extra-alerts" />
       </label>
     </section>
 
     <section class="card">
       <div class="card-head">
-        <h2>Chat box</h2>
-        <p>Adds a Projects button beside Chat / Cowork so you can jump straight into any project instead of walking the plus menu.</p>
+        <h2 data-i18n="o.chatBox.title">Chat box</h2>
+        <p data-i18n="o.chatBox.desc">Adds a Projects button beside Chat / Cowork so you can jump straight into any project instead of walking the plus menu.</p>
       </div>
       <label class="toggle-row">
-        <span>Show the Projects button in the chat box</span>
+        <span data-i18n="o.chatBox.projectsButton">Show the Projects button in the chat box</span>
         <input type="checkbox" id="projects-button" />
       </label>
     </section>
 
     <section class="card">
       <div class="card-head">
-        <h2>Sidebar</h2>
-        <p>Adds a search box above &ldquo;Chats and tasks&rdquo; that filters every chat on your account by title as you type. There&rsquo;s also a button to read the messages themselves &mdash; that one reads your recent chats one by one, so it only ever runs when you press it.</p>
+        <h2 data-i18n="o.sidebar.title">Sidebar</h2>
+        <p data-i18n="o.sidebar.desc">Adds a search box above &ldquo;Chats and tasks&rdquo; that filters every chat on your account by title as you type. There&rsquo;s also a button to read the messages themselves &mdash; that one reads your recent chats one by one, so it only ever runs when you press it.</p>
       </div>
       <label class="toggle-row">
-        <span>Show chat history search in the sidebar</span>
+        <span data-i18n="o.sidebar.chatSearch">Show chat history search in the sidebar</span>
         <input type="checkbox" id="chat-search" />
       </label>
     </section>
 
 
     <div class="actions">
-      <button id="save" class="btn-primary">Save settings</button>
-      <span id="saved-msg" class="saved-msg">Saved.</span>
+      <button id="save" class="btn-primary" data-i18n="o.save">Save settings</button>
+      <span id="saved-msg" class="saved-msg" data-i18n="o.saved">Saved.</span>
     </div>
 
     <footer>
-      <p><strong>How it works.</strong> The extension polls <code>GET /api/organizations/{id}/usage</code> using your existing browser session cookie. The weekly card auto-labels with whichever Claude model you're actively using on claude.ai.</p>
-      <p class="note">These endpoints are undocumented. If Anthropic changes them, an update may be needed.</p>
+      <p data-i18n-html="o.foot.how_html"><strong>How it works.</strong> The extension polls <code>GET /api/organizations/{id}/usage</code> using your existing browser session cookie. The weekly card auto-labels with whichever Claude model you're actively using on claude.ai.</p>
+      <p class="note" data-i18n="o.foot.note">These endpoints are undocumented. If Anthropic changes them, an update may be needed.</p>
     </footer>
   </div>
+  <script src="../i18n/strings/en.js"></script>
+  <script src="../i18n/strings/fr.js"></script>
+  <script src="../i18n/strings/de.js"></script>
+  <script src="../i18n/strings/hi.js"></script>
+  <script src="../i18n/strings/id.js"></script>
+  <script src="../i18n/strings/it.js"></script>
+  <script src="../i18n/strings/ja.js"></script>
+  <script src="../i18n/strings/ko.js"></script>
+  <script src="../i18n/strings/pt-BR.js"></script>
+  <script src="../i18n/strings/es-419.js"></script>
+  <script src="../i18n/strings/es-ES.js"></script>
+  <script src="../i18n/strings/zh-CN.js"></script>
+  <script src="../i18n/strings/zh-TW.js"></script>
+  <script src="../i18n/i18n.js"></script>
   <script src="options.js"></script>
 </body>
 </html>

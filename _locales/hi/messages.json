@@ -1,0 +1,8 @@
+{
+  "appName": {
+    "message": "Claude Usage Meter"
+  },
+  "appDesc": {
+    "message": "Claude की सेशन, साप्ताहिक और Fable लिमिट और उनके रीसेट का समय, Claude.ai के चैट बॉक्स के ठीक ऊपर लाइव देखें।"
+  }
+}

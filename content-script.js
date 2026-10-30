@@ -446,6 +446,13 @@
 //   resolved it, confirming the auto-scroll logic as the cause.
 
 (function () {
+  // v1.5.5: translations — see i18n/i18n.js. tx() plain text, txh() HTML-escaped
+  // (for innerHTML / attributes), txp() plurals, txDur() compact durations.
+  const I18N = globalThis.CUM_I18N;
+  const tx = (k, v) => I18N.t(k, v);
+  const txh = (k, v) => I18N.th(k, v);
+  const txp = (k, n, v) => I18N.tp(k, n, v);
+  const txDur = (mins) => I18N.dur(mins);
   // ===== bridge SSE events =====
   window.addEventListener("message", (event) => {
     if (event.source !== window) return;
@@ -734,16 +741,17 @@
   const NEWS_ANCHOR_KEY = "desktop_link_anchor";
   // v1.3.8: Desktop leads again. A fresh install starts at index 0, and for a
   // Chrome/Edge user the desktop app is the more useful first thing to see.
+  // v1.5.5: sub/tip are getters so the text is translated when read, not at load.
   const CUM_NEWS = [
     {
-      sub: "Desktop version available",
+      get sub() { return tx("s.news.desktop.sub"); },
       url: DESKTOP_URL,
-      tip: "Claude Usage Meter \u2014 desktop app for macOS and Windows",
+      get tip() { return tx("s.news.desktop.tip"); },
     },
     {
-      sub: "Now available for Firefox",
+      get sub() { return tx("s.news.firefox.sub"); },
       url: PRODUCT_URL,
-      tip: "Claude Usage Meter \u2014 now on Firefox, alongside Chrome and Edge",
+      get tip() { return tx("s.news.firefox.tip"); },
     },
   ];
 
@@ -786,18 +794,18 @@
   // product page through the <a>'s own href. Order is Sanjay's pick.
   const SH_ALL_TOOLS_URL = "https://selectorshub.com/";
   const LOGO_MENU_TOOLS = [
-    { icon: "screenshot-with-url", name: "Screenshot with URL", desc: "Screenshots with the URL bar",  url: "https://selectorshub.com/screenshot-with-url/" },
-    { icon: "testcase-studio", name: "TestCase Studio",     desc: "Record test steps as you go",   url: "https://selectorshub.com/testcase-studio/" },
-    { icon: "check-my-links", name: "Check My Links",      desc: "Find broken links in 1 click",  url: "https://selectorshub.com/checkmylinks/" },
-    { icon: "page-load-timer", name: "Page Load Timer",     desc: "Page load time, automatically", url: "https://selectorshub.com/page-load-timer/" },
-    { icon: "selectorshub", name: "SelectorsHub",        desc: "XPath & Playwright locators",   url: "https://selectorshub.com/selectorshub/" },
-    { icon: "cssviewer", name: "CSSViewer",           desc: "See any element's CSS on hover", url: "https://chromewebstore.google.com/detail/cssviewer/plnialnlnbaodbmoedcppffmgfmmghbj" },
-    { icon: "clearcache", name: "ClearCache",          desc: "Clear cache in one click",      url: "https://chromewebstore.google.com/detail/clear-cache/epompmcepniobjioaagepjacapcoofof" },
-    { icon: "auto-data-filler", name: "Auto Data Filler",    desc: "Fill forms in one click",       url: "https://selectorshub.com/auto-data-filler/" },
-    { icon: "modify-header",    name: "Modify Header",       desc: "Edit request & response headers", url: "https://selectorshub.com/modify-header/" },
-    { icon: "anyformat",        name: "AnyFormat",           desc: "Save images in any format",     url: "https://www.selectorshub.com/anyformat/" },
-    { icon: "bookmarks-finder", name: "Bookmarks Finder",    desc: "Find any bookmark by typing",   url: "https://www.selectorshub.com/bookmarks-finder/" },
-    { icon: "testing-daily",    name: "Testing Daily",       desc: "Daily testing news & updates",  url: "https://selectorshub.com/testing-daily/" },
+    { icon: "screenshot-with-url", name: "Screenshot with URL", get desc() { return tx("s.tools.screenshotWithUrl.desc"); },  url: "https://selectorshub.com/screenshot-with-url/" },
+    { icon: "testcase-studio", name: "TestCase Studio",     get desc() { return tx("s.tools.testcaseStudio.desc"); },   url: "https://selectorshub.com/testcase-studio/" },
+    { icon: "check-my-links", name: "Check My Links",      get desc() { return tx("s.tools.checkMyLinks.desc"); },  url: "https://selectorshub.com/checkmylinks/" },
+    { icon: "page-load-timer", name: "Page Load Timer",     get desc() { return tx("s.tools.pageLoadTimer.desc"); }, url: "https://selectorshub.com/page-load-timer/" },
+    { icon: "selectorshub", name: "SelectorsHub",        get desc() { return tx("s.tools.selectorshub.desc"); },   url: "https://selectorshub.com/selectorshub/" },
+    { icon: "cssviewer", name: "CSSViewer",           get desc() { return tx("s.tools.cssviewer.desc"); }, url: "https://chromewebstore.google.com/detail/cssviewer/plnialnlnbaodbmoedcppffmgfmmghbj" },
+    { icon: "clearcache", name: "ClearCache",          get desc() { return tx("s.tools.clearcache.desc"); },      url: "https://chromewebstore.google.com/detail/clear-cache/epompmcepniobjioaagepjacapcoofof" },
+    { icon: "auto-data-filler", name: "Auto Data Filler",    get desc() { return tx("s.tools.autoDataFiller.desc"); },       url: "https://selectorshub.com/auto-data-filler/" },
+    { icon: "modify-header",    name: "Modify Header",       get desc() { return tx("s.tools.modifyHeader.desc"); }, url: "https://selectorshub.com/modify-header/" },
+    { icon: "anyformat",        name: "AnyFormat",           get desc() { return tx("s.tools.anyformat.desc"); },     url: "https://www.selectorshub.com/anyformat/" },
+    { icon: "bookmarks-finder", name: "Bookmarks Finder",    get desc() { return tx("s.tools.bookmarksFinder.desc"); },   url: "https://www.selectorshub.com/bookmarks-finder/" },
+    { icon: "testing-daily",    name: "Testing Daily",       get desc() { return tx("s.tools.testingDaily.desc"); },  url: "https://selectorshub.com/testing-daily/" },
   ];
 
   // Limit-reached line: when Session or Weekly hits the limit, the strip offers
@@ -842,7 +850,9 @@
   //   • share once, tools once, donate twice (30 days apart since v1.5.3)
   let tipsOn = true;
   let mpShownAt = 0;     // when the "Now available" card last appeared
-  const QUIET_HTML = `<button class="cut-nudge-quiet" type="button" data-cut="nudge-quiet">Don\u2019t show these cards</button>`;
+  // v1.5.5: an object whose toString() builds the markup, so `${QUIET_HTML}` in
+  // the card templates translates at render time, not at load.
+  const QUIET_HTML = { toString() { return `<button class="cut-nudge-quiet" type="button" data-cut="nudge-quiet">${txh("s.cards.quiet")}</button>`; } };
   const SHARE_DELAY = RATE_TEST ? 0 : SHARE_DELAY_PROD;
   const INSTALL_KEY = "install_at";
   const RATE_DELAY = RATE_TEST ? 0 : 2 * DAY_MS; // 2 days in milliseconds
@@ -957,15 +967,16 @@
   function collapseHintText() {
     // Legend only names the chips actually on screen.
     const keys = [];
-    if (fieldOn("session")) keys.push("S = session");
-    if (fieldOn("weekly")) keys.push("W = weekly");
-    if (fableVisible) keys.push("F = Fable");
-    if (extraVisible) keys.push("E = extra usage");
+    if (fieldOn("session")) keys.push(tx("s.collapse.legend.session"));
+    if (fieldOn("weekly")) keys.push(tx("s.collapse.legend.weekly"));
+    if (fableVisible) keys.push(tx("s.collapse.legend.fable"));
+    if (extraVisible) keys.push(tx("s.collapse.legend.extra"));
     if (fieldOn("chatTokens") && chatTokens && chatTokens.uuid === currentChatId()) {
-      keys.push("bubble = this chat's tokens");
+      keys.push(tx("s.collapse.legend.chat"));
     }
-    const legend = keys.length ? ` (${keys.join(", ")})` : "";
-    return `Collapse the strip to a compact view${legend}. Click again anytime to expand.`;
+    return keys.length
+      ? tx("s.collapse.hintLegend", { legend: keys.join(tx("s.collapse.legendSep")) })
+      : tx("s.collapse.hint");
   }
 
   function applyCollapsed(root) {
@@ -978,9 +989,9 @@
     if (collapsed && settingsPopOpen) closeSettingsPop(root);
     const btn = root.querySelector('[data-cut="collapse"]');
     const tip = root.querySelector('[data-cut="collapse-tip"]');
-    if (btn) btn.setAttribute("aria-label", collapsed ? "Expand the usage strip" : "Collapse the usage strip");
+    if (btn) btn.setAttribute("aria-label", collapsed ? tx("s.collapse.expandAria") : tx("s.collapse.collapseAria"));
     if (tip) tip.textContent = collapsed
-      ? "Expand the strip back to the full view."
+      ? tx("s.collapse.expandTip")
       : collapseHintText();
     // v1.2.8: the two views have completely different natural widths, and
     // expanding is the direction that can overflow.
@@ -1008,8 +1019,9 @@
     } catch (_) {}
     return CHROME_STORE_URL;
   }
-  const SHARE_TEXT = "Claude Usage Meter - see your Claude session & weekly usage limits live above the claude chat box. Free extension:";
-  const LINKEDIN_TEXT = "Claude Usage Meter - see your Claude usage above chat";
+  // v1.5.5: functions, so the share text is translated when a share happens.
+  const SHARE_TEXT = () => tx("s.share.text");
+  const LINKEDIN_TEXT = () => tx("s.share.linkedinText");
   // v1.4.0: every X post tags the extension's account. The handle goes right
   // after the first "Claude Usage Meter" so it reads naturally; appended otherwise.
   const X_HANDLE = "@claudeusagemtr";
@@ -1022,10 +1034,10 @@
   }
   function shareIntentUrl(net) {
     const u = encodeURIComponent(storeUrl());
-    const t = encodeURIComponent(SHARE_TEXT);
+    const t = encodeURIComponent(SHARE_TEXT());
     switch (net) {
-      case "linkedin": return `https://www.linkedin.com/feed/?shareActive=true&text=${encodeURIComponent(LINKEDIN_TEXT + " " + storeUrl())}`;
-      case "x": return `https://twitter.com/intent/tweet?text=${encodeURIComponent(withXHandle(SHARE_TEXT))}&url=${u}`;
+      case "linkedin": return `https://www.linkedin.com/feed/?shareActive=true&text=${encodeURIComponent(LINKEDIN_TEXT() + " " + storeUrl())}`;
+      case "x": return `https://twitter.com/intent/tweet?text=${encodeURIComponent(withXHandle(SHARE_TEXT()))}&url=${u}`;
       case "whatsapp": return `https://api.whatsapp.com/send?text=${t}%20${u}`;
       case "reddit": return `https://www.reddit.com/submit?url=${u}&title=${t}`;
       case "facebook": return `https://www.facebook.com/sharer/sharer.php?u=${u}&quote=${t}`;
@@ -1071,11 +1083,11 @@
     return Math.max(3 * 60 * 1000, pollMinutes * 60 * 1000 * 2.5 + 30 * 1000);
   }
   function liveAgeText(ms) {
-    if (ms < 20000) return "just now";
-    if (ms < 90000) return `${Math.max(1, Math.round(ms / 1000))}s ago`;
+    if (ms < 20000) return tx("s.live.justNow");
+    if (ms < 90000) return tx("s.live.secsAgo", { n: Math.max(1, Math.round(ms / 1000)) });
     const m = Math.round(ms / 60000);
-    if (m < 60) return `${m}m ago`;
-    return `${Math.round(m / 60)}h ago`;
+    if (m < 60) return tx("s.live.minsAgo", { n: m });
+    return tx("s.live.hoursAgo", { n: Math.round(m / 60) });
   }
   function pulseLive(root) {
     root = root || document.getElementById(OVERLAY_ID);
@@ -1110,10 +1122,10 @@
     if (svg) svg.classList.toggle("cut-logo-stale", stale);
     if (tip) {
       tip.textContent = !stamp
-        ? "Waiting for the first reading…"
+        ? tx("s.live.waiting")
         : stale
-          ? `Updates have stopped — last reading ${liveAgeText(age)}. Check you're still signed in to claude.ai.`
-          : `Live — updated ${liveAgeText(age)}.`;
+          ? tx("s.live.stale", { age: liveAgeText(age) })
+          : tx("s.live.fresh", { age: liveAgeText(age) });
     }
   }
 
@@ -1182,17 +1194,17 @@
     el.innerHTML = `
       <div class="cut-hc-head">
         <span class="cut-hc-ic" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg></span>
-        <div class="cut-hc-title" id="cut-hc-title">Hide the usage strip?</div>
+        <div class="cut-hc-title" id="cut-hc-title">${txh("s.hide.title")}</div>
       </div>
-      <div class="cut-hc-dur" role="radiogroup" aria-label="Hide for">
-        <label class="cut-hc-opt"><input type="radio" name="cut-hc-dur" value="1" checked><span>1 hour</span></label>
-        <label class="cut-hc-opt"><input type="radio" name="cut-hc-dur" value="2"><span>2 hours</span></label>
-        <label class="cut-hc-opt"><input type="radio" name="cut-hc-dur" value="on"><span>Until I turn it on</span></label>
+      <div class="cut-hc-dur" role="radiogroup" aria-label="${txh("s.hide.durAria")}">
+        <label class="cut-hc-opt"><input type="radio" name="cut-hc-dur" value="1" checked><span>${I18N.esc(txp("s.hide.hours", 1))}</span></label>
+        <label class="cut-hc-opt"><input type="radio" name="cut-hc-dur" value="2"><span>${I18N.esc(txp("s.hide.hours", 2))}</span></label>
+        <label class="cut-hc-opt"><input type="radio" name="cut-hc-dur" value="on"><span>${txh("s.hide.untilOn")}</span></label>
       </div>
-      <div class="cut-hc-tip">To get it back, click the logo in your browser toolbar and turn on <strong>Show Usage Strip</strong>.</div>
+      <div class="cut-hc-tip">${tx("s.hide.tip_html")}</div>
       <div class="cut-hc-actions">
-        <button class="cut-hc-btn cut-hc-danger" type="button" data-hc="hide">Hide strip</button>
-        <button class="cut-hc-btn cut-hc-keep" type="button" data-hc="cancel">Keep it</button>
+        <button class="cut-hc-btn cut-hc-danger" type="button" data-hc="hide">${txh("s.hide.hideBtn")}</button>
+        <button class="cut-hc-btn cut-hc-keep" type="button" data-hc="cancel">${txh("s.hide.keepBtn")}</button>
       </div>`;
     const durValue = () => {
       const r = el.querySelector('input[name="cut-hc-dur"]:checked');
@@ -1237,13 +1249,14 @@
   function fmtReset(ts) {
     if (!ts) return "—";
     const ms = ts - Date.now();
-    if (ms <= 0) return "now";
+    if (ms <= 0) return tx("s.reset.now");
     const mins = Math.round(ms / 60000);
-    if (mins < 60) return `${mins}m`;
+    if (mins < 60) return tx("unit.m", { n: mins });
     const hrs = Math.floor(mins / 60);
     const rem = mins % 60;
-    if (hrs < 48) return `${hrs}h ${rem}m`;
-    return `${Math.floor(hrs / 24)}d`;
+    // Not txDur(): this keeps "2h 0m" where txDur would print "2h".
+    if (hrs < 48) return tx("unit.hm", { h: hrs, m: rem });
+    return tx("unit.d", { n: Math.floor(hrs / 24) });
   }
   /* -------------------------------------------------------------------------
      v1.2.17 — burn-rate forecast display.
@@ -1277,13 +1290,13 @@
   // reads as unreliable even when the underlying rate is perfectly steady.
   function fmtEta(mins) {
     if (mins == null || !isFinite(mins)) return "—";
-    if (mins < 1) return "<1m";
-    if (mins < 20) return `${Math.round(mins)}m`;
+    if (mins < 1) return tx("s.eta.underMin");
+    if (mins < 20) return tx("unit.m", { n: Math.round(mins) });
     const r = Math.round(mins / 5) * 5;
-    if (r < 60) return `${r}m`;
+    if (r < 60) return tx("unit.m", { n: r });
     const h = Math.floor(r / 60), m = r % 60;
-    if (h >= 10) return `${h}h`;
-    return m ? `${h}h ${m}m` : `${h}h`;
+    if (h >= 10) return tx("unit.h", { n: h });
+    return m ? tx("unit.hm", { h, m }) : tx("unit.h", { n: h });
   }
 
   // Clock time for the tooltip. Same day → time only; further out (a weekly
@@ -1293,8 +1306,8 @@
     if (!ts) return "";
     const d = new Date(ts);
     const sameDay = d.toDateString() === new Date().toDateString();
-    const time = d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
-    return sameDay ? time : `${d.toLocaleDateString([], { weekday: "short" })} ${time}`;
+    const time = d.toLocaleTimeString(I18N.locale(), { hour: "numeric", minute: "2-digit" });
+    return sameDay ? time : tx("s.clock.dayTime", { day: d.toLocaleDateString(I18N.locale(), { weekday: "short" }), time });
   }
 
   // Urgency colour for the chip. Keyed on time remaining, NOT on percentage —
@@ -1314,22 +1327,21 @@
       // is already showing a low number, and at 100% there is nothing left to
       // project. Only the idle case is worth stating, because that's the one
       // where a user who saw the chip earlier might wonder where it went.
-      return f.reason === "idle" ? "No recent usage to project from" : "";
+      return f.reason === "idle" ? tx("s.fc.idle") : "";
     }
-    const pace = `At ~${f.ratePerHour}%/h`;
-    const eta = `${fmtEta(f.minutesLeft)} (~${fmtClock(f.etaAt)})`;
+    const v = { rate: f.ratePerHour, eta: fmtEta(f.minutesLeft), clock: fmtClock(f.etaAt) };
     // v1.2.7a: three cases, not two. atRisk carries hysteresis, so it stays on
     // slightly past the point where beforeReset flips — which meant the chip
     // could read "~1h 20m left" while this tooltip said "you have room", i.e.
     // the headline and its own explanation contradicting each other. The
     // boundary now gets its own wording instead of being forced into one side.
     if (f.atRisk && !f.beforeReset) {
-      return `${pace} you'd reach 100% in ${eta} — right around when this quota resets.`;
+      return tx("s.fc.atReset", v);
     }
     if (!f.beforeReset) {
-      return `${pace} you'd reach 100% in ${eta} — after this quota resets, so you have room.`;
+      return tx("s.fc.afterReset", v);
     }
-    return `${pace} you'd reach 100% in ${eta}, before this quota resets.`;
+    return tx("s.fc.beforeReset", v);
   }
 
   function colorClass(p) {
@@ -1350,7 +1362,7 @@
     // Always show "Weekly" regardless of which model family is active. (The
     // family-specific weekly bucket is still selected for the percentage in
     // background.js; only the displayed label is fixed here.)
-    return "Weekly";
+    return tx("s.seg.weekly");
   }
 
   // v1.2.6: Fable's weekly quota as its own segment. It's a conditional segment —
@@ -1397,7 +1409,7 @@
     const whole = short ? n >= 100 : Number.isInteger(n);
     const digits = whole ? 0 : 2;
     try {
-      return new Intl.NumberFormat(undefined, {
+      return new Intl.NumberFormat(I18N.locale(), {
         style: "currency", currency: cur || "USD",
         minimumFractionDigits: digits, maximumFractionDigits: digits
       }).format(n);
@@ -1407,15 +1419,14 @@
   }
 
   function extraTipText(x) {
-    const spent = fmtMoney(x.used, x.currency, false);
+    const spent = I18N.esc(fmtMoney(x.used, x.currency, false));
     if (x.limit != null) {
-      const cap = fmtMoney(x.limit, x.currency, false);
-      const pct = x.percent != null ? ` (${x.percent}%)` : "";
+      const cap = I18N.esc(fmtMoney(x.limit, x.currency, false));
       const left = Math.max(0, x.limit - x.used);
-      return `Extra usage: ${spent} of ${cap} monthly limit spent${pct}` +
-        `<br>${fmtMoney(left, x.currency, false)} left this month`;
+      const v = { spent, cap, pct: x.percent, left: I18N.esc(fmtMoney(left, x.currency, false)) };
+      return x.percent != null ? tx("s.extra.tipCapPct_html", v) : tx("s.extra.tipCap_html", v);
     }
-    return `Extra usage: ${spent} spent this month<br>No monthly limit set`;
+    return tx("s.extra.tipNoCap_html", { spent });
   }
 
   function renderExtraSegment(segEl, x) {
@@ -1708,11 +1719,8 @@
     // v1.3.7: the logo is now the door to the SelectorsHub tools menu. The tip
     // says who makes the meter and that the logo is clickable — two short lines,
     // then the live "updated …" line that was always here.
-    const tooltipHtml =
-      "<b>Claude Usage Meter</b> \u00b7 offered by <b>SelectorsHub</b><br>" +
-      "Click to try more free tools from us.";
-    const ariaText =
-      "Claude Usage Meter, offered by SelectorsHub. Click to try more free tools from us.";
+    const tooltipHtml = tx("m.logo.tip_html");
+    const ariaText = txh("m.logo.aria");
     const logoSvg = meterLogoSvg(16, "cut-logo");
     root.innerHTML = `
       <div class="cut-strip" role="status">
@@ -1720,23 +1728,23 @@
            role="button" aria-haspopup="menu" aria-expanded="false"
            aria-label="${ariaText}">
           ${logoSvg}
-          <span class="cut-byline" aria-hidden="true">by SelectorsHub</span>
+          <span class="cut-byline" aria-hidden="true">${txh("m.logo.byline")}</span>
           <span class="cut-tooltip" aria-hidden="true">${tooltipHtml}<span class="cut-tip-live" data-cut="tip-live"></span></span>
         </a>
         <div class="cut-divider" data-cut="session-divider"></div>
         <div class="cut-seg" data-cut="session">
-          <span class="cut-lwrap"><span class="cut-label" data-cut-label>Session</span><span class="cut-bar" data-cut-bar aria-hidden="true"><span class="cut-bar-fill" data-cut-bar-fill></span></span></span>
+          <span class="cut-lwrap"><span class="cut-label" data-cut-label>${txh("m.seg.session")}</span><span class="cut-bar" data-cut-bar aria-hidden="true"><span class="cut-bar-fill" data-cut-bar-fill></span></span></span>
           <span class="cut-pct" data-cut-pct>—</span>
           <span class="cut-sep">·</span>
-          <span class="cut-meta" data-cut-meta>waiting…</span>
+          <span class="cut-meta" data-cut-meta>${txh("m.seg.waiting")}</span>
           <span class="cut-fc" data-cut="session-fc" style="display:none">
             <svg class="cut-fc-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 2h12M6 22h12M6 2v5l6 5 6-5V2M6 22v-5l6-5 6 5v5"></path></svg>
-            <span class="cut-fc-txt" data-cut="session-fc-txt"></span><span class="cut-fc-word">left</span>
+            <span class="cut-fc-txt" data-cut="session-fc-txt"></span><span class="cut-fc-word">${txh("m.seg.fcLeft")}</span>
           </span>
         </div>
         <div class="cut-divider" data-cut="weekly-divider"></div>
         <div class="cut-seg" data-cut="weekly">
-          <span class="cut-lwrap"><span class="cut-label" data-cut-label>Weekly</span><span class="cut-bar" data-cut-bar aria-hidden="true"><span class="cut-bar-fill" data-cut-bar-fill></span></span></span>
+          <span class="cut-lwrap"><span class="cut-label" data-cut-label>${txh("m.seg.weekly")}</span><span class="cut-bar" data-cut-bar aria-hidden="true"><span class="cut-bar-fill" data-cut-bar-fill></span></span></span>
           <span class="cut-pct" data-cut-pct>—</span>
           <span class="cut-sep">·</span>
           <span class="cut-meta" data-cut-meta>—</span>
@@ -1750,7 +1758,7 @@
         </div>
         <div class="cut-divider" data-cut="extra-divider" style="display:none"></div>
         <div class="cut-seg" data-cut="extra" style="display:none">
-          <span class="cut-lwrap"><span class="cut-label" data-cut-label>Extra</span><span class="cut-bar" data-cut-bar aria-hidden="true"><span class="cut-bar-fill" data-cut-bar-fill></span></span></span>
+          <span class="cut-lwrap"><span class="cut-label" data-cut-label>${txh("m.seg.extra")}</span><span class="cut-bar" data-cut-bar aria-hidden="true"><span class="cut-bar-fill" data-cut-bar-fill></span></span></span>
           <span class="cut-pct" data-cut-pct>—</span>
           <span class="cut-sep">·</span>
           <span class="cut-meta" data-cut-meta></span>
@@ -1759,30 +1767,30 @@
         <span class="cut-chat" data-cut="chat" tabindex="0" style="display:none">
           <svg class="cut-chat-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>
           <svg class="cut-code-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line></svg>
-          <span class="cut-label cut-chat-label">Chat</span>
+          <span class="cut-label cut-chat-label">${txh("m.chat.label")}</span>
           <span class="cut-chat-val" data-cut="chat-val">—</span>
-          <span class="cut-chat-word">tokens</span>
+          <span class="cut-chat-word">${txh("m.chat.tokens")}</span>
           <span class="cut-chat-detail" data-cut="chat-detail"></span>
         </span>
         <div class="cut-compact" data-cut="compact">
           <span class="cut-cwrap" data-cut="c-session-wrap">
-            <span class="cut-cval" tabindex="0"><span class="cut-cring"><svg class="cut-cring-svg" viewBox="0 0 24 24" aria-hidden="true"><circle class="cut-cring-track" cx="12" cy="12" r="10"></circle><circle class="cut-cring-fill" data-cut="ring-session" cx="12" cy="12" r="10"></circle></svg><span class="cut-clabel">S</span></span> <span class="cut-cpct" data-cut="c-session">—</span><span class="cut-creset" data-cut="c-session-reset"><svg class="cut-creset-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20.5 13.5a8.5 8.5 0 1 1-2.2-6.4"></path><polyline points="20.5 3 20.5 8 15.5 8"></polyline></svg><span class="cut-creset-txt" data-cut="c-session-rt">—</span></span><span class="cut-cfc" data-cut="c-session-fc" style="display:none"><svg class="cut-cfc-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 2h12M6 22h12M6 2v5l6 5 6-5V2M6 22v-5l6-5 6 5v5"></path></svg><span class="cut-cfc-txt" data-cut="c-session-fct">—</span></span></span>
-            <span class="cut-ctip" data-cut="c-session-tip" aria-hidden="true">Waiting for data</span>
+            <span class="cut-cval" tabindex="0"><span class="cut-cring"><svg class="cut-cring-svg" viewBox="0 0 24 24" aria-hidden="true"><circle class="cut-cring-track" cx="12" cy="12" r="10"></circle><circle class="cut-cring-fill" data-cut="ring-session" cx="12" cy="12" r="10"></circle></svg><span class="cut-clabel">${txh("m.chip.s")}</span></span> <span class="cut-cpct" data-cut="c-session">—</span><span class="cut-creset" data-cut="c-session-reset"><svg class="cut-creset-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20.5 13.5a8.5 8.5 0 1 1-2.2-6.4"></path><polyline points="20.5 3 20.5 8 15.5 8"></polyline></svg><span class="cut-creset-txt" data-cut="c-session-rt">—</span></span><span class="cut-cfc" data-cut="c-session-fc" style="display:none"><svg class="cut-cfc-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 2h12M6 22h12M6 2v5l6 5 6-5V2M6 22v-5l6-5 6 5v5"></path></svg><span class="cut-cfc-txt" data-cut="c-session-fct">—</span></span></span>
+            <span class="cut-ctip" data-cut="c-session-tip" aria-hidden="true">${txh("m.chip.waiting")}</span>
           </span>
           <span class="cut-cdivider" data-cut="c-weekly-divider" aria-hidden="true"></span>
           <span class="cut-cwrap" data-cut="c-weekly-wrap">
-            <span class="cut-cval" tabindex="0"><span class="cut-cring"><svg class="cut-cring-svg" viewBox="0 0 24 24" aria-hidden="true"><circle class="cut-cring-track" cx="12" cy="12" r="10"></circle><circle class="cut-cring-fill" data-cut="ring-weekly" cx="12" cy="12" r="10"></circle></svg><span class="cut-clabel">W</span></span> <span class="cut-cpct" data-cut="c-weekly">—</span><span class="cut-creset" data-cut="c-weekly-reset"><svg class="cut-creset-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20.5 13.5a8.5 8.5 0 1 1-2.2-6.4"></path><polyline points="20.5 3 20.5 8 15.5 8"></polyline></svg><span class="cut-creset-txt" data-cut="c-weekly-rt">—</span></span></span>
-            <span class="cut-ctip" data-cut="c-weekly-tip" aria-hidden="true">Waiting for data</span>
+            <span class="cut-cval" tabindex="0"><span class="cut-cring"><svg class="cut-cring-svg" viewBox="0 0 24 24" aria-hidden="true"><circle class="cut-cring-track" cx="12" cy="12" r="10"></circle><circle class="cut-cring-fill" data-cut="ring-weekly" cx="12" cy="12" r="10"></circle></svg><span class="cut-clabel">${txh("m.chip.w")}</span></span> <span class="cut-cpct" data-cut="c-weekly">—</span><span class="cut-creset" data-cut="c-weekly-reset"><svg class="cut-creset-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20.5 13.5a8.5 8.5 0 1 1-2.2-6.4"></path><polyline points="20.5 3 20.5 8 15.5 8"></polyline></svg><span class="cut-creset-txt" data-cut="c-weekly-rt">—</span></span></span>
+            <span class="cut-ctip" data-cut="c-weekly-tip" aria-hidden="true">${txh("m.chip.waiting")}</span>
           </span>
           <span class="cut-cdivider" data-cut="c-fable-divider" aria-hidden="true" style="display:none"></span>
           <span class="cut-cwrap" data-cut="c-fable-wrap" style="display:none">
             <span class="cut-cval" tabindex="0"><span class="cut-cring"><svg class="cut-cring-svg" viewBox="0 0 24 24" aria-hidden="true"><circle class="cut-cring-track" cx="12" cy="12" r="10"></circle><circle class="cut-cring-fill" data-cut="ring-fable" cx="12" cy="12" r="10"></circle></svg><span class="cut-clabel">F</span></span> <span class="cut-cpct" data-cut="c-fable">—</span><span class="cut-creset" data-cut="c-fable-reset"><svg class="cut-creset-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20.5 13.5a8.5 8.5 0 1 1-2.2-6.4"></path><polyline points="20.5 3 20.5 8 15.5 8"></polyline></svg><span class="cut-creset-txt" data-cut="c-fable-rt">—</span></span></span>
-            <span class="cut-ctip" data-cut="c-fable-tip" aria-hidden="true">Waiting for data</span>
+            <span class="cut-ctip" data-cut="c-fable-tip" aria-hidden="true">${txh("m.chip.waiting")}</span>
           </span>
           <span class="cut-cdivider" data-cut="c-extra-divider" aria-hidden="true" style="display:none"></span>
           <span class="cut-cwrap" data-cut="c-extra-wrap" style="display:none">
-            <span class="cut-cval" tabindex="0"><span class="cut-cring"><svg class="cut-cring-svg" viewBox="0 0 24 24" aria-hidden="true"><circle class="cut-cring-track" cx="12" cy="12" r="10"></circle><circle class="cut-cring-fill" data-cut="ring-extra" cx="12" cy="12" r="10"></circle></svg><span class="cut-clabel">E</span></span> <span class="cut-cpct" data-cut="c-extra">—</span></span>
-            <span class="cut-ctip" data-cut="c-extra-tip" aria-hidden="true">Waiting for data</span>
+            <span class="cut-cval" tabindex="0"><span class="cut-cring"><svg class="cut-cring-svg" viewBox="0 0 24 24" aria-hidden="true"><circle class="cut-cring-track" cx="12" cy="12" r="10"></circle><circle class="cut-cring-fill" data-cut="ring-extra" cx="12" cy="12" r="10"></circle></svg><span class="cut-clabel">${txh("m.chip.e")}</span></span> <span class="cut-cpct" data-cut="c-extra">—</span></span>
+            <span class="cut-ctip" data-cut="c-extra-tip" aria-hidden="true">${txh("m.chip.waiting")}</span>
           </span>
           <span class="cut-cdivider" data-cut="c-chat-divider" aria-hidden="true" style="display:none"></span>
           <span class="cut-cwrap cut-cchat" data-cut="c-chat-wrap" style="display:none">
@@ -1793,9 +1801,9 @@
         <div class="cut-divider cut-lp-divider" data-cut="lp-divider" hidden></div>
         <span class="cut-lp-wrap" data-cut="lp-wrap" hidden>
           <a class="cut-lp" data-cut="lp" href="#" target="_blank" rel="noopener noreferrer">
-            <span class="cut-lp-lead">Meanwhile, try</span><span class="cut-lp-short">Try</span> <span class="cut-lp-name" data-cut="lp-name"></span> <span class="cut-lp-arrow" aria-hidden="true">\u2192</span>
+            <span class="cut-lp-lead">${txh("m.lp.lead")}</span><span class="cut-lp-short">${txh("m.lp.short")}</span> <span class="cut-lp-name" data-cut="lp-name"></span> <span class="cut-lp-arrow" aria-hidden="true">\u2192</span>
           </a>
-          <button class="cut-lp-x" type="button" data-cut="lp-x" aria-label="Hide until the next reset">\u00d7</button>
+          <button class="cut-lp-x" type="button" data-cut="lp-x" aria-label="${txh("m.lp.hide")}">\u00d7</button>
           <span class="cut-lp-tooltip" data-cut="lp-tip" aria-hidden="true"></span>
         </span>
         <div class="cut-divider cut-msgs-divider" data-cut="msgs-divider" hidden></div>
@@ -1803,73 +1811,73 @@
         <div class="cut-divider cut-rate-divider" data-cut="rate-divider" style="display:none"></div>
         <span class="cut-rate-wrap" data-cut="rate-wrap" style="display:none">
           <button class="cut-rate" type="button" data-cut="rate"
-                  aria-label="Rate Claude Usage Meter on the Chrome Web Store">
-            <span class="cut-rate-star">⭐️</span><span class="cut-rate-txt">Rate us</span>
+                  aria-label="${txh("m.rate.btnAria")}">
+            <span class="cut-rate-star">⭐️</span><span class="cut-rate-txt">${txh("m.rate.btn")}</span>
           </button>
-          <span class="cut-rate-tooltip" aria-hidden="true">Pls Rate us & this button disappears forever after you review.</span>
+          <span class="cut-rate-tooltip" aria-hidden="true">${txh("m.rate.tip")}</span>
         </span>
         <div class="cut-divider cut-share-divider" data-cut="share-divider" style="display:none"></div>
         <span class="cut-share-wrap" data-cut="share-wrap" style="display:none">
-          <button class="cut-share" type="button" data-cut="share" aria-label="Share Claude Usage Meter" title="">
+          <button class="cut-share" type="button" data-cut="share" aria-label="${txh("m.share.aria")}" title="">
             <svg class="cut-share-ic" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5" r="3"></circle><circle cx="6" cy="12" r="3"></circle><circle cx="18" cy="19" r="3"></circle><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"></line><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"></line></svg>
           </button>
-          <span class="cut-share-tooltip" aria-hidden="true">Share with friends - this button disappears forever once you share.</span>
+          <span class="cut-share-tooltip" aria-hidden="true">${txh("m.share.tip")}</span>
           <span class="cut-share-pop" data-cut="share-pop" style="display:none">
-            <button class="cut-share-net" data-net="card" title="Share my usage card" aria-label="Share my usage card"><svg viewBox="0 0 24 24" width="18" height="18"><rect width="24" height="24" rx="5" fill="#d97757"/><path d="M7.5 8.5h1.7l1-1.5h3.6l1 1.5h1.7a1.5 1.5 0 0 1 1.5 1.5v5.5a1.5 1.5 0 0 1-1.5 1.5h-9a1.5 1.5 0 0 1-1.5-1.5V10a1.5 1.5 0 0 1 1.5-1.5z" fill="none" stroke="#fff" stroke-width="1.5" stroke-linejoin="round"/><circle cx="12" cy="12.6" r="2.3" fill="none" stroke="#fff" stroke-width="1.5"/></svg></button>
-            <button class="cut-share-net" data-net="linkedin" title="Share on LinkedIn" aria-label="Share on LinkedIn"><svg viewBox="0 0 382 382" width="18" height="18"><path fill="#0077B7" d="M347.445,0H34.555C15.471,0,0,15.471,0,34.555v312.889C0,366.529,15.471,382,34.555,382h312.889 C366.529,382,382,366.529,382,347.444V34.555C382,15.471,366.529,0,347.445,0z M118.207,329.844c0,5.554-4.502,10.056-10.056,10.056 H65.345c-5.554,0-10.056-4.502-10.056-10.056V150.403c0-5.554,4.502-10.056,10.056-10.056h42.806 c5.554,0,10.056,4.502,10.056,10.056V329.844z M86.748,123.432c-22.459,0-40.666-18.207-40.666-40.666S64.289,42.1,86.748,42.1 s40.666,18.207,40.666,40.666S109.208,123.432,86.748,123.432z M341.91,330.654c0,5.106-4.14,9.246-9.246,9.246H286.73 c-5.106,0-9.246-4.14-9.246-9.246v-84.168c0-12.556,3.683-55.021-32.813-55.021c-28.309,0-34.051,29.066-35.204,42.11v97.079 c0,5.106-4.139,9.246-9.246,9.246h-44.426c-5.106,0-9.246-4.14-9.246-9.246V149.593c0-5.106,4.14-9.246,9.246-9.246h44.426 c5.106,0,9.246,4.14,9.246,9.246v15.655c10.497-15.753,26.097-27.912,59.312-27.912c73.552,0,73.131,68.716,73.131,106.472 L341.91,330.654L341.91,330.654z"/></svg></button>
-            <button class="cut-share-net" data-net="x" title="Share on X" aria-label="Share on X"><svg viewBox="0 0 24 24" width="18" height="18"><rect width="24" height="24" rx="5" fill="#000"/><path transform="translate(4.8 4.8) scale(0.6)" fill="#fff" d="M18.901 1.153h3.68l-8.04 9.19L24 22.846h-7.406l-5.8 -7.584 -6.638 7.584H0.474l8.6 -9.83L0 1.154h7.594l5.243 6.932ZM17.61 20.644h2.039L6.486 3.24H4.298Z"/></svg></button>
-            <button class="cut-share-net" data-net="whatsapp" title="Share on WhatsApp" aria-label="Share on WhatsApp"><svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="20.0 19.1 581.6 581.6" width="18" height="18"><defs><linearGradient x1=".5" y1="0" x2=".5" y2="1" id="cwa-a"><stop stop-color="#20B038" offset="0%"/><stop stop-color="#60D66A" offset="100%"/></linearGradient><linearGradient x1=".5" y1="0" x2=".5" y2="1" id="cwa-b"><stop stop-color="#F9F9F9" offset="0%"/><stop stop-color="#FFF" offset="100%"/></linearGradient><linearGradient xlink:href="#cwa-a" id="cwa-f" x1="270.265" y1="1.184" x2="270.265" y2="541.56" gradientTransform="scale(.99775 1.00225)" gradientUnits="userSpaceOnUse"/><linearGradient xlink:href="#cwa-b" id="cwa-g" x1="279.952" y1=".811" x2="279.952" y2="560.571" gradientTransform="scale(.99777 1.00224)" gradientUnits="userSpaceOnUse"/><filter x="-.056" y="-.062" width="1.112" height="1.11" filterUnits="objectBoundingBox" id="cwa-c"><feGaussianBlur stdDeviation="2" in="SourceGraphic"/></filter><filter x="-.082" y="-.088" width="1.164" height="1.162" filterUnits="objectBoundingBox" id="cwa-d"><feOffset dy="-4" in="SourceAlpha" result="shadowOffsetOuter1"/><feGaussianBlur stdDeviation="12.5" in="shadowOffsetOuter1" result="shadowBlurOuter1"/><feComposite in="shadowBlurOuter1" in2="SourceAlpha" operator="out" result="shadowBlurOuter1"/><feColorMatrix values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0.21 0" in="shadowBlurOuter1"/></filter><path d="M576.337 707.516c-.018-49.17 12.795-97.167 37.15-139.475L574 423.48l147.548 38.792c40.652-22.23 86.423-33.944 133.002-33.962h.12c153.395 0 278.265 125.166 278.33 278.98.025 74.548-28.9 144.642-81.446 197.373C999 957.393 929.12 986.447 854.67 986.48c-153.42 0-278.272-125.146-278.333-278.964z" id="cwa-e"/></defs><g fill="none" fill-rule="evenodd"><g transform="matrix(1 0 0 -1 -542.696 1013.504)" fill="#000" fill-rule="nonzero" filter="url(#cwa-c)"><use filter="url(#cwa-d)" xlink:href="#cwa-e" width="100%" height="100%"/><use fill-opacity=".2" xlink:href="#cwa-e" width="100%" height="100%"/></g><path transform="matrix(1 0 0 -1 41.304 577.504)" fill-rule="nonzero" fill="url(#cwa-f)" d="M2.325 274.421c-.014-47.29 12.342-93.466 35.839-134.166L.077 1.187l142.314 37.316C181.6 17.133 225.745 5.856 270.673 5.84h.12c147.95 0 268.386 120.396 268.447 268.372.03 71.707-27.87 139.132-78.559 189.858-50.68 50.726-118.084 78.676-189.898 78.708-147.968 0-268.398-120.386-268.458-268.358"/><path transform="matrix(1 0 0 -1 31.637 586.837)" fill-rule="nonzero" fill="url(#cwa-g)" d="M2.407 283.847c-.018-48.996 12.784-96.824 37.117-138.983L.072.814l147.419 38.654c40.616-22.15 86.346-33.824 132.885-33.841h.12c153.26 0 278.02 124.724 278.085 277.994.026 74.286-28.874 144.132-81.374 196.678-52.507 52.544-122.326 81.494-196.711 81.528-153.285 0-278.028-124.704-278.09-277.98zm87.789-131.724l-5.503 8.74C61.555 197.653 49.34 240.17 49.36 283.828c.049 127.399 103.73 231.044 231.224 231.044 61.74-.025 119.765-24.09 163.409-67.763 43.639-43.67 67.653-101.726 67.635-163.469-.054-127.403-103.739-231.063-231.131-231.063h-.09c-41.482.022-82.162 11.159-117.642 32.214l-8.444 5.004L66.84 66.86z"/><path d="M242.63 186.78c-5.205-11.57-10.684-11.803-15.636-12.006-4.05-.173-8.687-.162-13.316-.162-4.632 0-12.161 1.74-18.527 8.693-6.37 6.953-24.322 23.761-24.322 57.947 0 34.19 24.901 67.222 28.372 71.862 3.474 4.634 48.07 77.028 118.694 104.88 58.696 23.146 70.64 18.542 83.38 17.384 12.74-1.158 41.11-16.805 46.9-33.03 5.791-16.223 5.791-30.128 4.054-33.035-1.738-2.896-6.37-4.633-13.319-8.108-6.95-3.475-41.11-20.287-47.48-22.603-6.37-2.316-11.003-3.474-15.635 3.482-4.633 6.95-17.94 22.596-21.996 27.23-4.053 4.643-8.106 5.222-15.056 1.747-6.949-3.485-29.328-10.815-55.876-34.485-20.656-18.416-34.6-41.16-38.656-48.116-4.053-6.95-.433-10.714 3.052-14.178 3.12-3.113 6.95-8.11 10.424-12.168 3.467-4.057 4.626-6.953 6.942-11.586 2.316-4.64 1.158-8.698-.579-12.172-1.737-3.475-15.241-37.838-21.42-51.576" fill="#FFF"/></g></svg></button>
-            <button class="cut-share-net" data-net="reddit" title="Share on Reddit" aria-label="Share on Reddit"><svg viewBox="0 0 24 24" width="18" height="18"><rect width="24" height="24" rx="5" fill="#FF4500"/><ellipse cx="12" cy="14.2" rx="7.2" ry="5" fill="#fff"/><circle cx="4.6" cy="12.4" r="1.9" fill="#fff"/><circle cx="19.4" cy="12.4" r="1.9" fill="#fff"/><circle cx="17.6" cy="4.8" r="1.5" fill="#fff"/><path d="M12 9.6l1.1-4.6 3.4.8" stroke="#fff" stroke-width="1" fill="none" stroke-linecap="round"/><circle cx="9.3" cy="13.4" r="1.2" fill="#FF4500"/><circle cx="14.7" cy="13.4" r="1.2" fill="#FF4500"/><path d="M9.4 16.4c1.6 1.2 3.6 1.2 5.2 0" stroke="#FF4500" stroke-width="1" fill="none" stroke-linecap="round"/></svg></button>
-            <button class="cut-share-net" data-net="facebook" title="Share on Facebook" aria-label="Share on Facebook"><svg viewBox="0 0 16 16" width="18" height="18"><path fill="#1877F2" d="M15 8a7 7 0 0 0-7-7 7 7 0 0 0-1.094 13.915v-4.892H5.13V8h1.777V6.458c0-1.754 1.045-2.724 2.644-2.724.766 0 1.567.137 1.567.137v1.723h-.883c-.87 0-1.14.54-1.14 1.093V8h1.941l-.31 2.023H9.094v4.892A7 7 0 0 0 15 8"/><path fill="#fff" d="M10.725 10.023 11.035 8H9.094V6.687c0-.553.27-1.093 1.14-1.093h.883V3.87s-.801-.137-1.567-.137c-1.6 0-2.644.97-2.644 2.724V8H5.13v2.023h1.777v4.892a7 7 0 0 0 2.188 0v-4.892z"/></svg></button>
+            <button class="cut-share-net" data-net="card" title="${txh("m.share.card")}" aria-label="${txh("m.share.card")}"><svg viewBox="0 0 24 24" width="18" height="18"><rect width="24" height="24" rx="5" fill="#d97757"/><path d="M7.5 8.5h1.7l1-1.5h3.6l1 1.5h1.7a1.5 1.5 0 0 1 1.5 1.5v5.5a1.5 1.5 0 0 1-1.5 1.5h-9a1.5 1.5 0 0 1-1.5-1.5V10a1.5 1.5 0 0 1 1.5-1.5z" fill="none" stroke="#fff" stroke-width="1.5" stroke-linejoin="round"/><circle cx="12" cy="12.6" r="2.3" fill="none" stroke="#fff" stroke-width="1.5"/></svg></button>
+            <button class="cut-share-net" data-net="linkedin" title="${txh("m.share.on", { network: "LinkedIn" })}" aria-label="${txh("m.share.on", { network: "LinkedIn" })}"><svg viewBox="0 0 382 382" width="18" height="18"><path fill="#0077B7" d="M347.445,0H34.555C15.471,0,0,15.471,0,34.555v312.889C0,366.529,15.471,382,34.555,382h312.889 C366.529,382,382,366.529,382,347.444V34.555C382,15.471,366.529,0,347.445,0z M118.207,329.844c0,5.554-4.502,10.056-10.056,10.056 H65.345c-5.554,0-10.056-4.502-10.056-10.056V150.403c0-5.554,4.502-10.056,10.056-10.056h42.806 c5.554,0,10.056,4.502,10.056,10.056V329.844z M86.748,123.432c-22.459,0-40.666-18.207-40.666-40.666S64.289,42.1,86.748,42.1 s40.666,18.207,40.666,40.666S109.208,123.432,86.748,123.432z M341.91,330.654c0,5.106-4.14,9.246-9.246,9.246H286.73 c-5.106,0-9.246-4.14-9.246-9.246v-84.168c0-12.556,3.683-55.021-32.813-55.021c-28.309,0-34.051,29.066-35.204,42.11v97.079 c0,5.106-4.139,9.246-9.246,9.246h-44.426c-5.106,0-9.246-4.14-9.246-9.246V149.593c0-5.106,4.14-9.246,9.246-9.246h44.426 c5.106,0,9.246,4.14,9.246,9.246v15.655c10.497-15.753,26.097-27.912,59.312-27.912c73.552,0,73.131,68.716,73.131,106.472 L341.91,330.654L341.91,330.654z"/></svg></button>
+            <button class="cut-share-net" data-net="x" title="${txh("m.share.on", { network: "X" })}" aria-label="${txh("m.share.on", { network: "X" })}"><svg viewBox="0 0 24 24" width="18" height="18"><rect width="24" height="24" rx="5" fill="#000"/><path transform="translate(4.8 4.8) scale(0.6)" fill="#fff" d="M18.901 1.153h3.68l-8.04 9.19L24 22.846h-7.406l-5.8 -7.584 -6.638 7.584H0.474l8.6 -9.83L0 1.154h7.594l5.243 6.932ZM17.61 20.644h2.039L6.486 3.24H4.298Z"/></svg></button>
+            <button class="cut-share-net" data-net="whatsapp" title="${txh("m.share.on", { network: "WhatsApp" })}" aria-label="${txh("m.share.on", { network: "WhatsApp" })}"><svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="20.0 19.1 581.6 581.6" width="18" height="18"><defs><linearGradient x1=".5" y1="0" x2=".5" y2="1" id="cwa-a"><stop stop-color="#20B038" offset="0%"/><stop stop-color="#60D66A" offset="100%"/></linearGradient><linearGradient x1=".5" y1="0" x2=".5" y2="1" id="cwa-b"><stop stop-color="#F9F9F9" offset="0%"/><stop stop-color="#FFF" offset="100%"/></linearGradient><linearGradient xlink:href="#cwa-a" id="cwa-f" x1="270.265" y1="1.184" x2="270.265" y2="541.56" gradientTransform="scale(.99775 1.00225)" gradientUnits="userSpaceOnUse"/><linearGradient xlink:href="#cwa-b" id="cwa-g" x1="279.952" y1=".811" x2="279.952" y2="560.571" gradientTransform="scale(.99777 1.00224)" gradientUnits="userSpaceOnUse"/><filter x="-.056" y="-.062" width="1.112" height="1.11" filterUnits="objectBoundingBox" id="cwa-c"><feGaussianBlur stdDeviation="2" in="SourceGraphic"/></filter><filter x="-.082" y="-.088" width="1.164" height="1.162" filterUnits="objectBoundingBox" id="cwa-d"><feOffset dy="-4" in="SourceAlpha" result="shadowOffsetOuter1"/><feGaussianBlur stdDeviation="12.5" in="shadowOffsetOuter1" result="shadowBlurOuter1"/><feComposite in="shadowBlurOuter1" in2="SourceAlpha" operator="out" result="shadowBlurOuter1"/><feColorMatrix values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0.21 0" in="shadowBlurOuter1"/></filter><path d="M576.337 707.516c-.018-49.17 12.795-97.167 37.15-139.475L574 423.48l147.548 38.792c40.652-22.23 86.423-33.944 133.002-33.962h.12c153.395 0 278.265 125.166 278.33 278.98.025 74.548-28.9 144.642-81.446 197.373C999 957.393 929.12 986.447 854.67 986.48c-153.42 0-278.272-125.146-278.333-278.964z" id="cwa-e"/></defs><g fill="none" fill-rule="evenodd"><g transform="matrix(1 0 0 -1 -542.696 1013.504)" fill="#000" fill-rule="nonzero" filter="url(#cwa-c)"><use filter="url(#cwa-d)" xlink:href="#cwa-e" width="100%" height="100%"/><use fill-opacity=".2" xlink:href="#cwa-e" width="100%" height="100%"/></g><path transform="matrix(1 0 0 -1 41.304 577.504)" fill-rule="nonzero" fill="url(#cwa-f)" d="M2.325 274.421c-.014-47.29 12.342-93.466 35.839-134.166L.077 1.187l142.314 37.316C181.6 17.133 225.745 5.856 270.673 5.84h.12c147.95 0 268.386 120.396 268.447 268.372.03 71.707-27.87 139.132-78.559 189.858-50.68 50.726-118.084 78.676-189.898 78.708-147.968 0-268.398-120.386-268.458-268.358"/><path transform="matrix(1 0 0 -1 31.637 586.837)" fill-rule="nonzero" fill="url(#cwa-g)" d="M2.407 283.847c-.018-48.996 12.784-96.824 37.117-138.983L.072.814l147.419 38.654c40.616-22.15 86.346-33.824 132.885-33.841h.12c153.26 0 278.02 124.724 278.085 277.994.026 74.286-28.874 144.132-81.374 196.678-52.507 52.544-122.326 81.494-196.711 81.528-153.285 0-278.028-124.704-278.09-277.98zm87.789-131.724l-5.503 8.74C61.555 197.653 49.34 240.17 49.36 283.828c.049 127.399 103.73 231.044 231.224 231.044 61.74-.025 119.765-24.09 163.409-67.763 43.639-43.67 67.653-101.726 67.635-163.469-.054-127.403-103.739-231.063-231.131-231.063h-.09c-41.482.022-82.162 11.159-117.642 32.214l-8.444 5.004L66.84 66.86z"/><path d="M242.63 186.78c-5.205-11.57-10.684-11.803-15.636-12.006-4.05-.173-8.687-.162-13.316-.162-4.632 0-12.161 1.74-18.527 8.693-6.37 6.953-24.322 23.761-24.322 57.947 0 34.19 24.901 67.222 28.372 71.862 3.474 4.634 48.07 77.028 118.694 104.88 58.696 23.146 70.64 18.542 83.38 17.384 12.74-1.158 41.11-16.805 46.9-33.03 5.791-16.223 5.791-30.128 4.054-33.035-1.738-2.896-6.37-4.633-13.319-8.108-6.95-3.475-41.11-20.287-47.48-22.603-6.37-2.316-11.003-3.474-15.635 3.482-4.633 6.95-17.94 22.596-21.996 27.23-4.053 4.643-8.106 5.222-15.056 1.747-6.949-3.485-29.328-10.815-55.876-34.485-20.656-18.416-34.6-41.16-38.656-48.116-4.053-6.95-.433-10.714 3.052-14.178 3.12-3.113 6.95-8.11 10.424-12.168 3.467-4.057 4.626-6.953 6.942-11.586 2.316-4.64 1.158-8.698-.579-12.172-1.737-3.475-15.241-37.838-21.42-51.576" fill="#FFF"/></g></svg></button>
+            <button class="cut-share-net" data-net="reddit" title="${txh("m.share.on", { network: "Reddit" })}" aria-label="${txh("m.share.on", { network: "Reddit" })}"><svg viewBox="0 0 24 24" width="18" height="18"><rect width="24" height="24" rx="5" fill="#FF4500"/><ellipse cx="12" cy="14.2" rx="7.2" ry="5" fill="#fff"/><circle cx="4.6" cy="12.4" r="1.9" fill="#fff"/><circle cx="19.4" cy="12.4" r="1.9" fill="#fff"/><circle cx="17.6" cy="4.8" r="1.5" fill="#fff"/><path d="M12 9.6l1.1-4.6 3.4.8" stroke="#fff" stroke-width="1" fill="none" stroke-linecap="round"/><circle cx="9.3" cy="13.4" r="1.2" fill="#FF4500"/><circle cx="14.7" cy="13.4" r="1.2" fill="#FF4500"/><path d="M9.4 16.4c1.6 1.2 3.6 1.2 5.2 0" stroke="#FF4500" stroke-width="1" fill="none" stroke-linecap="round"/></svg></button>
+            <button class="cut-share-net" data-net="facebook" title="${txh("m.share.on", { network: "Facebook" })}" aria-label="${txh("m.share.on", { network: "Facebook" })}"><svg viewBox="0 0 16 16" width="18" height="18"><path fill="#1877F2" d="M15 8a7 7 0 0 0-7-7 7 7 0 0 0-1.094 13.915v-4.892H5.13V8h1.777V6.458c0-1.754 1.045-2.724 2.644-2.724.766 0 1.567.137 1.567.137v1.723h-.883c-.87 0-1.14.54-1.14 1.093V8h1.941l-.31 2.023H9.094v4.892A7 7 0 0 0 15 8"/><path fill="#fff" d="M10.725 10.023 11.035 8H9.094V6.687c0-.553.27-1.093 1.14-1.093h.883V3.87s-.801-.137-1.567-.137c-1.6 0-2.644.97-2.644 2.724V8H5.13v2.023h1.777v4.892a7 7 0 0 0 2.188 0v-4.892z"/></svg></button>
           </span>
         </span>
         <span class="cut-settings-wrap" data-cut="settings-wrap">
           <button class="cut-settings" type="button" data-cut="settings"
-                  aria-label="Choose what to show in this strip" aria-expanded="false">
+                  aria-label="${txh("m.gear.aria")}" aria-expanded="false">
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
           </button>
-          <span class="cut-settings-tooltip" aria-hidden="true">Choose what to show in this strip.</span>
-          <div class="cut-settings-pop" data-cut="settings-pop" style="display:none" role="group" aria-label="Show in strip">
+          <span class="cut-settings-tooltip" aria-hidden="true">${txh("m.gear.tip")}</span>
+          <div class="cut-settings-pop" data-cut="settings-pop" style="display:none" role="group" aria-label="${txh("m.gear.title")}">
             <div class="cut-sp-scroll" data-cut="sp-scroll">
-            <div class="cut-sp-title">Show in strip</div>
-            <label class="cut-sp-row"><input type="checkbox" data-sp="session" /><span>Session</span></label>
-            <label class="cut-sp-row"><input type="checkbox" data-sp="weekly" /><span>Weekly</span></label>
-            <label class="cut-sp-row" data-cut="sp-fable-row"><input type="checkbox" data-sp="fable" /><span>Fable <span class="cut-sp-key">F</span></span></label>
-            <label class="cut-sp-row" data-cut="sp-extra-row"><input type="checkbox" data-sp="extra" /><span>Extra usage <span class="cut-sp-key">E</span></span><span class="cut-sp-info" tabindex="0" role="note" aria-label="When does this show?">i<span class="cut-sp-tip"><b>Appears only if Extra usage is turned on for your account.</b><br>&bull; Pro / Max: you turn it on in Claude &rsaquo; Settings &rsaquo; Usage.<br>&bull; Team / Enterprise: your admin turns it on.<br>Then it shows how much you&rsquo;ve spent beyond your plan limit this month.</span></span></label>
+            <div class="cut-sp-title">${txh("m.gear.title")}</div>
+            <label class="cut-sp-row"><input type="checkbox" data-sp="session" /><span>${txh("m.gear.session")}</span></label>
+            <label class="cut-sp-row"><input type="checkbox" data-sp="weekly" /><span>${txh("m.gear.weekly")}</span></label>
+            <label class="cut-sp-row" data-cut="sp-fable-row"><input type="checkbox" data-sp="fable" /><span>Fable <span class="cut-sp-key">${txh("m.chip.f")}</span></span></label>
+            <label class="cut-sp-row" data-cut="sp-extra-row"><input type="checkbox" data-sp="extra" /><span>${txh("m.gear.extra")} <span class="cut-sp-key">${txh("m.chip.e")}</span></span><span class="cut-sp-info" tabindex="0" role="note" aria-label="${txh("m.gear.whenShow")}">i<span class="cut-sp-tip">${tx("m.gear.extraTip_html")}</span></span></label>
             <div class="cut-sp-sep"></div>
-            <label class="cut-sp-row"><input type="checkbox" data-sp="resetTimeSession" /><span>Session reset time</span></label>
-            <label class="cut-sp-row"><input type="checkbox" data-sp="resetTimeWeekly" /><span>Weekly reset time</span></label>
-            <label class="cut-sp-row" data-cut="sp-bars-row"><input type="checkbox" data-sp="usageBars" /><span>Usage bars</span></label>
-            <label class="cut-sp-row"><input type="checkbox" data-sp="forecast" /><span>Limit forecast</span><span class="cut-sp-info" tabindex="0" role="note" aria-label="When does this show?">i<span class="cut-sp-tip">Appears next to Session only when you&rsquo;re on pace to hit your limit before it resets (e.g. &ldquo;~1h 20m left&rdquo;). It needs about 12 minutes of usage to measure your pace, so while you&rsquo;re on track it stays hidden.</span></span></label>
-            <label class="cut-sp-row"><input type="checkbox" data-sp="chatTokens" /><span>Chat tokens</span></label>
+            <label class="cut-sp-row"><input type="checkbox" data-sp="resetTimeSession" /><span>${txh("m.gear.resetSession")}</span></label>
+            <label class="cut-sp-row"><input type="checkbox" data-sp="resetTimeWeekly" /><span>${txh("m.gear.resetWeekly")}</span></label>
+            <label class="cut-sp-row" data-cut="sp-bars-row"><input type="checkbox" data-sp="usageBars" /><span>${txh("m.gear.bars")}</span></label>
+            <label class="cut-sp-row"><input type="checkbox" data-sp="forecast" /><span>${txh("m.gear.forecast")}</span><span class="cut-sp-info" tabindex="0" role="note" aria-label="${txh("m.gear.whenShow")}">i<span class="cut-sp-tip">${txh("m.gear.forecastTip", { example: txDur(80) })}</span></span></label>
+            <label class="cut-sp-row"><input type="checkbox" data-sp="chatTokens" /><span>${txh("m.gear.chatTokens")}</span></label>
             <div class="cut-sp-sep"></div>
-            <div class="cut-sp-title cut-sp-title-sub">In Claude&rsquo;s chat box</div>
-            <label class="cut-sp-row" data-cut="sp-projects-row"><input type="checkbox" data-sp-top="projectsButton" /><span>Projects button</span></label>
-            <div class="cut-sp-title cut-sp-title-sub">In Claude&rsquo;s sidebar</div>
-            <label class="cut-sp-row" data-cut="sp-chatsearch-row"><input type="checkbox" data-sp-top="chatSearch" /><span>Chat history search</span></label>
-            <div class="cut-sp-title cut-sp-title-sub">Alerts</div>
-            <label class="cut-sp-row" data-cut="sp-notif-row"><input type="checkbox" data-sp-top="notificationsEnabled" /><span>Desktop notifications</span></label>
-            <div class="cut-sp-title cut-sp-title-sub">Toolbar icon</div>
-            <label class="cut-sp-row" data-cut="sp-badge-row"><input type="checkbox" data-sp-top="toolbarBadge" /><span>Session % on the icon</span></label>
-            <div class="cut-sp-title cut-sp-title-sub">Pop-up cards</div>
-            <label class="cut-sp-row" data-cut="sp-tips-row"><input type="checkbox" data-sp-top="tipsEnabled" /><span>Tips &amp; requests</span><span class="cut-sp-info" tabindex="0" role="note" aria-label="What are these?">i<span class="cut-sp-tip">The occasional small card asking for a review, a share or a donation, or showing what&rsquo;s new. At most one a week. Turn off to never see them.</span></span></label>
+            <div class="cut-sp-title cut-sp-title-sub">${txh("m.gear.inChatBox")}</div>
+            <label class="cut-sp-row" data-cut="sp-projects-row"><input type="checkbox" data-sp-top="projectsButton" /><span>${txh("m.gear.projects")}</span></label>
+            <div class="cut-sp-title cut-sp-title-sub">${txh("m.gear.inSidebar")}</div>
+            <label class="cut-sp-row" data-cut="sp-chatsearch-row"><input type="checkbox" data-sp-top="chatSearch" /><span>${txh("m.gear.chatSearch")}</span></label>
+            <div class="cut-sp-title cut-sp-title-sub">${txh("m.gear.alerts")}</div>
+            <label class="cut-sp-row" data-cut="sp-notif-row"><input type="checkbox" data-sp-top="notificationsEnabled" /><span>${txh("m.gear.notif")}</span></label>
+            <div class="cut-sp-title cut-sp-title-sub">${txh("m.gear.toolbarIcon")}</div>
+            <label class="cut-sp-row" data-cut="sp-badge-row"><input type="checkbox" data-sp-top="toolbarBadge" /><span>${txh("m.gear.badge")}</span></label>
+            <div class="cut-sp-title cut-sp-title-sub">${txh("m.gear.popupCards")}</div>
+            <label class="cut-sp-row" data-cut="sp-tips-row"><input type="checkbox" data-sp-top="tipsEnabled" /><span>${txh("m.gear.tips")}</span><span class="cut-sp-info" tabindex="0" role="note" aria-label="${txh("m.gear.whatAre")}">i<span class="cut-sp-tip">${txh("m.gear.tipsTip")}</span></span></label>
             <div class="cut-sp-sep"></div>
-            <button class="cut-sp-share" type="button" data-cut="sp-share">📸 Share my usage card</button>
-            <button class="cut-sp-share cut-sp-support" type="button" data-cut="sp-support">❤️ Donate to support</button>
-            <div class="cut-sp-foot" data-cut="sp-foot">Keep at least one meter on.</div>
+            <button class="cut-sp-share" type="button" data-cut="sp-share">📸 ${txh("m.share.card")}</button>
+            <button class="cut-sp-share cut-sp-support" type="button" data-cut="sp-support">❤️ ${txh("m.gear.donate")}</button>
+            <div class="cut-sp-foot" data-cut="sp-foot">${txh("m.gear.foot")}</div>
             </div>
             <div class="cut-sp-fade" aria-hidden="true"></div>
           </div>
         </span>
         <span class="cut-collapse-wrap">
-          <button class="cut-collapse" type="button" data-cut="collapse" aria-label="Collapse the usage strip">
+          <button class="cut-collapse" type="button" data-cut="collapse" aria-label="${txh("m.collapse.aria")}">
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="11 17 6 12 11 7"></polyline><polyline points="18 17 13 12 18 7"></polyline></svg>
           </button>
-          <span class="cut-collapse-tooltip" data-cut="collapse-tip" aria-hidden="true">Collapse the strip to a compact view (S = session, W = weekly). Click again anytime to expand.</span>
+          <span class="cut-collapse-tooltip" data-cut="collapse-tip" aria-hidden="true">${txh("m.collapse.tip", { s: tx("m.chip.s"), w: tx("m.chip.w") })}</span>
         </span>
         <span class="cut-close-wrap">
-          <button class="cut-close" type="button" aria-label="Hide the usage strip">×</button>
-          <span class="cut-close-tooltip" aria-hidden="true">Hide the strip for 1 hour, 2 hours, or until you turn it back on.<br><strong>To bring it back:</strong> click the Claude Usage Meter icon in your browser toolbar, then turn on <strong>"Show Usage Strip above Chat"</strong>.</span>
+          <button class="cut-close" type="button" aria-label="${txh("m.close.aria")}">×</button>
+          <span class="cut-close-tooltip" aria-hidden="true">${tx("m.close.tip_html")}</span>
         </span>
       </div>
     `;
@@ -2358,49 +2366,49 @@
   function nudgeStepHtml(step) {
     if (step === "yes") {
       return `
-        <button class="cut-nudge-x" type="button" data-cut="nudge-close" aria-label="Not now">×</button>
-        <div class="cut-nudge-title">Is Claude Usage Meter helping you?</div>
+        <button class="cut-nudge-x" type="button" data-cut="nudge-close" aria-label="${txh("m.card.notNow")}">×</button>
+        <div class="cut-nudge-title">${txh("m.rate.title")}</div>
         <div class="cut-nudge-stars" data-cut="nudge-stars" role="button" tabindex="0"
-             aria-label="Leave a 5 star review">
+             aria-label="${txh("m.rate.starsAria")}">
           <span>★</span><span>★</span><span>★</span><span>★</span><span>★</span>
         </div>
         <div class="cut-nudge-body">
-          If it&rsquo;s useful, a quick review helps others find it. 🙏🏻
-          <span class="cut-nudge-by">Thank you ~ <a href="https://www.linkedin.com/in/creator-sanjaykumar/" target="_blank" rel="noopener noreferrer">Sanjay</a>, Creator</span>
+          ${txh("m.rate.body")}
+          <span class="cut-nudge-by">${tx("m.rate.thanks_html", { name: '<a href="https://www.linkedin.com/in/creator-sanjaykumar/" target="_blank" rel="noopener noreferrer">Sanjay</a>' })}</span>
         </div>
         <div class="cut-nudge-actions">
-          <button class="cut-nudge-cta" type="button" data-cut="nudge-rate">Write a review</button>
-          <button class="cut-nudge-later" type="button" data-cut="nudge-later">Maybe later</button>
+          <button class="cut-nudge-cta" type="button" data-cut="nudge-rate">${txh("m.rate.write")}</button>
+          <button class="cut-nudge-later" type="button" data-cut="nudge-later">${txh("m.rate.later")}</button>
         </div>
         ${QUIET_HTML}`;
     }
     if (step === "no") {
       return `
-        <button class="cut-nudge-x" type="button" data-cut="nudge-close" aria-label="Close">×</button>
-        <div class="cut-nudge-title">Sorry to hear that</div>
+        <button class="cut-nudge-x" type="button" data-cut="nudge-close" aria-label="${txh("m.card.close")}">×</button>
+        <div class="cut-nudge-title">${txh("m.rate.sorry")}</div>
         <div class="cut-nudge-body">
-          Tell me what's missing or broken and I'll work on it. — Sanjay
+          ${txh("m.rate.sorryBody")}
         </div>
         <div class="cut-nudge-actions">
-          <button class="cut-nudge-cta" type="button" data-cut="nudge-feedback">Share feedback</button>
-          <button class="cut-nudge-later" type="button" data-cut="nudge-rate">Rate us anyway</button>
+          <button class="cut-nudge-cta" type="button" data-cut="nudge-feedback">${txh("m.rate.feedback")}</button>
+          <button class="cut-nudge-later" type="button" data-cut="nudge-rate">${txh("m.rate.anyway")}</button>
         </div>
         ${QUIET_HTML}`;
     }
     const days = Math.max(activeDays.n || 0, STREAK_DAYS);
     const title = nudgeKind === "reset"
-      ? "Fresh session unlocked 🎉"
-      : `${days} ${days === 1 ? "day" : "days"} with the meter 🙌`;
+      ? txh("m.rate.resetTitle")
+      : I18N.esc(txp("m.rate.streakTitle", days));
     const body = nudgeKind === "reset"
-      ? "Your Claude session limit just reset. Is the meter helping you plan around your limits?"
-      : "Is Claude Usage Meter making your Claude work easier?";
+      ? txh("m.rate.resetBody")
+      : txh("m.rate.streakBody");
     return `
-      <button class="cut-nudge-x" type="button" data-cut="nudge-close" aria-label="Not now">×</button>
+      <button class="cut-nudge-x" type="button" data-cut="nudge-close" aria-label="${txh("m.card.notNow")}">×</button>
       <div class="cut-nudge-title">${title}</div>
       <div class="cut-nudge-body">${body}</div>
       <div class="cut-nudge-actions">
-        <button class="cut-nudge-cta" type="button" data-cut="nudge-yes">👍 Yes, it helps</button>
-        <button class="cut-nudge-alt" type="button" data-cut="nudge-no">👎 Not really</button>
+        <button class="cut-nudge-cta" type="button" data-cut="nudge-yes">👍 ${txh("m.rate.yes")}</button>
+        <button class="cut-nudge-alt" type="button" data-cut="nudge-no">👎 ${txh("m.rate.no")}</button>
       </div>
         ${QUIET_HTML}`;
   }
@@ -2409,7 +2417,7 @@
     const el = document.createElement("div");
     el.className = "cut-rate-nudge cut-rate-card";
     el.setAttribute("role", "dialog");
-    el.setAttribute("aria-label", "Rate Claude Usage Meter");
+    el.setAttribute("aria-label", tx("m.rate.dialogAria"));
     el.innerHTML = nudgeStepHtml("yes");  // v1.4.1: single step — straight to the rating ask
     return el;
   }
@@ -2611,41 +2619,47 @@
   function scRows() {
     const u = latestUsage || {};
     const rows = [];
-    const add = (name, d) => {
+    const add = (id, name, d) => {
       if (!d || d.percent == null || !isFinite(Number(d.percent))) return;
-      rows.push({ name, pct: Math.max(0, Math.min(100, Math.round(Number(d.percent)))), resetsAt: Number(d.resetsAt) || 0 });
+      rows.push({ id, name, pct: Math.max(0, Math.min(100, Math.round(Number(d.percent)))), resetsAt: Number(d.resetsAt) || 0 });
     };
-    add("Session", u.session);
-    add("Weekly", u.weekly);
+    add("session", tx("m.seg.session"), u.session);
+    add("weekly", tx("m.seg.weekly"), u.weekly);
     const f = fableData();
-    if (f) add(fableLabel(f), f);
+    if (f) add("fable", fableLabel(f), f);
     return rows;
   }
 
   // Headline + the post text that goes with it. Picks the most "postable"
   // truth: a heavy week beats a heavy session beats a calm day.
   function scStory(rows) {
-    const byName = (n) => rows.find((r) => r.name === n);
-    const w = byName("Weekly"), sess = byName("Session");
-    const day = new Date().toLocaleDateString("en-US", { weekday: "long" });
+    const byId = (n) => rows.find((r) => r.id === n);
+    const w = byId("weekly"), sess = byId("session");
+    const day = new Date().toLocaleDateString(I18N.locale(), { weekday: "long" });
+    // Each headline is one key; "\n" splits it into the white and coral lines.
+    const head = (str) => {
+      const ls = str.split("\n");
+      return { l1: ls[0], l2: ls.slice(1).join(" ") };
+    };
     const daysLeft = w && w.resetsAt ? (w.resetsAt - Date.now()) / DAY_MS : 0;
     if (w && w.pct >= 70) {
-      const tail = daysLeft >= 2 ? `and it's only ${day}.` : "Reset can't come soon enough.";
+      const early = daysLeft >= 2;
+      const tail = early ? tx("m.sc.weekly.subDay", { day }) : tx("m.sc.weekly.subSoon");
       return {
-        l1: `${w.pct}% of my weekly`, l2: `Claude limit, gone.`, sub: tail,
-        post: `I've used ${w.pct}% of my weekly Claude limit, ${tail.replace(/\.$/, "")}. I track it live, right above the chat box, with Claude Usage Meter:`
+        ...head(tx("m.sc.weekly.head", { pct: w.pct })), sub: tail,
+        post: early ? tx("m.sc.weekly.postDay", { pct: w.pct, day }) : tx("m.sc.weekly.postSoon", { pct: w.pct })
       };
     }
     if (sess && sess.pct >= 80) {
-      const when = sess.resetsAt ? `Resets in ${fmtReset(sess.resetsAt)}.` : "Deep work mode.";
+      const when = sess.resetsAt ? tx("m.sc.session.resets", { time: fmtReset(sess.resetsAt) }) : tx("m.sc.session.deep");
       return {
-        l1: `${sess.pct}% of my Claude`, l2: `session, used.`, sub: when,
-        post: `${sess.pct}% of my Claude session used. ${when} I keep an eye on it live with Claude Usage Meter:`
+        ...head(tx("m.sc.session.head", { pct: sess.pct })), sub: when,
+        post: tx("m.sc.session.post", { pct: sess.pct, when })
       };
     }
     return {
-      l1: "I always know", l2: "my Claude limits.", sub: "Session and weekly usage, live above the chat box.",
-      post: "I always know how much of my Claude limit is left: session and weekly usage, live above the chat box, with Claude Usage Meter:"
+      ...head(tx("m.sc.calm.head")), sub: tx("m.sc.calm.sub"),
+      post: tx("m.sc.calm.post")
     };
   }
 
@@ -2739,12 +2753,17 @@
         text(r.name, fonts.body5(FS), TXT, 0.62),
         text(`${r.pct}%`, (r.pct >= 90 ? fonts.body7 : fonts.body6)(FS), scPctColor(r.pct))
       ];
-      if (r.resetsAt && (r.name === "Session" || r.name === "Weekly")) {
+      if (r.resetsAt && (r.id === "session" || r.id === "weekly")) {
         parts.push(text("·", fonts.body5(FS), TXT, 0.45));
-        parts.push(group([
-          text("Reset in", fonts.body5(11 * S), TXT, 0.62),
-          text(fmtReset(r.resetsAt), fonts.body6(11 * S), r.pct >= 90 ? "#ef4444" : TXT, 0.9)
-        ], 4 * S));
+        // One key, "Reset in {time}": the time is drawn in its own weight, so
+        // split the sentence around it and keep the language's word order.
+        const SPLIT = "\u0001";
+        const [pre, post] = (tx("m.sc.strip.resetIn", { time: SPLIT }).split(SPLIT).concat([""])).map((x) => x.trim());
+        const rparts = [];
+        if (pre) rparts.push(text(pre, fonts.body5(11 * S), TXT, 0.62));
+        rparts.push(text(fmtReset(r.resetsAt), fonts.body6(11 * S), r.pct >= 90 ? "#ef4444" : TXT, 0.9));
+        if (post) rparts.push(text(post, fonts.body5(11 * S), TXT, 0.62));
+        parts.push(group(rparts, 4 * S));
       }
       items.push(group(parts, 6 * S, r.pct >= 90));
     });
@@ -2764,9 +2783,9 @@
           ctx.stroke(new Path2D("M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"));
           ctx.restore();
         } },
-        text("Chat", fonts.body5(FS), TXT, 0.62),
+        text(tx("m.chat.label"), fonts.body5(FS), TXT, 0.62),
         text("~" + fmtTokens(n), fonts.body6(FS), col),
-        text("tokens", fonts.body5(11 * S), TXT, 0.62)
+        text(tx("m.chat.tokens"), fonts.body5(11 * S), TXT, 0.62)
       ], 5 * S));
     }
     const contentW = items.reduce((a, it) => a + it.w, 0) + GAP * (items.length - 1);
@@ -2796,7 +2815,7 @@
     ctx.font = fonts.body5(24);
     ctx.fillStyle = "#8f8b85";
     ctx.textBaseline = "middle";
-    ctx.fillText("Reply to Claude…", x + 30, y + 36);
+    ctx.fillText(tx("m.sc.composer"), x + 30, y + 36);
     // "+" button, bottom-left
     const by = y + h - 42;
     scRoundRect(ctx, x + 22, by - 18, 36, 36, 10);
@@ -2848,7 +2867,7 @@
     ctx.textAlign = "right";
     ctx.fillStyle = MUTED;
     ctx.font = fonts.body5(20);
-    ctx.fillText("by SelectorsHub", SC_W - X, 71);
+    ctx.fillText(tx("m.logo.byline"), SC_W - X, 71);
     ctx.textAlign = "left";
 
     // Headline, two lines, second in coral. Shrinks to fit.
@@ -2864,7 +2883,7 @@
     ctx.fillText(story.l2, X, y);
     y += 44;
     ctx.fillStyle = MUTED;
-    ctx.font = fonts.body5(24);
+    ctx.font = fonts.body5(scFitFont(ctx, story.sub, fonts.body5("{s}"), maxW, 24, 16));
     ctx.fillText(story.sub, X, y);
 
     // The product, as it looks: strip riding just above the composer.
@@ -2877,8 +2896,9 @@
     // Footer.
     ctx.textBaseline = "alphabetic";
     ctx.fillStyle = MUTED;
-    ctx.font = fonts.body5(19);
-    ctx.fillText("Track yours: search “Claude Usage Meter” in your browser's extension store", X, SC_H - 30);
+    const foot = tx("m.sc.footer");
+    ctx.font = fonts.body5(scFitFont(ctx, foot, fonts.body5("{s}"), maxW, 19, 13));
+    ctx.fillText(foot, X, SC_H - 30);
     return { canvas: c, story };
   }
 
@@ -2955,18 +2975,18 @@
     const el = document.createElement("div");
     el.className = "cut-sc-panel";
     el.setAttribute("role", "dialog");
-    el.setAttribute("aria-label", "Share my usage");
+    el.setAttribute("aria-label", tx("m.sc.title"));
     if (root && root.classList.contains("cut-theme-dark")) el.classList.add("cut-pop-dark");
     el.innerHTML = `
-      <button class="cut-sc-x" type="button" data-sc="close" aria-label="Close">×</button>
-      <div class="cut-sc-title">Share my usage</div>
-      <div class="cut-sc-frame" data-sc="frame"><div class="cut-sc-loading">Drawing your card…</div></div>
-      <div class="cut-sc-note">Only your usage percentages are on the image. No name, email or chats.</div>
+      <button class="cut-sc-x" type="button" data-sc="close" aria-label="${txh("m.card.close")}">×</button>
+      <div class="cut-sc-title">${txh("m.sc.title")}</div>
+      <div class="cut-sc-frame" data-sc="frame"><div class="cut-sc-loading">${txh("m.sc.loading")}</div></div>
+      <div class="cut-sc-note">${txh("m.sc.note")}</div>
       <div class="cut-sc-actions">
-        <button class="cut-sc-btn cut-sc-primary" type="button" data-sc="x">Post on X</button>
-        <button class="cut-sc-btn cut-sc-primary" type="button" data-sc="linkedin">Post on LinkedIn</button>
-        <button class="cut-sc-btn" type="button" data-sc="copy">Copy image</button>
-        <button class="cut-sc-btn" type="button" data-sc="download">Download</button>
+        <button class="cut-sc-btn cut-sc-primary" type="button" data-sc="x">${txh("m.sc.postOn", { network: "X" })}</button>
+        <button class="cut-sc-btn cut-sc-primary" type="button" data-sc="linkedin">${txh("m.sc.postOn", { network: "LinkedIn" })}</button>
+        <button class="cut-sc-btn" type="button" data-sc="copy">${txh("m.sc.copy")}</button>
+        <button class="cut-sc-btn" type="button" data-sc="download">${txh("m.sc.download")}</button>
       </div>
       <div class="cut-sc-toast" data-sc="toast" hidden></div>`;
     scPanel = el;
@@ -2997,14 +3017,14 @@
       if (!what || what === "frame" || what === "toast") return;
       if (what === "close") { closeShareCard(); return; }
       const r = rendered || await ready;
-      if (!r) { toast("Couldn't draw the card. Please try again."); return; }
+      if (!r) { toast(tx("m.sc.toast.drawFail")); return; }
       if (what === "copy") {
         const ok = await scCopyImage(r.canvas);
-        toast(ok ? "Image copied. Paste it anywhere." : "Copy isn't allowed here. Use Download instead.");
+        toast(ok ? tx("m.sc.toast.copied") : tx("m.sc.toast.copyBlocked"));
         if (ok) markShared();
       } else if (what === "download") {
         const ok = await scDownload(r.canvas);
-        toast(ok ? "Saved to your downloads." : "Download failed. Please try again.");
+        toast(ok ? tx("m.sc.toast.saved") : tx("m.sc.toast.dlFail"));
         if (ok) markShared();
       } else if (what === "x" || what === "linkedin") {
         // Intents can't carry an image, so the image rides on the clipboard.
@@ -3015,7 +3035,7 @@
           ? `https://twitter.com/intent/tweet?text=${encodeURIComponent(withXHandle(r.story.post))}&url=${encodeURIComponent(link)}`
           : `https://www.linkedin.com/feed/?shareActive=true&text=${encodeURIComponent(r.story.post + " " + link)}`;
         try { window.open(url, "_blank", "noopener"); } catch (_) {}
-        toast(ok ? `Image copied — press ${scPasteKey()} in the post to add it.` : "Tip: use Download, then attach the image to your post.");
+        toast(ok ? tx("m.sc.toast.pasteHint", { key: scPasteKey() }) : tx("m.sc.toast.attachTip"));
         markShared();
       }
     });
@@ -3106,13 +3126,13 @@
     const el = document.createElement("div");
     el.className = "cut-rate-nudge cut-share-nudge";
     el.setAttribute("role", "dialog");
-    el.setAttribute("aria-label", "Share Claude Usage Meter");
+    el.setAttribute("aria-label", tx("m.share.aria"));
     el.classList.toggle("cut-pop-dark", root.classList.contains("cut-theme-dark"));
     el.innerHTML = `
-      <button class="cut-nudge-x" type="button" data-cut="snudge-close" aria-label="Not now">×</button>
-      <div class="cut-nudge-title">Know someone who hits Claude limits?</div>
+      <button class="cut-nudge-x" type="button" data-cut="snudge-close" aria-label="${txh("m.card.notNow")}">×</button>
+      <div class="cut-nudge-title">${txh("m.snudge.title")}</div>
       <div class="cut-nudge-actions">
-        <button class="cut-nudge-cta" type="button" data-cut="snudge-card">📸 Share my usage</button>
+        <button class="cut-nudge-cta" type="button" data-cut="snudge-card">📸 ${txh("m.sc.title")}</button>
       </div>
         ${QUIET_HTML}`;
     shareNudgeEl = el;
@@ -3264,23 +3284,23 @@
     // Real days since install when we know it; upgraders from before install
     // stamps (installAt 0) get a count-free title rather than a wrong number.
     const days = installAt ? Math.floor((Date.now() - installAt) / DAY_MS) : 0;
-    const title = isReset ? "Fresh session unlocked ☕"
-      : days >= 2 ? `${days} days with the meter ❤️`
-      : "Thanks for using the meter ❤️";
+    const title = isReset ? txh("m.support.resetTitle")
+      : days >= 2 ? I18N.esc(txp("m.support.daysTitle", days))
+      : txh("m.support.thanksTitle");
     const el = document.createElement("div");
     el.className = "cut-rate-nudge cut-support-nudge";
     el.setAttribute("role", "dialog");
-    el.setAttribute("aria-label", "Support Claude Usage Meter");
+    el.setAttribute("aria-label", tx("m.support.aria"));
     el.classList.toggle("cut-pop-dark", root.classList.contains("cut-theme-dark"));
     el.innerHTML = `
-      <button class="cut-nudge-x" type="button" data-cut="unudge-close" aria-label="Not now">×</button>
+      <button class="cut-nudge-x" type="button" data-cut="unudge-close" aria-label="${txh("m.card.notNow")}">×</button>
       <div class="cut-nudge-title">${title}</div>
       <div class="cut-nudge-body">
-        I build it solo and keep it free. If it saves you time, chip in any amount.
-        <span class="cut-nudge-by">~ <a href="https://www.linkedin.com/in/creator-sanjaykumar/" target="_blank" rel="noopener noreferrer">Sanjay</a>, Creator</span>
+        ${txh("m.support.body")}
+        <span class="cut-nudge-by">${tx("m.support.by_html", { name: '<a href="https://www.linkedin.com/in/creator-sanjaykumar/" target="_blank" rel="noopener noreferrer">Sanjay</a>' })}</span>
       </div>
       <div class="cut-nudge-actions">
-        <button class="cut-nudge-cta" type="button" data-cut="unudge-go">❤️ Donate</button>
+        <button class="cut-nudge-cta" type="button" data-cut="unudge-go">❤️ ${txh("m.support.donate")}</button>
       </div>
         ${QUIET_HTML}`;
     supportNudgeEl = el;
@@ -3422,14 +3442,14 @@
     const el = document.createElement("div");
     el.className = "cut-rate-nudge cut-tools-nudge";
     el.setAttribute("role", "dialog");
-    el.setAttribute("aria-label", "More free tools from SelectorsHub");
+    el.setAttribute("aria-label", tx("m.tools.aria"));
     el.classList.toggle("cut-pop-dark", root.classList.contains("cut-theme-dark"));
     el.innerHTML = `
-      <button class="cut-nudge-x" type="button" data-cut="tnudge-close" aria-label="Not now">×</button>
-      <div class="cut-nudge-title">More free tools from me 🧰</div>
-      <div class="cut-nudge-body">15+ tools for testers &amp; devs, used by 2M+.</div>
+      <button class="cut-nudge-x" type="button" data-cut="tnudge-close" aria-label="${txh("m.card.notNow")}">×</button>
+      <div class="cut-nudge-title">${txh("m.tools.title")}</div>
+      <div class="cut-nudge-body">${txh("m.tools.body")}</div>
       <div class="cut-nudge-actions">
-        <button class="cut-nudge-cta" type="button" data-cut="tnudge-go">Show me</button>
+        <button class="cut-nudge-cta" type="button" data-cut="tnudge-go">${txh("m.tools.go")}</button>
       </div>
         ${QUIET_HTML}`;
     toolsNudgeEl = el;
@@ -3504,7 +3524,9 @@
   // v1.5.2: emptied. Everyone has already seen the 1.4.9 / 1.5.0 items
   // (notifications, usage bars, toolbar %), so no card on this update. Add a
   // new entry here, keyed by version, to announce something in future, e.g.
-  //   "1.5.3": { items: ["..."], rows: ["sp-...-row"] },
+  //   "1.5.3": { items: ["c.wn.item153a_html"], rows: ["sp-...-row"] },
+  // v1.5.5: items hold translation KEYS (ending in _html; they may carry
+  // markup), translated when the card renders. Add each key to the strings.
   const WHATS_NEW = {};
   const WN_PENDING_KEY = "whats_new_pending";
   const WN_SEEN_KEY = "whats_new_seen";
@@ -3529,7 +3551,7 @@
       for (const t of WHATS_NEW[v].items) if (items.length < 4) items.push(t);
       for (const r of WHATS_NEW[v].rows) if (!rows.includes(r)) rows.push(r);
     }
-    return { title: "New in Claude Usage Meter \u2728", items, rows };
+    return { title: tx("c.wn.title"), items, rows };
   }
   let wnPending = null;     // version string waiting to be announced
   let wnSeen = null;        // last version announced
@@ -3586,16 +3608,16 @@
     const el = document.createElement("div");
     el.className = "cut-rate-nudge cut-wn-nudge";
     el.setAttribute("role", "dialog");
-    el.setAttribute("aria-label", "What's new in Claude Usage Meter");
+    el.setAttribute("aria-label", tx("c.wn.aria"));
     el.classList.toggle("cut-pop-dark", root.classList.contains("cut-theme-dark"));
     el.innerHTML = `
-      <button class="cut-nudge-x" type="button" data-cut="wn-close" aria-label="Close">×</button>
-      <div class="cut-nudge-title">${entry.title}</div>
-      <ul class="cut-wn-list">${entry.items.map((t) => `<li>${t}</li>`).join("")}</ul>
-      <div class="cut-nudge-body">${entry.items.length > 1 ? "Turn any of these on or off" : "Turn it on or off"} in the ⚙ settings.</div>
+      <button class="cut-nudge-x" type="button" data-cut="wn-close" aria-label="${txh("c.common.close")}">×</button>
+      <div class="cut-nudge-title">${I18N.esc(entry.title)}</div>
+      <ul class="cut-wn-list">${entry.items.map((t) => `<li>${tx(t)}</li>`).join("")}</ul>
+      <div class="cut-nudge-body">${entry.items.length > 1 ? txh("c.wn.bodyMany") : txh("c.wn.bodyOne")}</div>
       <div class="cut-nudge-actions">
-        <button class="cut-nudge-cta" type="button" data-cut="wn-go">Show me</button>
-        <button class="cut-nudge-later" type="button" data-cut="wn-close">Got it</button>
+        <button class="cut-nudge-cta" type="button" data-cut="wn-go">${txh("c.wn.showMe")}</button>
+        <button class="cut-nudge-later" type="button" data-cut="wn-close">${txh("c.common.gotIt")}</button>
       </div>`;
     whatsNewEl = el;
     document.body.appendChild(el);
@@ -3758,12 +3780,12 @@
     const el = document.createElement("div");
     el.className = "cut-mp";
     el.setAttribute("role", "complementary");
-    el.setAttribute("aria-label", "More usage meters");
+    el.setAttribute("aria-label", tx("c.mp.aria"));
     el.classList.toggle("cut-mp-dark", root.classList.contains("cut-theme-dark"));
     const x = document.createElement("button");
-    x.type = "button"; x.className = "cut-mp-x"; x.setAttribute("aria-label", "Close"); x.textContent = "×";
+    x.type = "button"; x.className = "cut-mp-x"; x.setAttribute("aria-label", tx("c.common.close")); x.textContent = "×";
     const title = document.createElement("div");
-    title.className = "cut-mp-title"; title.textContent = "Now available";
+    title.className = "cut-mp-title"; title.textContent = tx("c.mp.title");
     el.append(x, title);
     for (const it of mpItemsLeft()) {
       const row = document.createElement("a");
@@ -3772,7 +3794,7 @@
       const name = document.createElement("span");
       name.className = "cut-mp-name"; name.textContent = it.name;
       const btn = document.createElement("span");
-      btn.className = "cut-mp-btn"; btn.textContent = "Install";
+      btn.className = "cut-mp-btn"; btn.textContent = tx("c.mp.install");
       row.append(mpLogoNode(it.logo), name, btn);
       el.appendChild(row);
     }
@@ -3883,14 +3905,14 @@
     const el = document.createElement("div");
     el.className = "cut-rate-nudge cut-free-hint";
     el.setAttribute("role", "dialog");
-    el.setAttribute("aria-label", "How usage shows on the Free plan");
+    el.setAttribute("aria-label", tx("c.fh.aria"));
     el.classList.toggle("cut-pop-dark", root.classList.contains("cut-theme-dark"));
     el.innerHTML = `
-      <button class="cut-nudge-x" type="button" data-cut="fh-close" aria-label="Close">×</button>
-      <div class="cut-nudge-title">Send your first message to Claude \u{1F44B}</div>
-      <div class="cut-nudge-body">Your usage data appears after Claude replies.</div>
+      <button class="cut-nudge-x" type="button" data-cut="fh-close" aria-label="${txh("c.common.close")}">×</button>
+      <div class="cut-nudge-title">${txh("c.fh.title")}</div>
+      <div class="cut-nudge-body">${txh("c.fh.body")}</div>
       <div class="cut-nudge-actions">
-        <button class="cut-nudge-cta" type="button" data-cut="fh-ok">Got it</button>
+        <button class="cut-nudge-cta" type="button" data-cut="fh-ok">${txh("c.common.gotIt")}</button>
       </div>`;
     freeHintEl = el;
     document.body.appendChild(el);
@@ -4357,11 +4379,20 @@
     pop.style.top = Math.max(margin, top) + "px";
   }
 
+  // v1.5.5: a tool's description, translated at render time. Keys are
+  // "c.tool.<icon>.desc"; a tool without one (or LOGO_MENU_TOOLS holding a key
+  // of its own in `desc`) falls back to tx(t.desc).
+  function toolDesc(t) {
+    const k = "c.tool." + t.icon + ".desc";
+    const v = tx(k);
+    return v === k ? tx(t.desc) : v;
+  }
+
   function buildLogoMenu() {
     const pop = document.createElement("div");
     pop.className = "cut-lm";
     pop.setAttribute("role", "menu");
-    pop.setAttribute("aria-label", "More free tools from SelectorsHub");
+    pop.setAttribute("aria-label", tx("c.lm.aria"));
 
     const head = document.createElement("div");
     head.className = "cut-lm-head";
@@ -4370,7 +4401,7 @@
     brand.textContent = "SelectorsHub";
     const sub = document.createElement("div");
     sub.className = "cut-lm-sub";
-    sub.textContent = "Free tools from the maker of Claude Usage Meter";
+    sub.textContent = tx("c.lm.sub");
     head.appendChild(brand);
     head.appendChild(sub);
     pop.appendChild(head);
@@ -4396,7 +4427,7 @@
       nm.textContent = t.name;
       const ds = document.createElement("span");
       ds.className = "cut-lm-desc";
-      ds.textContent = t.desc;
+      ds.textContent = toolDesc(t);
       txt.appendChild(nm);
       txt.appendChild(ds);
       a.appendChild(badge);
@@ -4413,14 +4444,14 @@
     about.href = utm(PRODUCT_URL, "logo-menu-about");
     about.target = "_blank";
     about.rel = "noopener noreferrer";
-    about.textContent = "About this meter";
+    about.textContent = tx("c.lm.about");
     const all = document.createElement("a");
     all.className = "cut-lm-all";
     all.setAttribute("role", "menuitem");
     all.href = utm(SH_ALL_TOOLS_URL, "logo-menu-all");
     all.target = "_blank";
     all.rel = "noopener noreferrer";
-    all.textContent = "See all 15+ free tools →";
+    all.textContent = tx("c.lm.all");
     about.addEventListener("click", () => setTimeout(closeLogoMenu, 0));
     all.addEventListener("click", () => setTimeout(closeLogoMenu, 0));
     foot.appendChild(about);
@@ -4584,16 +4615,17 @@
     const tipEl = root.querySelector('[data-cut="lp-tip"]');
     if (link) {
       link.href = utm(tool.url, "limit-reached");
-      link.setAttribute("aria-label", `While you wait for the reset, try ${tool.name}: ${tool.desc}`);
+      link.setAttribute("aria-label", tx("c.lp.aria", { name: tool.name, desc: toolDesc(tool) }));
     }
     if (nameEl) nameEl.textContent = tool.name;
     if (tipEl) {
-      const scopeName = st.scope === "session" ? "Session" : "Weekly";
-      const reset = st.resetsAt ? ` — resets in ${fmtReset(st.resetsAt)}` : "";
+      const reached = st.scope === "session"
+        ? (st.resetsAt ? "c.lp.reachedSession_html" : "c.lp.reachedSessionNoTime_html")
+        : (st.resetsAt ? "c.lp.reachedWeekly_html" : "c.lp.reachedWeeklyNoTime_html");
       tipEl.innerHTML =
-        `<b>${scopeName} limit reached</b>${reset}.<br>` +
-        `While you wait: <b>${tool.name}</b> — ${tool.desc}. Free, from SelectorsHub.<br>` +
-        `× hides this until the next reset.`;
+        tx(reached, { time: I18N.esc(fmtReset(st.resetsAt)) }) + "<br>" +
+        tx("c.lp.wait_html", { name: I18N.esc(tool.name), desc: I18N.esc(toolDesc(tool)) }) + "<br>" +
+        txh("c.lp.hide");
     }
   }
 
@@ -4666,9 +4698,9 @@
     if (elapsed == null) return "";
     const e = Math.round(elapsed);
     if (p >= 100) return "";
-    if (p > e + 10) return `Ahead of pace: ${p}% used, ${e}% of the window gone`;
-    if (p < e - 10) return `Under pace: ${p}% used, ${e}% of the window gone`;
-    return `On pace: ${p}% used, ${e}% of the window gone`;
+    if (p > e + 10) return txh("c.pace.ahead", { p, e });
+    if (p < e - 10) return txh("c.pace.under", { p, e });
+    return txh("c.pace.on", { p, e });
   }
 
   function renderBar(segEl, data) {
@@ -4703,20 +4735,24 @@
     if (data && data.percent != null) {
       const p = data.percent;
       const cls = colorClass(p);
-      pctEl.textContent = `${p}%`;
+      pctEl.textContent = tx("c.common.pct", { p });
       // v1.2.5: "Reset in <time>" — the "<time>" span is neutral by default and
       // only turns red in the alert band (>= 90%), so it isn't everyday color
       // noise but still flags "nearly maxed" when that's the thing you care about.
       if (data.resetsAt) {
-        metaEl.textContent = "Reset in ";
+        // v1.5.5: "Reset in {time}" split around {time}, so the time span can
+        // sit wherever the language puts it.
+        const rtParts = tx("c.seg.resetIn").split("{time}");
+        metaEl.textContent = rtParts[0];
         const rtEl = document.createElement("span");
         rtEl.className = "cut-meta-rt" + resetAlertClass(p);
         rtEl.textContent = fmtReset(data.resetsAt);
         metaEl.appendChild(rtEl);
+        if (rtParts[1]) metaEl.appendChild(document.createTextNode(rtParts.slice(1).join("")));
       } else {
-        metaEl.textContent = "no reset info";
+        metaEl.textContent = tx("c.seg.noReset");
       }
-      segEl.dataset.cutTip = data.resetsAt ? `Reset in ${fmtReset(data.resetsAt)}` : "No reset info";
+      segEl.dataset.cutTip = data.resetsAt ? txh("c.seg.resetIn", { time: fmtReset(data.resetsAt) }) : txh("c.seg.noResetTip");
       // v1.4.5: the pace sentence explains the bar's tick, where the bar shows.
       if (pace && fieldOn("usageBars")) segEl.dataset.cutTip += "<br>" + pace;
       // Also tint the % number itself, and flag alert states:
@@ -4728,8 +4764,8 @@
     } else {
       pctEl.textContent = "—";
       pctEl.className = "cut-pct";
-      metaEl.textContent = "waiting…";
-      segEl.dataset.cutTip = "Waiting for data";
+      metaEl.textContent = tx("c.seg.waiting");
+      segEl.dataset.cutTip = txh("c.seg.waitingTip");
       segEl.classList.remove("cut-alert", "cut-alert-max");
     }
   }
@@ -4761,7 +4797,7 @@
 
     // The trailing "left" lives in its own span so the narrow tiers can drop it
     // (see .cut-fc-word in overlay.css) without losing the number itself.
-    txt.textContent = `~${fmtEta(f.minutesLeft)}`;
+    txt.textContent = tx("c.fc.chip", { time: fmtEta(f.minutesLeft) });
     // Rebuild the class list rather than toggling: the urgency band changes as
     // the clock runs down and stale colour classes would stack up.
     el.className = "cut-fc " + forecastColorClass(f.minutesLeft);
@@ -4769,13 +4805,13 @@
     // final say on whether there's actually room for it.
     el.style.display = "";
     el.setAttribute("aria-label",
-      `At about ${f.ratePerHour}% per hour, projected to reach the session limit in ${fmtEta(f.minutesLeft)}`);
+      tx("c.fc.aria", { rate: f.ratePerHour, time: fmtEta(f.minutesLeft) }));
   }
 
   function renderCompact(root) {
     const items = [
-      { key: "session", valSel: '[data-cut="c-session"]', tipSel: '[data-cut="c-session-tip"]', ringSel: '[data-cut="ring-session"]', letter: "S", name: "Session", data: latestUsage && latestUsage.session },
-      { key: "weekly",  valSel: '[data-cut="c-weekly"]',  tipSel: '[data-cut="c-weekly-tip"]',  ringSel: '[data-cut="ring-weekly"]',  letter: "W", name: "Weekly",  data: latestUsage && latestUsage.weekly },
+      { key: "session", valSel: '[data-cut="c-session"]', tipSel: '[data-cut="c-session-tip"]', ringSel: '[data-cut="ring-session"]', letter: "S", name: tx("c.seg.session"), data: latestUsage && latestUsage.session },
+      { key: "weekly",  valSel: '[data-cut="c-weekly"]',  tipSel: '[data-cut="c-weekly-tip"]',  ringSel: '[data-cut="ring-weekly"]',  letter: "W", name: tx("c.seg.weekly"),  data: latestUsage && latestUsage.weekly },
     ];
     // v1.2.6: the F chip joins the pill only when there's a Fable bucket to show
     // (its wrapper stays display:none otherwise, so no empty ring in the pill).
@@ -4793,7 +4829,7 @@
       if (it.data && it.data.percent != null) {
         const p = it.data.percent;
         const cls = colorClass(p);
-        el.textContent = `${p}%`;
+        el.textContent = tx("c.common.pct", { p });
         el.className = "cut-cpct cut-color-" + cls;
         // v1.2.2: circular progress around the S / W letter, same color coding.
         if (ringEl) {
@@ -4834,10 +4870,10 @@
         }
 
         let tip = !rtOn
-          ? `${it.name} ${p}%`
+          ? tx("c.cmp.tip", { name: it.name, p })
           : (it.data.resetsAt
-              ? `${it.name} ${p}% · Reset in ${fmtReset(it.data.resetsAt)}`
-              : `${it.name} ${p}% · no reset info`);
+              ? tx("c.cmp.tipReset", { name: it.name, p, time: fmtReset(it.data.resetsAt) })
+              : tx("c.cmp.tipNoReset", { name: it.name, p }));
         // v1.2.17: the collapsed pill has no room for a forecast chip, so the
         // projection lives entirely in the hover tip here. Fable rides on the
         // weekly bucket and has no forecast of its own.
@@ -4857,7 +4893,7 @@
           ringEl.style.strokeDashoffset = RING_C.toFixed(2);
           ringEl.setAttribute("class", "cut-cring-fill");
         }
-        tipEl.textContent = "Waiting for data";
+        tipEl.textContent = tx("c.seg.waitingTip");
       }
     }
   }
@@ -4982,36 +5018,27 @@
       // Four short lines, most important first. A dense paragraph in a hover tip
       // goes unread — the one thing that must land is line 1. Declared here, not
       // inside the block below, because the collapsed pill's tip needs it too.
-      const TIP_HTML =
-        "<b>Send a message and your usage will appear here.</b><br>" +
-        "Claude removed the <b>Usage</b> tab from Account \u203A Settings for Free " +
-        "accounts, so we read your usage from the reply itself instead \u2014 which " +
-        "means there\u2019s nothing to show until you send one.<br>" +
-        "It updates with every message from then on.";
-      const TIP_TEXT =
-        "Send a message and your usage will appear here. Claude removed the Usage tab " +
-        "from Account \u203A Settings for Free accounts, so we read your usage from the " +
-        "reply itself instead \u2014 which means there\u2019s nothing to show until you send " +
-        "one. It updates with every message from then on.";
+      const TIP_HTML = tx("c.free.tip_html");
+      const TIP_TEXT = tx("c.free.tipText");
       const seg = root.querySelector('[data-cut="session"]');
       if (seg) {
         const labelEl = seg.querySelector('[data-cut-label]');
         const pctEl   = seg.querySelector('[data-cut-pct]');
         const metaEl  = seg.querySelector('[data-cut-meta]');
-        if (labelEl) labelEl.textContent = "Usage";
+        if (labelEl) labelEl.textContent = tx("c.seg.usage");
         if (pctEl) { pctEl.textContent = "\u2014"; pctEl.className = "cut-pct"; }
         // v1.2.9 copy: "Claude" is deliberately the SUBJECT of this sentence.
         // Passive wording ("not available", "no data") reads as the extension
         // failing, and that lands as a one-star review for something we don't
         // control. Naming who removed it, and saying it changed, puts the fact
         // where it belongs.
-        if (metaEl) metaEl.textContent = "shows after your next message";
+        if (metaEl) metaEl.textContent = tx("c.seg.freeMeta");
         seg.dataset.cutTip = TIP_HTML;
         seg.setAttribute("aria-label", TIP_TEXT);   // screen readers get plain text
         seg.classList.remove("cut-alert", "cut-alert-max");
       }
       const cs = root.querySelector('[data-cut="c-session"]');
-      if (cs) cs.textContent = "n/a";
+      if (cs) cs.textContent = tx("c.seg.na");
       const csr = root.querySelector('[data-cut="c-session-reset"]');
       if (csr) csr.style.display = "none";
       // The collapsed pill has its own tip element and it still read "Waiting
@@ -5020,7 +5047,7 @@
       const cst = root.querySelector('[data-cut="c-session-tip"]');
       if (cst) cst.innerHTML = TIP_HTML;
     } else {
-      renderSegment(root.querySelector('[data-cut="session"]'), latestUsage && latestUsage.session, "Session");
+      renderSegment(root.querySelector('[data-cut="session"]'), latestUsage && latestUsage.session, tx("c.seg.session"));
     }
     renderSegment(root.querySelector('[data-cut="weekly"]'),  latestUsage && latestUsage.weekly,  weeklyLabel(latestUsage && latestUsage.weekly));
     // v1.2.6/v1.2.7: Fable segment — rendered when the usage API reports a Fable
@@ -5035,11 +5062,12 @@
       renderSegment(segF, fable, "F");
       if (segF) {
         const name = fableLabel(fable); // "Fable" (or the API's display_name)
-        segF.dataset.cutTip = (fable.resetsAt && resetOnFor("fable"))
-          ? `${name} usage ${fable.percent}% · Reset in ${fmtReset(fable.resetsAt)}`
-          : `${name} usage ${fable.percent}%`;
+        const fTip = (fable.resetsAt && resetOnFor("fable"))
+          ? tx("c.fable.tipReset", { name, p: fable.percent, time: fmtReset(fable.resetsAt) })
+          : tx("c.fable.tip", { name, p: fable.percent });
+        segF.dataset.cutTip = I18N.esc(fTip);
         // The F label is cryptic on its own — give assistive tech the long form.
-        segF.setAttribute("aria-label", segF.dataset.cutTip);
+        segF.setAttribute("aria-label", fTip);
       }
     }
     // v1.4.7: Extra usage segment (visibility already applied above).
@@ -5068,7 +5096,7 @@
     // message_limit event reports a `remaining` count (rare; typically only
     // near limit states), and stays hidden otherwise, as it did pre-v1.2.7.
     if (latestMsgsRemaining != null) {
-      msgsEl.textContent = `${latestMsgsRemaining} left`;
+      msgsEl.textContent = txp("c.msgs.left", latestMsgsRemaining);
       msgsEl.hidden = false;
       msgsDiv.hidden = false;
     } else {
@@ -5153,10 +5181,12 @@
 
   function fmtTokens(n) {
     n = Math.max(0, Math.round(Number(n) || 0));
+    // v1.5.5: number in the extension's locale, suffix from the strings.
+    const num = (v) => Number(v).toLocaleString(I18N.locale(), { maximumFractionDigits: 1, useGrouping: false });
     if (n < 1000) return String(n);
-    if (n < 100000) return (n / 1000).toFixed(1).replace(/\.0$/, "") + "K";
-    if (n < 1000000) return Math.round(n / 1000) + "K";
-    return (n / 1000000).toFixed(1).replace(/\.0$/, "") + "M";
+    if (n < 100000) return tx("c.tok.k", { n: num((n / 1000).toFixed(1)) });
+    if (n < 1000000) return tx("c.tok.k", { n: num(Math.round(n / 1000)) });
+    return tx("c.tok.m", { n: num((n / 1000000).toFixed(1)) });
   }
 
   function requestChatTokens(force) {
@@ -5345,7 +5375,7 @@
     const cw = root.querySelector('[data-cut="c-chat-wrap"]');
     if (cw) cw.classList.add("cut-code");
     const label = el.querySelector(".cut-chat-label");
-    if (label) label.textContent = "Code";
+    if (label) label.textContent = tx("c.chat.code");
     root.querySelectorAll('[data-cut="chat-val"], [data-cut="c-chat"]').forEach((val) => {
       val.textContent = fmtTokens(t.total);
       val.classList.remove("cut-chat-long", "cut-chat-huge");
@@ -5354,21 +5384,21 @@
     const cache = t.cr + t.cw;
     if (detail) {
       detail.textContent =
-        `in ${fmtTokens(t.in)} · out ${fmtTokens(t.out)} · cache ${fmtTokens(cache)}`;
+        tx("c.code.detail", { in: fmtTokens(t.in), out: fmtTokens(t.out), cache: fmtTokens(cache) });
     }
     const cachePct = (t.in + cache) > 0 ? Math.round((t.cr / (t.in + cache)) * 100) : 0;
+    const loc = I18N.locale();
     el.dataset.cutTip =
-      `<b>This Code session: ${t.total.toLocaleString()} tokens</b><br>` +
-      `Input ${t.in.toLocaleString()} · Output ${t.out.toLocaleString()}<br>` +
-      `Cache read ${t.cr.toLocaleString()} · Cache write ${t.cw.toLocaleString()}<br>` +
-      `${t.messages.toLocaleString()} Claude replies · ${cachePct}% of input served from cache<br>` +
-      `Current context ~${fmtTokens(t.context)} tokens<br>` +
-      `<span style="opacity:.7">Exact counts reported by Claude Code for the replies this browser has seen.</span>`;
+      tx("c.code.tipTotal_html", { n: I18N.esc(t.total.toLocaleString(loc)) }) + "<br>" +
+      txh("c.code.tipInOut", { in: t.in.toLocaleString(loc), out: t.out.toLocaleString(loc) }) + "<br>" +
+      txh("c.code.tipCache", { cr: t.cr.toLocaleString(loc), cw: t.cw.toLocaleString(loc) }) + "<br>" +
+      I18N.esc(txp("c.code.tipReplies", t.messages, { n: t.messages.toLocaleString(loc), pct: cachePct })) + "<br>" +
+      txh("c.code.tipContext", { n: fmtTokens(t.context) }) + "<br>" +
+      `<span style="opacity:.7">${txh("c.code.tipNote")}</span>`;
     if (cTip) cTip.innerHTML = el.dataset.cutTip;
     el.setAttribute("aria-label",
-      `This Code session: ${t.total.toLocaleString()} tokens. Input ${t.in.toLocaleString()}, ` +
-      `output ${t.out.toLocaleString()}, cache read ${t.cr.toLocaleString()}, ` +
-      `cache write ${t.cw.toLocaleString()}.`);
+      tx("c.code.aria", { total: t.total.toLocaleString(loc), in: t.in.toLocaleString(loc),
+        out: t.out.toLocaleString(loc), cr: t.cr.toLocaleString(loc), cw: t.cw.toLocaleString(loc) }));
   }
 
   function resetChatSegmentToChat(root) {
@@ -5378,7 +5408,7 @@
     const cw = root.querySelector('[data-cut="c-chat-wrap"]');
     if (cw) cw.classList.remove("cut-code");
     const label = el.querySelector(".cut-chat-label");
-    if (label) label.textContent = "Chat";
+    if (label) label.textContent = tx("c.chat.chat");
     const detail = root.querySelector('[data-cut="chat-detail"]');
     if (detail) detail.textContent = "";
   }
@@ -5422,21 +5452,19 @@
     const n = Number(chatTokens.tokens) || 0;
     // Same number and colour in both views.
     root.querySelectorAll('[data-cut="chat-val"], [data-cut="c-chat"]').forEach((val) => {
-      val.textContent = "~" + fmtTokens(n);
+      val.textContent = tx("c.chat.val", { n: fmtTokens(n) });
       val.classList.toggle("cut-chat-long", n >= 100000 && n < 150000);
       val.classList.toggle("cut-chat-huge", n >= 150000);
     });
 
-    const parts = [`You ${fmtTokens(chatTokens.you)}`, `Claude ${fmtTokens(chatTokens.claude)}`];
-    if (Number(chatTokens.files) > 0) parts.push(`Files ${fmtTokens(chatTokens.files)}`);
-    const advice = n >= 100000
-      ? "This chat is getting long. Starting a new chat makes each message use less of your limit."
-      : "Claude re-reads the whole chat with every message, so longer chats use your limit faster.";
+    const parts = [txh("c.chat.you", { n: fmtTokens(chatTokens.you) }), txh("c.chat.claude", { n: fmtTokens(chatTokens.claude) })];
+    if (Number(chatTokens.files) > 0) parts.push(txh("c.chat.files", { n: fmtTokens(chatTokens.files) }));
+    const advice = n >= 100000 ? tx("c.chat.adviceLong") : tx("c.chat.adviceShort");
     el.dataset.cutTip =
-      `<b>This chat: ~${n.toLocaleString()} tokens</b><br>` +
+      tx("c.chat.tipTotal_html", { n: I18N.esc(n.toLocaleString(I18N.locale())) }) + "<br>" +
       `${parts.join(" \u00b7 ")}<br>` +
-      `${advice}<br>` +
-      `<span style="opacity:.7">Estimate. Excludes project files and Claude\u2019s system prompt.</span>`;
+      `${I18N.esc(advice)}<br>` +
+      `<span style="opacity:.7">${txh("c.chat.tipNote")}</span>`;
     if (cTip) cTip.innerHTML = el.dataset.cutTip;
     // The collapse button's legend names the bubble only while it's on screen.
     if (!collapsed) {
@@ -5444,7 +5472,7 @@
       if (ct) ct.textContent = collapseHintText();
     }
     el.setAttribute("aria-label",
-      `This chat is about ${n.toLocaleString()} tokens. ${advice}`);
+      tx("c.chat.aria", { n: n.toLocaleString(I18N.locale()), advice }));
   }
 
   // ===== sidebar link to the desktop app (v1.3.0) =====
@@ -5728,7 +5756,9 @@
         applyTheme(wrap);
         // Already mounted: re-point it in place if the clock has moved on. A
         // rebuild would flash the row on every MutationObserver pass.
-        setPromoTarget(wrap, utm(news.url, "sidebar-news"), news.sub, news.tip);
+        // news.sub / news.tip may be keys (chunk A) or plain English; tx() returns
+        // an unknown key unchanged, so both work.
+        setPromoTarget(wrap, utm(news.url, "sidebar-news"), tx(news.sub), tx(news.tip));
         // Claude re-renders the sidebar constantly. If the row survived but got
         // moved out of the top slot, put it back — but only if it actually
         // drifted, since a needless move feeds the observer that called us.
@@ -5743,13 +5773,13 @@
         id: DESKTOP_LINK_ID,
         title: "Claude Usage Meter",
         icon: DESKTOP_ICON,
-        closeLabel: "Hide the Claude Usage Meter news link",
+        closeLabel: tx("d.promo.news.close"),
         onDismiss: () => {
           desktopLinkDismissed = true;
           try { chrome.storage.local.set({ [DESKTOP_DISMISS_KEY]: true }); } catch (_) {}
         },
       });
-      setPromoTarget(wrap, utm(news.url, "sidebar-news"), news.sub, news.tip);
+      setPromoTarget(wrap, utm(news.url, "sidebar-news"), tx(news.sub), tx(news.tip));
       mountPromoTop(wrap);
       return;
     }
@@ -5772,23 +5802,23 @@
     if (!wrap) {
       wrap = buildPromoRow({
         id: TOOLS_LINK_ID,
-        title: "More tools by SelectorsHub",
+        title: tx("d.promo.tools.title"),
         icon: TOOLS_ICON,
-        closeLabel: "Hide the SelectorsHub tools link",
+        closeLabel: tx("d.promo.tools.close"),
         onDismiss: () => {
           toolsLinkDismissed = true;
           try { chrome.storage.local.set({ [TOOLS_DISMISS_KEY]: true }); } catch (_) {}
         },
       });
       setPromoTarget(wrap, utm(tool.url, "sidebar"), tool.name,
-        tool.name + " \u2014 free, from the Claude Usage Meter team");
+        tx("d.promo.tools.tip", { name: tool.name }));
       mountPromo(wrap);
       return;
     }
     applyTheme(wrap);
     // Already mounted: just re-point it if the clock has moved on.
     setPromoTarget(wrap, utm(tool.url, "sidebar"), tool.name,
-      tool.name + " \u2014 free, from the Claude Usage Meter team");
+      tx("d.promo.tools.tip", { name: tool.name }));
     // v1.3.7: if Claude re-rendered and left us in a floating menu or a
     // horizontal row, move back to a proper column slot (only when it drifted,
     // so the MutationObserver isn't fed a needless move).
@@ -5900,12 +5930,12 @@
   function projWhen(ts) {
     if (!ts) return "";
     const diff = Date.now() - ts;
-    if (diff < 60 * 1000) return "now";
-    if (diff < 60 * 60 * 1000) return Math.round(diff / 60000) + "m";
-    if (diff < 24 * 60 * 60 * 1000) return Math.round(diff / 3600000) + "h";
-    if (diff < 7 * 24 * 60 * 60 * 1000) return Math.round(diff / 86400000) + "d";
+    if (diff < 60 * 1000) return tx("d.when.now");
+    if (diff < 60 * 60 * 1000) return tx("unit.m", { n: Math.round(diff / 60000) });
+    if (diff < 24 * 60 * 60 * 1000) return tx("unit.h", { n: Math.round(diff / 3600000) });
+    if (diff < 7 * 24 * 60 * 60 * 1000) return tx("unit.d", { n: Math.round(diff / 86400000) });
     try {
-      return new Date(ts).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+      return new Date(ts).toLocaleDateString(I18N.locale(), { month: "short", day: "numeric" });
     } catch (_) {
       return "";
     }
@@ -6015,13 +6045,13 @@
     btn.id = PROJ_BTN_ID;
     btn.type = "button";
     btn.className = "cut-proj-btn";
-    btn.title = "Open one of your projects";
-    btn.setAttribute("aria-label", "Projects");
+    btn.title = tx("d.proj.btn.title");
+    btn.setAttribute("aria-label", tx("d.proj.btn.label"));
     btn.setAttribute("aria-haspopup", "listbox");
     btn.setAttribute("aria-expanded", "false");
     btn.innerHTML =
       '<span class="cut-proj-ico">' + projIcon() + "</span>" +
-      '<span class="cut-proj-text">Projects</span>' +
+      '<span class="cut-proj-text">' + txh("d.proj.btn.label") + '</span>' +
       '<span class="cut-proj-caret"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
       'stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
       '<path d="M6 9l6 6 6-6"></path></svg></span>';
@@ -6071,7 +6101,7 @@
     pop.id = PROJ_POP_ID;
     pop.className = "cut-proj-pop";
     pop.setAttribute("role", "dialog");
-    pop.setAttribute("aria-label", "Your projects");
+    pop.setAttribute("aria-label", tx("d.proj.pop.aria"));
 
     const head = document.createElement("div");
     head.className = "cut-proj-head";
@@ -6079,8 +6109,8 @@
     const search = document.createElement("input");
     search.type = "text";
     search.className = "cut-proj-search";
-    search.placeholder = "Search projects";
-    search.setAttribute("aria-label", "Search projects");
+    search.placeholder = tx("d.proj.search");
+    search.setAttribute("aria-label", tx("d.proj.search"));
     search.addEventListener("input", () => {
       projFilter = search.value.trim().toLowerCase();
       projActive = -1;
@@ -6090,8 +6120,8 @@
     const refresh = document.createElement("button");
     refresh.type = "button";
     refresh.className = "cut-proj-refresh";
-    refresh.title = "Reload the list";
-    refresh.setAttribute("aria-label", "Reload the list");
+    refresh.title = tx("d.proj.reload");
+    refresh.setAttribute("aria-label", tx("d.proj.reload"));
     refresh.innerHTML =
       '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" ' +
       'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
@@ -6115,10 +6145,10 @@
     const all = document.createElement("a");
     all.className = "cut-proj-all";
     all.href = PROJECTS_PAGE_URL;
-    all.textContent = "All projects";
+    all.textContent = tx("d.proj.all");
     const hint = document.createElement("span");
     hint.className = "cut-proj-hint";
-    hint.textContent = "\u2191\u2193 Enter";
+    hint.textContent = tx("d.proj.keyHint");
     foot.appendChild(all);
     foot.appendChild(hint);
 
@@ -6130,7 +6160,7 @@
     const brand = document.createElement("div");
     brand.className = "cut-proj-brand";
     const brandText = document.createElement("span");
-    brandText.textContent = "Added by Claude Usage Meter. Hide it from ";
+    brandText.textContent = tx("d.proj.brand.text");
     const brandBtn = document.createElement("button");
     brandBtn.type = "button";
     brandBtn.className = "cut-proj-brand-link";
@@ -6139,7 +6169,7 @@
       'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
       '<circle cx="12" cy="12" r="3.2"></circle>' +
       '<path d="M19.1 14.8a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1.03 1.55V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.56 1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.55-1.03H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.56-1.1 1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.7 1.7 0 0 0 1.87.34H9a1.7 1.7 0 0 0 1.03-1.55V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1.03 1.55 1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.7 1.7 0 0 0-.34 1.87V9a1.7 1.7 0 0 0 1.55 1.03H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.55 1.03z"></path></svg>' +
-      "<span>its settings</span>";
+      "<span>" + txh("d.proj.brand.link") + "</span>";
     brandBtn.addEventListener("click", (e) => {
       e.preventDefault();
       e.stopPropagation();
@@ -6251,19 +6281,19 @@
     if (projectsError && !projectsList) {
       list.appendChild(
         projectsError === "not_signed_in"
-          ? projNote("Not signed in to claude.ai", "Sign in and reopen this menu.")
-          : projNote("Couldn't load your projects", "Try Reload, or open claude.ai/projects.")
+          ? projNote(tx("d.proj.err.signedOut"), tx("d.proj.err.signedOutSub"))
+          : projNote(tx("d.proj.err.load"), tx("d.proj.err.loadSub"))
       );
       positionProjectsPop();
       return;
     }
     if (!projectsList) {
-      list.appendChild(projNote("Loading your projects\u2026"));
+      list.appendChild(projNote(tx("d.proj.loading")));
       positionProjectsPop();
       return;
     }
     if (projectsList.length === 0) {
-      list.appendChild(projNote("No projects yet", "Create one from the Projects page."));
+      list.appendChild(projNote(tx("d.proj.empty"), tx("d.proj.emptySub")));
       positionProjectsPop();
       return;
     }
@@ -6273,7 +6303,7 @@
       : projectsList;
 
     if (filtered.length === 0) {
-      list.appendChild(projNote("Nothing matches \u201c" + projFilter + "\u201d"));
+      list.appendChild(projNote(tx("d.proj.noMatch", { query: projFilter })));
       positionProjectsPop();
       return;
     }
@@ -6289,9 +6319,9 @@
         .slice(0, PROJ_RECENT_SHOWN);
       if (recent.length) {
         const seen = new Set(recent.map((p) => p.uuid));
-        list.appendChild(projHeader("Recent"));
+        list.appendChild(projHeader(tx("d.proj.group.recent")));
         for (const p of recent) list.appendChild(projRow(p, true));
-        list.appendChild(projHeader("All projects"));
+        list.appendChild(projHeader(tx("d.proj.all")));
         shown = filtered.filter((p) => !seen.has(p.uuid));
       }
     }
@@ -6491,12 +6521,12 @@
   function csWhen(ts) {
     if (!ts) return "";
     const diff = Date.now() - ts;
-    if (diff < 60 * 1000) return "now";
-    if (diff < 60 * 60 * 1000) return Math.round(diff / 60000) + "m";
-    if (diff < 24 * 60 * 60 * 1000) return Math.round(diff / 3600000) + "h";
-    if (diff < 7 * 24 * 60 * 60 * 1000) return Math.round(diff / 86400000) + "d";
+    if (diff < 60 * 1000) return tx("d.when.now");
+    if (diff < 60 * 60 * 1000) return tx("unit.m", { n: Math.round(diff / 60000) });
+    if (diff < 24 * 60 * 60 * 1000) return tx("unit.h", { n: Math.round(diff / 3600000) });
+    if (diff < 7 * 24 * 60 * 60 * 1000) return tx("unit.d", { n: Math.round(diff / 86400000) });
     try {
-      return new Date(ts).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+      return new Date(ts).toLocaleDateString(I18N.locale(), { month: "short", day: "numeric" });
     } catch (_) {
       return "";
     }
@@ -6576,6 +6606,40 @@
         // one we want to sit above, not the inner <span>.
         return el;
       }
+    }
+    return findChatsHeadingByLinks(scope);
+  }
+
+  // Fallback when no English heading matched (Claude's UI in Japanese, French
+  // …): find the chat list by structure instead of words. The list container is
+  // the nearest ancestor of a sidebar chat link that holds at least two chat
+  // links; the heading is that container's nearest previous element sibling
+  // that is visible, has short text and holds no chat links itself. Same
+  // exclusions as the English path (never our own search box). No match ->
+  // null, i.e. mount nothing, as before.
+  function findChatsHeadingByLinks(scope) {
+    if (!scope || scope === document.body) {
+      scope = document.querySelector("nav") || document.querySelector('[role="navigation"]');
+      if (!scope) return null;
+    }
+    const isChatLink = 'a[href^="/chat/"]';
+    const first = Array.from(scope.querySelectorAll(isChatLink))
+      .find((a) => !(a.closest && a.closest("#" + CS_WRAP_ID)) && !inFloatingUi(a));
+    if (!first) return null;
+    let list = first.parentElement;
+    while (list && list !== scope && list.querySelectorAll(isChatLink).length < 2) {
+      list = list.parentElement;
+    }
+    if (!list || list.querySelectorAll(isChatLink).length < 2) return null;
+    for (let el = list.previousElementSibling; el; el = el.previousElementSibling) {
+      if (el.id === CS_WRAP_ID) continue;
+      if (el.closest && el.closest("#" + CS_WRAP_ID)) continue;
+      if (el.querySelector("#" + CS_WRAP_ID)) continue;
+      if (el.getClientRects().length === 0) continue;
+      if (el.querySelector(isChatLink)) continue;
+      const text = (el.textContent || "").trim();
+      if (!text || text.length > 24) continue;
+      return el;
     }
     return null;
   }
@@ -6668,14 +6732,14 @@
     input.type = "text";
     input.className = "cut-cs-input";
     input.placeholder = chatPlaceholder();
-    input.setAttribute("aria-label", "Search your Claude chat history");
+    input.setAttribute("aria-label", tx("d.cs.input.aria"));
     input.setAttribute("autocomplete", "off");
     input.setAttribute("spellcheck", "false");
 
     const clear = document.createElement("button");
     clear.type = "button";
     clear.className = "cut-cs-clear";
-    clear.setAttribute("aria-label", "Clear the search");
+    clear.setAttribute("aria-label", tx("d.cs.clear"));
     clear.textContent = "\u00d7";
     clear.addEventListener("mousedown", (e) => e.preventDefault());
     clear.addEventListener("click", (e) => {
@@ -6724,7 +6788,7 @@
     });
 
     // Spelled out in full on hover, since the mark alone can only hint.
-    wrap.title = "Search your Claude chat history \u2014 added by Claude Usage Meter";
+    wrap.title = tx("d.cs.wrap.title");
 
     // Clicking the logo or the divider should do the obvious thing rather than
     // nothing: this is a search box, so any click in it lands in the field.
@@ -6783,8 +6847,8 @@
   // means the number never appears as something that had to load.
   function chatPlaceholder() {
     return csList && csList.length
-      ? "Search " + csList.length + " chats"
-      : "Search chat history";
+      ? txp("d.cs.placeholder.count", csList.length)
+      : tx("d.cs.placeholder");
   }
 
   function refreshChatPlaceholder() {
@@ -6820,7 +6884,7 @@
     pop.id = CS_POP_ID;
     pop.className = "cut-cs-pop";
     pop.setAttribute("role", "dialog");
-    pop.setAttribute("aria-label", "Chat history search results");
+    pop.setAttribute("aria-label", tx("d.cs.pop.aria"));
 
     const list = document.createElement("div");
     list.className = "cut-cs-list";
@@ -6835,11 +6899,11 @@
     // Short enough to hold one line at the width of the sidebar, and marked
     // with an asterisk so it reads as a footnote about the box above rather
     // than as another row in the results.
-    brandText.textContent = "* Added by Claude Usage Meter \u00b7 ";
+    brandText.textContent = tx("d.cs.brand.text");
     const brandBtn = document.createElement("button");
     brandBtn.type = "button";
     brandBtn.className = "cut-cs-brand-link";
-    brandBtn.textContent = "settings";
+    brandBtn.textContent = tx("d.cs.brand.link");
     brandBtn.addEventListener("mousedown", (e) => e.preventDefault());
     brandBtn.addEventListener("click", (e) => {
       e.preventDefault();
@@ -6868,8 +6932,8 @@
     close.type = "button";
     close.className = "cut-cs-close";
     close.textContent = "\u00d7";
-    close.setAttribute("aria-label", "Close the search results");
-    close.title = "Close (Esc)";
+    close.setAttribute("aria-label", tx("d.cs.close.aria"));
+    close.title = tx("d.cs.close.title");
     // Without this the input blurs on press, and a blur/refocus race can leave
     // the panel reopening the instant it closes.
     close.addEventListener("mousedown", (e) => e.preventDefault());
@@ -6978,19 +7042,19 @@
     if (csError && !csList) {
       list.appendChild(
         csNote(csError === "not_signed_in"
-          ? "Not signed in to claude.ai"
-          : "Couldn\u2019t load your chats")
+          ? tx("d.cs.err.signedOut")
+          : tx("d.cs.err.load"))
       );
     } else if (!csList) {
       // Only reachable if someone types faster than the list arrives — a real
       // wait, not a greeting, so it is worth saying.
-      list.appendChild(csNote("Searching\u2026"));
+      list.appendChild(csNote(tx("d.cs.searching")));
     } else {
       const titles = csTitleMatches(q);
       if (titles.length) {
         for (const c of titles.slice(0, CS_LIST_CAP)) list.appendChild(csRow(c));
       } else {
-        list.appendChild(csNote("No matches"));
+        list.appendChild(csNote(tx("d.cs.noMatch")));
       }
     }
 
@@ -7319,8 +7383,39 @@
     }
   });
 
+  // ===== v1.5.5: language =====
+  // Follow Claude's own interface language (<html lang>) unless the user picked
+  // one in Settings (settings.language). Claude can switch language without a
+  // reload, so watch the attribute. Everything we built once (strip, Projects
+  // button, chat search, sidebar row, open cards) is rebuilt in the new language.
+  function pageLangNow() {
+    try { return document.documentElement.getAttribute("lang") || ""; } catch (_) { return ""; }
+  }
+  I18N.setPageLang(pageLangNow());
+  try {
+    new MutationObserver(() => { I18N.setPageLang(pageLangNow()); })
+      .observe(document.documentElement, { attributes: true, attributeFilter: ["lang"] });
+  } catch (_) {}
+  function rebuildForLanguage() {
+    try { closeAllCards(); } catch (_) {}
+    try { closeSettingsPop(document.getElementById(OVERLAY_ID)); } catch (_) {}
+    try { closeLogoMenu(); } catch (_) {}
+    try { closeProjectsPop(); } catch (_) {}
+    try { closeChatSearchPop(); } catch (_) {}
+    for (const id of [OVERLAY_ID, PROJ_BTN_ID, CS_WRAP_ID, DESKTOP_LINK_ID, TOOLS_LINK_ID]) {
+      const el = document.getElementById(id);
+      if (el) el.remove();
+    }
+    ensureMounted();
+    try { ensureProjectsButton(); } catch (_) {}
+    try { ensureChatSearch(); } catch (_) {}
+    try { ensureSidebarPromo(); } catch (_) {}
+  }
+  I18N.onChange(() => rebuildForLanguage());
+
   (async () => {
     try {
+      try { await I18N.ready(); } catch (_) {}   // v1.5.5: the user's language setting
       const resp = await chrome.runtime.sendMessage({ type: "get-state" });
       if (resp && resp.usage) {
         latestUsage = resp.usage;

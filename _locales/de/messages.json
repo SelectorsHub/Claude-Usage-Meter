@@ -1,0 +1,8 @@
+{
+  "appName": {
+    "message": "Claude Usage Meter"
+  },
+  "appDesc": {
+    "message": "Sieh deine Claude-Limits für Sitzung, Woche und Fable samt Zurücksetzungszeiten live direkt über dem Chatfeld von Claude.ai."
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "appName": {
+    "message": "Claude Usage Meter"
+  },
+  "appDesc": {
+    "message": "Lihat batas sesi, mingguan, dan Fable Claude beserta waktu reset-nya secara langsung, tepat di atas kotak chat Claude.ai."
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "appName": {
+    "message": "Claude Usage Meter"
+  },
+  "appDesc": {
+    "message": "Claude의 세션·주간·Fable 사용 한도와 재설정 시각을 Claude.ai 채팅 입력창 바로 위에서 실시간으로 확인하세요."
+  }
+}

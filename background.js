@@ -1,4 +1,8 @@
 // background.js (service worker, v1.21)
+// - v1.5.5: TRANSLATIONS. All visible text goes through i18n/i18n.js
+//   (CUM_I18N) in 13 languages; notifications and the badge title follow
+//   settings.language ("auto" = Claude's interface language). A save that
+//   only changes the language no longer re-arms threshold alerts.
 // - v1.5.4: SECOND ACCOUNT IN INCOGNITO / PRIVATE WINDOWS. Usage, history,
 //   fired thresholds and lockout are stored per Claude account (org id), and a
 //   private window's API requests are made by a claude.ai tab in that window
@@ -79,6 +83,30 @@
 // shown instead so the Extra segment / E chip / popup card can be checked on
 // any account. Cycles every minute: $12.40 of $50 (green) -> $46.10 of $50
 // (red) -> $8.42 with no cap. Real extra usage, when present, always wins.
+// v1.5.5: translations. The strings files and the runtime load first, before
+// anything below. Guarded so the vm-based tests (no importScripts, no strings)
+// still load this file; every lookup then falls back to the English given.
+if (typeof importScripts === "function") {
+  try {
+    importScripts("i18n/strings/en.js", "i18n/strings/fr.js", "i18n/strings/de.js", "i18n/strings/hi.js", "i18n/strings/id.js", "i18n/strings/it.js", "i18n/strings/ja.js", "i18n/strings/ko.js", "i18n/strings/pt-BR.js", "i18n/strings/es-419.js", "i18n/strings/es-ES.js",
+      "i18n/strings/zh-CN.js",
+      "i18n/strings/zh-TW.js",
+      "i18n/i18n.js");
+  } catch (_) {}
+}
+function bgI18n() { return typeof CUM_I18N !== "undefined" && CUM_I18N ? CUM_I18N : null; }
+function bgFill(s, vars) {
+  return vars ? String(s).replace(/\{(\w+)\}/g, (m, k) => (Object.prototype.hasOwnProperty.call(vars, k) ? String(vars[k]) : m)) : s;
+}
+// tx(key, vars, english) / txp(key, n, vars, englishOne, englishOther)
+function tx(key, vars, en) { const I = bgI18n(); return I ? I.t(key, vars) : bgFill(en, vars); }
+function txp(key, n, vars, enOne, enOther) {
+  const I = bgI18n();
+  return I ? I.tp(key, n, vars) : bgFill(Number(n) === 1 ? enOne : enOther, { n, ...(vars || {}) });
+}
+function i18nReady() { const I = bgI18n(); return I ? Promise.resolve(I.ready()).catch(() => {}) : Promise.resolve(); }
+function bgLocale() { const I = bgI18n(); return I ? I.locale() : undefined; }
+
 const TEST_BUILD = false;
 const TEST_EXTRA_SAMPLES = [
   { used: 12.4,  limit: 50,   percent: 25,   currency: "USD", resetsAt: null, apiField: "test" },
@@ -195,7 +223,10 @@ const DEFAULT_SETTINGS = {
   // it replaces a scroll-and-squint hunt through Recents — but like the
   // Projects button it writes into Claude's own UI, so it gets an explicit off
   // switch on all three of our settings surfaces.
-  chatSearch: true
+  chatSearch: true,
+  // v1.5.5: interface language. "auto" follows Claude.ai's own language; any
+  // code from CUM_I18N.LANGS pins one. Read by i18n/i18n.js in every context.
+  language: "auto"
 };
 
 // Merge helper for stripFields: a partial or legacy-missing object must still
@@ -1206,16 +1237,22 @@ async function maybeNotifyForecast(usage) {
   if (prev === key) return;
   await chrome.storage.local.set({ [STORAGE_KEYS.forecastNotified]: key });
 
+  await i18nReady();
   const mins = f.minutesLeft;
-  const when = mins <= 1 ? "any moment now" : `in about ${mins} minutes`;
+  const rate = f.ratePerHour;
+  const when = mins <= 1
+    ? tx("bg.fc.msg.now", { rate }, "At about {rate}% an hour you're on track to hit your session limit any moment now.")
+    : txp("bg.fc.msg.mins", mins, { rate },
+        "At about {rate}% an hour you're on track to hit your session limit in about {n} minute.",
+        "At about {rate}% an hour you're on track to hit your session limit in about {n} minutes.");
   const resetStr = f.resetsAt
-    ? ` It resets at ${new Date(f.resetsAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}.`
+    ? " " + tx("bg.fc.msg.resetsAt", { time: new Date(f.resetsAt).toLocaleTimeString(bgLocale() || [], { hour: "numeric", minute: "2-digit" }) }, "It resets at {time}.")
     : "";
   await createNotification(`claude-usage-forecast-${key}`, {
     type: "basic",
     iconUrl: chrome.runtime.getURL("icons/icon128.png"),
-    title: "Claude Usage Meter · pace warning",
-    message: `At about ${f.ratePerHour}% an hour you're on track to hit your session limit ${when}.${resetStr}`,
+    title: tx("bg.fc.title", null, "Claude Usage Meter · pace warning"),
+    message: `${when}${resetStr}`,
     priority: 2
   });
 }
@@ -1875,10 +1912,10 @@ function computeBadge(usage, settings) {
   }
   const p = Math.max(0, pct);
   return {
-    text: p >= 100 ? "MAX" : String(p),
+    text: p >= 100 ? tx("bg.badge.max", null, "MAX") : String(p),
     color: BADGE_COLORS[badgeBand(p)],
-    title: p >= 100 ? "Claude Usage Meter: session limit reached"
-                    : `Claude Usage Meter: session ${p}% used`
+    title: p >= 100 ? tx("bg.badge.titleFull", null, "Claude Usage Meter: session limit reached")
+                    : tx("bg.badge.title", { p }, "Claude Usage Meter: session {p}% used")
   };
 }
 async function paintBadge(b, tabId) {
@@ -1897,6 +1934,7 @@ async function updateBadge(usageOpt, settingsOpt) {
   try {
     const usage = usageOpt || await getUsage();
     const settings = settingsOpt || await getSettings();
+    await i18nReady();
     const b = computeBadge(usage, settings);
     if (ctx === "default") { await paintBadge(b); return; }
     const tabs = await chrome.tabs.query({});
@@ -1919,7 +1957,7 @@ async function refreshTabBadge(tab) {
     const ctx = ctxOfTab(tab);
     if (ctx === "default") return;
     await inCtx(ctx, async () => {
-      try { await paintBadge(computeBadge(await getUsage(), await getSettings()), tab.id); } catch (_) {}
+      try { await i18nReady(); await paintBadge(computeBadge(await getUsage(), await getSettings()), tab.id); } catch (_) {}
     });
   } catch (_) {}
 }
@@ -2019,7 +2057,7 @@ async function maybeNotify(usage) {
     const next = nextThresholdToFire(info.percent, settings.weeklyThresholds, fired[firedKey] || 0);
     if (next != null) {
       const label = family === "generic" ? "Weekly" : `Weekly ${capitalize(family)}`;
-      await fireNotification(label, next, info);
+      await fireNotification(label, next, info, family);
       fired[firedKey] = next;
     }
   }
@@ -2040,17 +2078,19 @@ async function maybeNotify(usage) {
 }
 function fmtMoneyBg(v, cur) {
   try {
-    return new Intl.NumberFormat(undefined, { style: "currency", currency: cur || "USD" }).format(v);
+    return new Intl.NumberFormat(bgLocale(), { style: "currency", currency: cur || "USD" }).format(v);
   } catch (_) {
     return "$" + Number(v).toFixed(2);
   }
 }
 async function fireExtraNotification(threshold, x) {
+  await i18nReady();
   await createNotification(`claude-usage-extra-${threshold}-${Date.now()}`, {
     type: "basic",
     iconUrl: chrome.runtime.getURL("icons/icon128.png"),
-    title: `Claude · Extra usage at ${threshold}%`,
-    message: `You've spent ${fmtMoneyBg(x.used, x.currency)} of your ${fmtMoneyBg(x.limit, x.currency)} monthly extra usage limit.`,
+    title: tx("bg.extra.title", { threshold }, "Claude · Extra usage at {threshold}%"),
+    message: tx("bg.extra.msg", { used: fmtMoneyBg(x.used, x.currency), limit: fmtMoneyBg(x.limit, x.currency) },
+      "You've spent {used} of your {limit} monthly extra usage limit."),
     priority: 2
   });
 }
@@ -2065,15 +2105,35 @@ function nextThresholdToFire(currentPercent, thresholds, alreadyFired) {
   for (const t of sorted) if (currentPercent >= t && t > alreadyFired) best = t;
   return best;
 }
-async function fireNotification(scopeLabel, threshold, info) {
-  const resetStr = info.resetsAt
-    ? ` · resets ${new Date(info.resetsAt).toLocaleString()}`
-    : "";
+async function fireNotification(scopeLabel, threshold, info, family) {
+  // v1.5.5: scopeLabel stays English for the notification id; the text is
+  // translated whole, one key per scope (session / weekly / weekly + model).
+  await i18nReady();
+  const time = info.resetsAt ? new Date(info.resetsAt).toLocaleString(bgLocale()) : null;
+  const fam = family && family !== "generic" ? capitalize(family) : null;
+  const vars = { threshold, percent: info.percent, time, family: fam, familyLower: fam ? fam.toLowerCase() : "" };
+  let title, message;
+  if (scopeLabel === "Session") {
+    title = tx("bg.notif.session.title", vars, "Claude · Session at {threshold}%");
+    message = time
+      ? tx("bg.notif.session.msgReset", vars, "You've used {percent}% of your session quota · resets {time}.")
+      : tx("bg.notif.session.msg", vars, "You've used {percent}% of your session quota.");
+  } else if (fam) {
+    title = tx("bg.notif.weeklyFamily.title", vars, "Claude · Weekly {family} at {threshold}%");
+    message = time
+      ? tx("bg.notif.weeklyFamily.msgReset", vars, "You've used {percent}% of your weekly {familyLower} quota · resets {time}.")
+      : tx("bg.notif.weeklyFamily.msg", vars, "You've used {percent}% of your weekly {familyLower} quota.");
+  } else {
+    title = tx("bg.notif.weekly.title", vars, "Claude · Weekly at {threshold}%");
+    message = time
+      ? tx("bg.notif.weekly.msgReset", vars, "You've used {percent}% of your weekly quota · resets {time}.")
+      : tx("bg.notif.weekly.msg", vars, "You've used {percent}% of your weekly quota.");
+  }
   await createNotification(`claude-usage-${scopeLabel}-${threshold}-${Date.now()}`, {
     type: "basic",
     iconUrl: chrome.runtime.getURL("icons/icon128.png"),
-    title: `Claude · ${scopeLabel} at ${threshold}%`,
-    message: `You've used ${info.percent}% of your ${scopeLabel.toLowerCase()} quota${resetStr}.`,
+    title,
+    message,
     priority: 2
   });
 }
@@ -2274,7 +2334,7 @@ function normalizeProjects(data) {
     const uuid = p.uuid || p.id;
     if (!uuid) continue;
     if (p.archived_at) continue;   // archived projects aren't somewhere you chat
-    const name = String(p.name || "").trim() || "Untitled project";
+    const name = String(p.name || "").trim() || tx("bg.untitledProject", null, "Untitled project");
     const updatedAt =
       Date.parse(p.updated_at || p.created_at || "") || 0;
     list.push({ uuid: String(uuid), name, updatedAt, starter: !!p.is_starter_project });
@@ -2434,7 +2494,7 @@ function normalizeConversations(data) {
       null;
     list.push({
       uuid: String(uuid),
-      name: name || "Untitled chat",
+      name: name || tx("bg.untitledChat", null, "Untitled chat"),
       summary,
       updatedAt,
       starred: !!(c.is_starred || c.starred_at),
@@ -2957,8 +3017,11 @@ function handleMessage(msg, _sender, sendResponse) {
       await chrome.storage.local.set({ [STORAGE_KEYS.settings]: next });
       await rescheduleAlarm();
       // Reset fired markers so newly-added thresholds at OR below current %
-      // fire immediately on the re-check below.
-      await saveLastFired({});
+      // fire immediately on the re-check below. v1.5.5: not for a save that
+      // only changes the language, or switching language would repeat the
+      // last threshold alert.
+      const onlyLanguage = !!msg.settings && Object.keys(msg.settings).every((k) => k === "language");
+      if (!onlyLanguage) await saveLastFired({});
       const usage = await getUsage();
       await maybeNotify(usage);
       await updateBadge(usage, next);   // v1.5.0: badge on/off applies at once
@@ -3043,13 +3106,13 @@ function handleMessage(msg, _sender, sendResponse) {
   }
 
   if (msg.type === "test-notification") {
-    createNotification(`claude-usage-test-${Date.now()}`, {
+    i18nReady().then(() => createNotification(`claude-usage-test-${Date.now()}`, {
       type: "basic",
       iconUrl: chrome.runtime.getURL("icons/icon128.png"),
-      title: "Claude Usage Meter · test",
-      message: "Notifications are working. If you don't see this, check your OS notification settings for Chrome.",
+      title: tx("bg.test.title", null, "Claude Usage Meter · test"),
+      message: tx("bg.test.msg", null, "Notifications are working. If you don't see this, check your OS notification settings for Chrome."),
       priority: 2
-    }).then((r) => sendResponse(r));
+    })).then((r) => sendResponse(r));
     return true;
   }
 

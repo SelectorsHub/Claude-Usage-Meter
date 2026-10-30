@@ -1,0 +1,8 @@
+{
+  "appName": {
+    "message": "Claude Usage Meter"
+  },
+  "appDesc": {
+    "message": "Claudeのセッション・週間・Fableの使用上限とリセット時刻を、Claude.aiのチャット欄のすぐ上にリアルタイム表示します。"
+  }
+}

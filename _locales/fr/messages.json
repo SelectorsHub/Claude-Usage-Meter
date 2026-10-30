@@ -1,0 +1,8 @@
+{
+  "appName": {
+    "message": "Claude Usage Meter"
+  },
+  "appDesc": {
+    "message": "Suivez en direct vos limites Claude (session, hebdomadaire, Fable) et leurs heures de réinitialisation, juste au-dessus du chat."
+  }
+}

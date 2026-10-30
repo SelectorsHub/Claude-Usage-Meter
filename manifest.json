@@ -1,8 +1,9 @@
 {
   "manifest_version": 3,
-  "name": "Claude Usage Meter",
-  "version": "1.5.4",
-  "description": "Real time Claude usage tracker. See your session, weekly and Fable limits, reset times, just above the Claude.ai chatbox.",
+  "name": "__MSG_appName__",
+  "version": "1.5.5",
+  "description": "__MSG_appDesc__",
+  "default_locale": "en",
   "permissions": [
     "storage",
     "alarms",
@@ -42,6 +43,20 @@
         "https://claude.ai/*"
       ],
       "js": [
+        "i18n/strings/en.js",
+        "i18n/strings/fr.js",
+        "i18n/strings/de.js",
+        "i18n/strings/hi.js",
+        "i18n/strings/id.js",
+        "i18n/strings/it.js",
+        "i18n/strings/ja.js",
+        "i18n/strings/ko.js",
+        "i18n/strings/pt-BR.js",
+        "i18n/strings/es-419.js",
+        "i18n/strings/es-ES.js",
+        "i18n/strings/zh-CN.js",
+        "i18n/strings/zh-TW.js",
+        "i18n/i18n.js",
         "content-script.js"
       ],
       "css": [

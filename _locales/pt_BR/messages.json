@@ -1,0 +1,8 @@
+{
+  "appName": {
+    "message": "Claude Usage Meter"
+  },
+  "appDesc": {
+    "message": "Veja ao vivo seus limites de sessão, semanais e do Fable no Claude, e quando eles são redefinidos, logo acima do chat."
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "appName": {
+    "message": "Claude Usage Meter"
+  },
+  "appDesc": {
+    "message": "See your Claude session, weekly and Fable limits and their reset times live, right above the Claude.ai chat box."
+  }
+}

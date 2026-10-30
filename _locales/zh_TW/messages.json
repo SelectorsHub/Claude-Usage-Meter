@@ -1,0 +1,8 @@
+{
+  "appName": {
+    "message": "Claude Usage Meter"
+  },
+  "appDesc": {
+    "message": "在 Claude.ai 聊天框正上方即時查看 Claude 的工作階段、每週和 Fable 用量上限及重設時間。"
+  }
+}

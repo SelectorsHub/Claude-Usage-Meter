@@ -89,7 +89,7 @@ header h1 {
 }
 
 .threshold-grid:empty::before {
-  content: "No thresholds configured.";
+  content: attr(data-empty);   /* v1.5.5: translated text, set by options.js */
   color: var(--text-mute);
   font-size: 12px;
   font-style: italic;
@@ -258,4 +258,25 @@ footer p {
 footer .note {
   color: var(--text-mute);
   font-size: 12px;
+}
+
+/* v1.5.5: interface language picker */
+.lang-select {
+  width: 100%;
+  background: var(--bg-elev-2);
+  border: 1px solid var(--line);
+  color: var(--text);
+  padding: 8px 12px;
+  border-radius: 6px;
+  font-family: var(--font-ui);
+  font-size: 13px;
+}
+.lang-select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.lang-hint {
+  margin: 8px 0 0;
+  color: var(--text-dim);
+  font-size: 12.5px;
 }

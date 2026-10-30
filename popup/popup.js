@@ -13,6 +13,11 @@
 //   the strip can't be emptied, and an unreported Fable bucket doesn't count as
 //   a meter for that rule (it has nothing to show yet).
 
+// v1.5.5: translations (i18n/i18n.js). Only ever called at render time.
+const tx = (k, v) => CUM_I18N.t(k, v);
+const txh = (k, v) => CUM_I18N.th(k, v);
+const txp = (k, n, v) => CUM_I18N.tp(k, n, v);
+
 const CHROME_REVIEW_URL = "https://chromewebstore.google.com/detail/claude-usage-meter/kgpahkcgadpnklinijdojapiadnfelae/reviews";
 const EDGE_REVIEW_URL = "https://microsoftedge.microsoft.com/addons/detail/claude-usage-meter/anhdhmpfpgbohohjlbgnggnmcmkmmcbn";
 const RATE_KEY = "rate_us_clicked";
@@ -43,25 +48,25 @@ function colorClassFor(percent) {
 }
 
 function fmtReset(ts) {
-  if (!ts) return "no reset info";
+  if (!ts) return tx("p.reset.none");
   const ms = ts - Date.now();
-  if (ms <= 0) return "resets now";
+  if (ms <= 0) return tx("p.reset.now");
   const mins = Math.round(ms / 60000);
-  if (mins < 60) return `resets in ${mins}m`;
+  if (mins < 60) return tx("p.reset.in", { time: tx("unit.m", { n: mins }) });
   const hrs = Math.floor(mins / 60);
   const rem = mins % 60;
-  if (hrs < 48) return `resets in ${hrs}h ${rem}m`;
-  return `resets in ${Math.floor(hrs / 24)}d`;
+  if (hrs < 48) return tx("p.reset.in", { time: tx("unit.hm", { h: hrs, m: rem }) });
+  return tx("p.reset.in", { time: tx("unit.d", { n: Math.floor(hrs / 24) }) });
 }
 
 function fmtUpdated(ts) {
-  if (!ts) return "no readings yet";
+  if (!ts) return tx("p.updated.never");
   const s = Math.round((Date.now() - ts) / 1000);
-  if (s < 5) return `updated just now`;
-  if (s < 60) return `updated ${s}s ago`;
+  if (s < 5) return tx("p.updated.justNow");
+  if (s < 60) return tx("p.updated.secs", { n: s });
   const m = Math.floor(s / 60);
-  if (m < 60) return `updated ${m}m ago`;
-  return `updated ${Math.floor(m / 60)}h ago`;
+  if (m < 60) return tx("p.updated.mins", { n: m });
+  return tx("p.updated.hours", { n: Math.floor(m / 60) });
 }
 
 function titleCase(s) {
@@ -74,7 +79,7 @@ function weeklyLabelFor(_weekly, _currentModel) {
   // Always show plain "Weekly" regardless of the active model family. The
   // correct family-specific weekly bucket is still chosen for the percentage
   // in background.js; only the label text is fixed here.
-  return "Weekly";
+  return tx("p.card.weekly");
 }
 
 function renderCard(scope, data) {
@@ -105,14 +110,14 @@ function renderCard(scope, data) {
    both an empty line and a confidently invented number. */
 function fmtEtaShort(mins) {
   if (mins == null || !isFinite(mins)) return "—";
-  if (mins < 1) return "under a minute";
-  if (mins < 20) return `${Math.round(mins)}m`;
+  if (mins < 1) return tx("p.fc.underMinute");
+  if (mins < 20) return tx("unit.m", { n: Math.round(mins) });
   const r = Math.round(mins / 5) * 5;
-  if (r < 60) return `${r}m`;
+  if (r < 60) return tx("unit.m", { n: r });
   const h = Math.floor(r / 60), m = r % 60;
-  if (h >= 24) return `${Math.round(h / 24)}d`;
-  if (h >= 10) return `${h}h`;
-  return m ? `${h}h ${m}m` : `${h}h`;
+  if (h >= 24) return tx("unit.d", { n: Math.round(h / 24) });
+  if (h >= 10) return tx("unit.h", { n: h });
+  return m ? tx("unit.hm", { h, m }) : tx("unit.h", { n: h });
 }
 
 function renderForecast(scope, usage) {
@@ -131,19 +136,19 @@ function renderForecast(scope, usage) {
       // isn't climbing is now visibly a counter that isn't climbing.
       const have = f.spanMinutes != null ? f.spanMinutes : 0;
       const need = f.needMinutes != null ? f.needMinutes : 12;
-      el.textContent = `Measuring your pace… (${have} of ${need} min)`;
+      el.textContent = tx("p.fc.measuring", { have, need });
     }
-    else if (f.reason === "idle") el.textContent = "No recent usage to project from";
+    else if (f.reason === "idle") el.textContent = tx("p.fc.idle");
     else el.textContent = "";
     return;
   }
 
-  const pace = `~${f.ratePerHour}%/h`;
+  const pace = tx("p.fc.pace", { rate: f.ratePerHour });
   if (f.beforeReset) {
-    el.textContent = `${pace} · on track to hit 100% in ${fmtEtaShort(f.minutesLeft)}`;
+    el.textContent = tx("p.fc.onTrack", { pace, eta: fmtEtaShort(f.minutesLeft) });
     el.className = "fc " + (f.minutesLeft <= 30 ? "danger" : "warn");
   } else {
-    el.textContent = `${pace} · resets before you'd run out`;
+    el.textContent = tx("p.fc.resetsFirst", { pace });
   }
 }
 
@@ -153,7 +158,7 @@ function fmtMoney(v, cur) {
   const n = Number(v) || 0;
   const digits = Number.isInteger(n) ? 0 : 2;
   try {
-    return new Intl.NumberFormat(undefined, {
+    return new Intl.NumberFormat(CUM_I18N.locale(), {
       style: "currency", currency: cur || "USD",
       minimumFractionDigits: digits, maximumFractionDigits: digits
     }).format(n);
@@ -163,7 +168,7 @@ function fmtMoney(v, cur) {
 }
 function fmtMoney2(v, cur) {
   try {
-    return new Intl.NumberFormat(undefined, { style: "currency", currency: cur || "USD" }).format(Number(v) || 0);
+    return new Intl.NumberFormat(CUM_I18N.locale(), { style: "currency", currency: cur || "USD" }).format(Number(v) || 0);
   } catch (_) {
     return "$" + (Number(v) || 0).toFixed(2);
   }
@@ -187,11 +192,11 @@ function renderExtra(usage) {
     fillEl.style.width = `${Math.min(100, p)}%`;
     fillEl.className = `bar-fill ${colorClassFor(p)}`;
     const left = Math.max(0, x.limit - x.used);
-    subEl.textContent = `${p}% of monthly limit · ${fmtMoney2(left, x.currency)} left`;
+    subEl.textContent = tx("p.extra.sub", { p, left: fmtMoney2(left, x.currency) });
   } else {
     pctEl.textContent = fmtMoney2(x.used, x.currency);
     barEl.style.display = "none";
-    subEl.textContent = "Spent this month · no monthly limit set";
+    subEl.textContent = tx("p.extra.noLimit");
   }
 }
 
@@ -215,15 +220,15 @@ function renderError(state) {
   const unmetered = !!(state.usage && state.usage.unmetered);
   if (lastError && lastError.msg && !unmetered) {
     if (lastError.msg.toLowerCase().includes("not signed in")) {
-      lines.push(`Not signed in to <a href="https://claude.ai" target="_blank">claude.ai</a>. Sign in, then click refresh.`);
+      lines.push(tx("p.err.notSignedIn_html"));
     } else {
-      lines.push(`Poll failed: <span class="code">${lastError.msg}</span>`);
+      lines.push(tx("p.err.pollFailed_html", { msg: CUM_I18N.esc(lastError.msg) }));
     }
   }
   if (notificationPermission === "denied") {
-    lines.push(`Chrome notifications are disabled. <a href="#" id="open-chrome-notif-settings">Allow notifications</a>.`);
+    lines.push(tx("p.err.notifDenied_html"));
   } else if (lastNotifyError && lastNotifyError.msg) {
-    lines.push(`Last notification failed: <span class="code">${lastNotifyError.msg}</span>`);
+    lines.push(tx("p.err.notifFailed_html", { msg: CUM_I18N.esc(lastNotifyError.msg) }));
   }
   el.innerHTML = lines.join("<br>");
   el.classList.toggle("hidden", lines.length === 0);
@@ -375,7 +380,7 @@ function applyMeterLock() {
     if (!box) continue;
     const lock = lockLast && box.checked && meters.includes(f);
     box.disabled = lock;
-    box.title = lock ? "At least one meter has to stay visible." : "";
+    box.title = lock ? tx("p.fields.lockTitle") : "";
     const row = box.closest(".field-row");
     if (row) row.classList.toggle("locked", lock);
   }
@@ -444,16 +449,16 @@ document.getElementById("open-options").addEventListener("click", (e) => {
 });
 
 document.getElementById("test-btn").addEventListener("click", async () => {
-  setTestResult("Firing test…", "info");
+  setTestResult(tx("p.test.firing"), "info");
   try {
     const r = await chrome.runtime.sendMessage({ type: "test-notification" });
     if (r && r.ok) {
-      setTestResult("Test fired. If you don't see it, check OS notification permissions for Chrome.", "info");
+      setTestResult(tx("p.test.fired"), "info");
     } else {
-      setTestResult(`Notification failed: ${(r && r.error) || "unknown error"}`, "error");
+      setTestResult(tx("p.test.failed", { error: (r && r.error) || tx("p.test.unknownError") }), "error");
     }
   } catch (e) {
-    setTestResult(`Notification failed: ${e && e.message || e}`, "error");
+    setTestResult(tx("p.test.failed", { error: e && e.message || e }), "error");
   }
 });
 
@@ -531,17 +536,17 @@ async function refreshStripButtonState() {
 
   if (!on) {
     if (until >= STRIP_HIDE_UNTIL_ON / 2) {
-      setStripSub("Hidden. Turn on to show it again.");
+      setStripSub(txh("p.strip.hidden"));
     } else {
-      const t = new Date(until).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
-      setStripSub(`Hidden until ${t}. Turn on to show it now.`);
+      const t = new Date(until).toLocaleTimeString(CUM_I18N.locale(), { hour: "numeric", minute: "2-digit" });
+      setStripSub(txh("p.strip.hiddenUntil", { time: t }));
     }
     return;
   }
 
   const tab = await getActiveTab();
   if (!isClaudeTab(tab)) {
-    setStripSub('Shows above the chat on claude.ai. <a href="#" data-open-claude>Open claude.ai \u2192</a>');
+    setStripSub(tx("p.strip.openClaude_html"));
     return;
   }
   let visible = false;
@@ -549,7 +554,7 @@ async function refreshStripButtonState() {
     const resp = await chrome.tabs.sendMessage(tab.id, { type: "query-strip-visible" });
     visible = !!(resp && resp.visible);
   } catch (_) { visible = false; }
-  setStripSub(visible ? "Showing above your chat." : "Shows above the chat box when you open a chat.");
+  setStripSub(visible ? txh("p.strip.showing") : txh("p.strip.whenOpen"));
 }
 
 document.getElementById("show-strip-toggle").addEventListener("change", async (e) => {
@@ -609,8 +614,9 @@ function getStoreUrl() {
   return isEdgeBrowser() ? EDGE_STORE_URL : CHROME_STORE_URL;
 }
 
-const SHARE_TEXT = "Claude Usage Meter - see your Claude session & weekly usage limits live above the claude chat box. Free extension:";
-const LINKEDIN_TEXT = "Claude Usage Meter - see your Claude usage above chat";
+// v1.5.5: functions, so the text follows the current language.
+const SHARE_TEXT = () => tx("p.share.text");
+const LINKEDIN_TEXT = () => tx("p.share.linkedinText");
 
 // v1.4.0: X posts tag the extension's account, right after the product name.
 const X_HANDLE = "@claudeusagemtr";
@@ -624,10 +630,10 @@ function withXHandle(text) {
 
 function shareIntentUrl(net) {
   const url = encodeURIComponent(getStoreUrl());
-  const text = encodeURIComponent(SHARE_TEXT);
+  const text = encodeURIComponent(SHARE_TEXT());
   switch (net) {
-    case "linkedin": return `https://www.linkedin.com/feed/?shareActive=true&text=${encodeURIComponent(LINKEDIN_TEXT + " " + getStoreUrl())}`;
-    case "x": return `https://twitter.com/intent/tweet?text=${encodeURIComponent(withXHandle(SHARE_TEXT))}&url=${url}`;
+    case "linkedin": return `https://www.linkedin.com/feed/?shareActive=true&text=${encodeURIComponent(LINKEDIN_TEXT() + " " + getStoreUrl())}`;
+    case "x": return `https://twitter.com/intent/tweet?text=${encodeURIComponent(withXHandle(SHARE_TEXT()))}&url=${url}`;
     case "whatsapp": return `https://api.whatsapp.com/send?text=${text}%20${url}`;
     case "reddit": return `https://www.reddit.com/submit?url=${url}&title=${text}`;
     case "facebook": return `https://www.facebook.com/sharer/sharer.php?u=${url}&quote=${text}`;
@@ -677,13 +683,27 @@ if (shareCopyBtn) {
       } catch (_) {}
     }
     if (ok) {
-      shareCopyBtn.textContent = "Copied!";
-      setTimeout(() => { shareCopyBtn.textContent = "Copy"; }, 1500);
+      shareCopyBtn.textContent = tx("p.share.copied");
+      setTimeout(() => { shareCopyBtn.textContent = tx("p.share.copy"); }, 1500);
     }
   });
 }
 
+// v1.5.5: static text that has no data-i18n attribute.
+function applyStaticI18n() {
+  CUM_I18N.applyDom(document);
+  const logo = document.getElementById("loading-dot");
+  if (logo) logo.alt = tx("p.logoAlt");
+}
+CUM_I18N.onChange(() => {
+  applyStaticI18n();
+  refresh({ forceFetch: false }).catch(() => {});
+  refreshStripButtonState().catch(() => {});
+});
+
 (async () => {
+  await CUM_I18N.ready();
+  applyStaticI18n();
   await refresh({ forceFetch: false });
   await refreshStripButtonState();
   await refreshRateButton();
@@ -707,14 +727,14 @@ setInterval(() => refreshStripButtonState(), 3000);
   const ALL_TOOLS_URL = "https://selectorshub.com/";
 
   const SH_TOOLS = [
-    { name: "Screenshot with URL", desc: "Screenshots with the URL bar", url: "https://selectorshub.com/screenshot-with-url/" },
-    { name: "Bookmarks Finder",    desc: "Find any bookmark by typing",  url: "https://www.selectorshub.com/bookmarks-finder/" },
-    { name: "AnyFormat",           desc: "Save images in any format",    url: "https://www.selectorshub.com/anyformat/" },
-    { name: "Check My Links",      desc: "Find broken links in 1 click", url: "https://selectorshub.com/checkmylinks/" },
-    { name: "SelectorsHub",        desc: "XPath & Playwright locators",  url: "https://selectorshub.com/selectorshub/" },
-    { name: "TestCase Studio",     desc: "Record test steps as you go",  url: "https://selectorshub.com/testcase-studio/" },
-    { name: "Page Load Timer",     desc: "Page load time, automatically", url: "https://selectorshub.com/page-load-timer/" },
-    { name: "Auto Data Filler",    desc: "Fill forms in one click",      url: "https://selectorshub.com/auto-data-filler/" },
+    { name: "Screenshot with URL", descKey: "p.tools.screenshotWithUrl", url: "https://selectorshub.com/screenshot-with-url/" },
+    { name: "Bookmarks Finder",    descKey: "p.tools.bookmarksFinder", url: "https://www.selectorshub.com/bookmarks-finder/" },
+    { name: "AnyFormat",           descKey: "p.tools.anyFormat", url: "https://www.selectorshub.com/anyformat/" },
+    { name: "Check My Links",      descKey: "p.tools.checkMyLinks", url: "https://selectorshub.com/checkmylinks/" },
+    { name: "SelectorsHub",        descKey: "p.tools.selectorsHub", url: "https://selectorshub.com/selectorshub/" },
+    { name: "TestCase Studio",     descKey: "p.tools.testcaseStudio", url: "https://selectorshub.com/testcase-studio/" },
+    { name: "Page Load Timer",     descKey: "p.tools.pageLoadTimer", url: "https://selectorshub.com/page-load-timer/" },
+    { name: "Auto Data Filler",    descKey: "p.tools.autoDataFiller", url: "https://selectorshub.com/auto-data-filler/" },
   ];
 
   // Tag outbound links so sidebar and popup can be told apart in analytics —
@@ -746,7 +766,8 @@ setInterval(() => refreshStripButtonState(), 3000);
       a.href = utm(t.url, "popup");
       a.target = "_blank";
       a.rel = "noopener noreferrer";
-      a.title = t.name + " — " + t.desc;
+      const tdesc = tx(t.descKey);
+      a.title = tx("p.tools.cardTitle", { name: t.name, desc: tdesc });
 
       const name = document.createElement("span");
       name.className = "sh-t-name";
@@ -754,7 +775,7 @@ setInterval(() => refreshStripButtonState(), 3000);
 
       const desc = document.createElement("span");
       desc.className = "sh-t-desc";
-      desc.textContent = t.desc;
+      desc.textContent = tdesc;
 
       a.appendChild(name);
       a.appendChild(desc);
@@ -774,6 +795,14 @@ setInterval(() => refreshStripButtonState(), 3000);
 
   toggle.addEventListener("click", () => {
     setOpen(!wrap.classList.contains("sh-open"), true);
+  });
+
+  // v1.5.5: rebuild the cards in the new language.
+  CUM_I18N.onChange(() => {
+    if (!built) return;
+    grid.textContent = "";
+    built = false;
+    buildGrid();
   });
 
   try {
