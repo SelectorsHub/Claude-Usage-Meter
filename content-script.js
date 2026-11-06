@@ -1,4 +1,8 @@
 // content-script.js (isolated world, v1.29)
+// - v1.5.6: RATING CARD BACK TO PRE-1.5.2: first after 3 days, then every 2
+//   days until Rate us is clicked, no dismissal cap, no "Don't show these
+//   cards" link on it. Only the Settings "Tips & requests" switch hides it.
+//   Other cards keep the 1.5.2 limits (7-day gap between them).
 // - v1.5.3: Share button (after rating) and the "Know someone who hits Claude
 //   limits?" card removed from the strip (SHARE_IN_STRIP). Sharing stays in
 //   the gear menu ("Share my usage card") and the toolbar popup.
@@ -868,8 +872,11 @@
   //   • only when a moment is due: a session reset after real use (peak ≥ 50%),
   //     fresh within MOMENT_TTL, or STREAK_DAYS distinct days of use.
   const NUDGE_KEY = "rate_nudge_at";             // ms epoch the card last appeared
-  const NUDGE_FIRST = RATE_TEST ? 0 : 7 * DAY_MS;   // v1.5.2: was 3 days          // earliest first ask after install
-  const NUDGE_REPEAT = RATE_TEST ? 60 * 1000 : 14 * DAY_MS;  // v1.5.2: was every 2 days, forever
+  // v1.5.6: rating card back to the pre-1.5.2 timing — reviews nearly stopped
+  // after 1.5.2 (7 days / 14 days / max 2 / "Don't show" link on the card).
+  const NUDGE_FIRST = RATE_TEST ? 0 : 3 * DAY_MS;          // earliest first ask after install
+  const NUDGE_REPEAT = RATE_TEST ? 60 * 1000 : 2 * DAY_MS;  // returns every 2 days until Rate us is clicked
+  const RATE_GAP = RATE_TEST ? 60 * 1000 : 2 * DAY_MS;      // v1.5.6: rate card <-> share/support gap (pre-1.5.2 CARD_GAP)
   const CARD_GAP = RATE_TEST ? 60 * 1000 : 7 * DAY_MS;   // v1.5.2: was 2 days     // v1.4.2: min gap between ANY two cards (rate/share/support)
   const NUDGE_MAX_DISMISS = 2;                   // ask, ask once more, then stop for good
   const NUDGE_MOUNT_DELAY = RATE_TEST ? 3 * 1000 : 10 * 1000; // let the page settle before popping
@@ -2317,14 +2324,14 @@
     if (rated) return false;                        // anyone who clicked Rate us: never
     if (!rateStateLoaded || installAt === null || nudgeAt === null) return false;
     // v1.4.1: back to the plain timer — no dismissal cap, no moment gating.
-    if (cardsQuiet()) return false;                 // v1.5.2
-    if (nudgeDismissals >= NUDGE_MAX_DISMISS) return false;   // v1.5.2: asked twice → never again
+    if (rateCardQuiet()) return false;              // v1.5.6: own gate, not the 7-day cardsQuiet()
+    // v1.5.6: no dismissal cap again — it returns every NUDGE_REPEAT until rated.
     if (!rateUnlocked()) return false;              // button (the card's anchor) isn't out yet
     if (installAt && Date.now() - installAt < NUDGE_FIRST) return false;
     if (nudgeAt && Date.now() - nudgeAt < NUDGE_REPEAT) return false;
     // v1.4.2: keep CARD_GAP from the Support card too (Share is raters-only,
     // and raters never get this card).
-    if (supportNudgeAt && Date.now() - supportNudgeAt < CARD_GAP) return false;
+    if (supportNudgeAt && Date.now() - supportNudgeAt < RATE_GAP) return false;
     return true;
   }
 
@@ -2379,8 +2386,7 @@
         <div class="cut-nudge-actions">
           <button class="cut-nudge-cta" type="button" data-cut="nudge-rate">${txh("m.rate.write")}</button>
           <button class="cut-nudge-later" type="button" data-cut="nudge-later">${txh("m.rate.later")}</button>
-        </div>
-        ${QUIET_HTML}`;
+        </div>`;
     }
     if (step === "no") {
       return `
@@ -2392,8 +2398,7 @@
         <div class="cut-nudge-actions">
           <button class="cut-nudge-cta" type="button" data-cut="nudge-feedback">${txh("m.rate.feedback")}</button>
           <button class="cut-nudge-later" type="button" data-cut="nudge-rate">${txh("m.rate.anyway")}</button>
-        </div>
-        ${QUIET_HTML}`;
+        </div>`;
     }
     const days = Math.max(activeDays.n || 0, STREAK_DAYS);
     const title = nudgeKind === "reset"
@@ -2409,8 +2414,7 @@
       <div class="cut-nudge-actions">
         <button class="cut-nudge-cta" type="button" data-cut="nudge-yes">👍 ${txh("m.rate.yes")}</button>
         <button class="cut-nudge-alt" type="button" data-cut="nudge-no">👎 ${txh("m.rate.no")}</button>
-      </div>
-        ${QUIET_HTML}`;
+      </div>`;
   }
 
   function buildNudge() {
@@ -3080,7 +3084,7 @@
     if (shareNudgeDismissals >= SHARE_MAX_DISMISS) return false;
     const now = Date.now();
     if (shareNudgeAt && now - shareNudgeAt < SHARE_REPEAT) return false;
-    if (nudgeAt && now - nudgeAt < CARD_GAP) return false;
+    if (nudgeAt && now - nudgeAt < RATE_GAP) return false;   // v1.5.6
     if (supportNudgeAt && now - supportNudgeAt < CARD_GAP) return false;
     if (ratedAt && now - ratedAt < Math.max(SHARE_DELAY, RATE_TEST ? 30 * 1000 : 0)) return false;
     if (anyMeterBusy()) return false;
@@ -3225,7 +3229,7 @@
     if (installAt && now - installAt < SUPPORT_FIRST) return false;
     if (rated && ratedAt && now - ratedAt < SUPPORT_AFTER_RATE) return false;
     if (supportNudgeAt && now - supportNudgeAt < SUPPORT_REPEAT) return false;
-    if (nudgeAt && now - nudgeAt < CARD_GAP) return false;
+    if (nudgeAt && now - nudgeAt < RATE_GAP) return false;   // v1.5.6
     if (shareNudgeAt && now - shareNudgeAt < CARD_GAP) return false;
     // A due Share card goes first. It's capped (3 dismissals, 7 days apart),
     // so it can't hold Support off for long.
@@ -3960,8 +3964,20 @@
   function cardsQuiet() {
     if (!tipsOn) return true;
     if (freeHintEl) return true;   // the Free-plan hint has the floor
-    const last = Math.max(nudgeAt || 0, shareNudgeAt || 0, supportNudgeAt || 0, toolsNudgeAt || 0, mpShownAt || 0);
+    // v1.5.6: the rate card is left out — it repeats every 2 days, which would
+    // keep every other card quiet forever for non-raters. Each card keeps its
+    // own gap from it (RATE_GAP for share/support, TOOLS_GAP for tools).
+    const last = Math.max(shareNudgeAt || 0, supportNudgeAt || 0, toolsNudgeAt || 0, mpShownAt || 0);
     return !!last && Date.now() - last < CARD_GAP;
+  }
+  // v1.5.6: the rating card's gate. Honours the Tips & requests switch in
+  // Settings and the Free-plan hint, and keeps a day from the tools/"Now
+  // available" cards so two cards never land back to back.
+  function rateCardQuiet() {
+    if (!tipsOn) return true;
+    if (freeHintEl) return true;
+    const last = Math.max(toolsNudgeAt || 0, mpShownAt || 0);
+    return !!last && Date.now() - last < TOOLS_GAP;
   }
   function closeAllCards() {
     const root = document.getElementById(OVERLAY_ID);
