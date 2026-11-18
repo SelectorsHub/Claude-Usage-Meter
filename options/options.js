@@ -24,6 +24,7 @@ let state = {
   // different question, and some people want the milestones without the
   // projection (or the other way round).
   forecastAlerts: true,
+  resetAlerts: true,   // v1.5.7: "your limit has reset" notification
   projectsButton: true,
   chatSearch: true,
   extraShow: true,
@@ -40,6 +41,7 @@ async function load() {
   state.weeklyThresholds  = settings.weeklyThresholds  || [];
   state.notificationsEnabled = settings.notificationsEnabled !== false;
   state.forecastAlerts = settings.forecastAlerts !== false;
+  state.resetAlerts = settings.resetAlerts !== false;
   state.projectsButton = settings.projectsButton !== false;
   state.chatSearch = settings.chatSearch !== false;
   state.extraShow = !(settings.stripFields && settings.stripFields.extra === false);
@@ -53,6 +55,7 @@ async function load() {
   document.getElementById("extra-alerts").checked = state.extraAlerts;
   document.getElementById("notifications-enabled").checked = state.notificationsEnabled;
   document.getElementById("forecast-alerts").checked = state.forecastAlerts;
+  document.getElementById("reset-alerts").checked = state.resetAlerts;
   document.getElementById("projects-button").checked = state.projectsButton;
   document.getElementById("chat-search").checked = state.chatSearch;
   document.getElementById("poll-minutes").value = state.pollMinutes;
@@ -130,6 +133,7 @@ function addThreshold(scope) {
 async function save() {
   state.notificationsEnabled = document.getElementById("notifications-enabled").checked;
   state.forecastAlerts = document.getElementById("forecast-alerts").checked;
+  state.resetAlerts = document.getElementById("reset-alerts").checked;
   state.projectsButton = document.getElementById("projects-button").checked;
   state.chatSearch = document.getElementById("chat-search").checked;
   state.extraShow = document.getElementById("extra-show").checked;
@@ -146,6 +150,7 @@ async function save() {
       weeklyThresholds:  state.weeklyThresholds,
       notificationsEnabled: state.notificationsEnabled,
       forecastAlerts: state.forecastAlerts,
+      resetAlerts: state.resetAlerts,
       projectsButton: state.projectsButton,
       chatSearch: state.chatSearch,
       extraAlerts: state.extraAlerts,

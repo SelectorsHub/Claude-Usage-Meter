@@ -1,4 +1,9 @@
 // background.js (service worker, v1.21)
+// - v1.5.7: EXTRA USAGE reads the newer `spend` object first (parseSpend),
+//   falling back to `extra_usage`. LIMIT-RESET ALERT: one desktop notification
+//   when a session or weekly limit that had reached RESET_ALERT_MIN_PEAK %
+//   resets (maybeNotifyReset). New setting `resetAlerts` (default on), on the
+//   options page; rides on notificationsEnabled like the forecast alert.
 // - v1.5.5: TRANSLATIONS. All visible text goes through i18n/i18n.js
 //   (CUM_I18N) in 13 languages; notifications and the badge title follow
 //   settings.language ("auto" = Claude's interface language). A save that
@@ -214,6 +219,9 @@ const DEFAULT_SETTINGS = {
   // v1.2.17: one-shot desktop heads-up when the projection says the session
   // quota runs out well before it resets. Rides on notificationsEnabled.
   forecastAlerts: true,
+  // v1.5.7: one desktop notification when a limit that had been nearly used up
+  // (RESET_ALERT_MIN_PEAK) resets. Rides on notificationsEnabled.
+  resetAlerts: true,
   // v1.3.1: the Projects button in claude.ai's composer footer. On by default —
   // it costs one button and replaces a two-level menu walk — but it writes into
   // Claude's own UI rather than our strip, so it gets an explicit off switch on
@@ -295,6 +303,7 @@ const BASE_STORAGE_KEYS = {
   usageRaw: "usage_raw",         // last raw /usage response, for diagnosing field shapes
   history: "usage_history",      // v1.2.17: downsampled % samples backing the burn-rate forecast
   forecastNotified: "forecast_notified", // v1.2.17: window key of the last forecast alert (dedupe)
+  resetWatch: "reset_watch",     // v1.5.7: per scope { r: resetsAt, peak: % } behind the limit-reset alert
   sseByOrg: "sse_usage_by_org"   // v1.4.6: last completion-stream windows per org (Free plan)
 };
 // Three kinds of keys:
@@ -304,7 +313,7 @@ const BASE_STORAGE_KEYS = {
 //            account's org id - "org:<orgId>:usage_state" - no matter which
 //            window (normal / incognito / private / container) it was seen from:
 //            usage, lastFiredThresholds, sessionLock, usageRaw, history,
-//            forecastNotified. Same account in two windows = same entry.
+//            forecastNotified, resetWatch. Same account in two windows = same entry.
 //   window   facts about the login state of one window, not the account:
 //            orgCache, lastError, currentModel (the default window keeps the
 //            original, un-prefixed keys).
@@ -1257,6 +1266,118 @@ async function maybeNotifyForecast(usage) {
   });
 }
 
+/* v1.5.7 - "your limit has reset".
+
+   The threshold and pace alerts all fire on the way UP. Someone who hit (or
+   nearly hit) a limit and went to do something else had no way to learn that
+   Claude was usable again short of looking. This fires once when a session or
+   weekly window that had reached RESET_ALERT_MIN_PEAK % is replaced.
+
+   Per scope ("session", "weekly_<family>") the watch keeps { r, peak }: the
+   reset time and the highest % seen in the window being watched. A window is
+   over when ANY of these holds:
+     - the reading is gone and its reset time has passed (Free: an ended window
+       is dropped, not replaced);
+     - the reading we still hold is for a window whose reset time has passed
+       (/usage stopped reporting the bucket, or a lockout pin ran out);
+     - the reset time jumped forward >= 30 min AND the % fell;
+     - the % collapsed to <= 40% of the window's peak.
+   Discontinuity, never plain change: claude.ai creeps resets_at forward by
+   seconds on every poll, and a lockout pin moves it without any reset - hence
+   "and the % fell" on the jump rule.
+
+   A reset found more than RESET_ALERT_STALE_MS late (laptop closed overnight)
+   is recorded silently: by then the user is back anyway.
+   State is per account (org) like the fired thresholds, so a second account in
+   incognito neither triggers nor swallows this one's alert. */
+const RESET_ALERT_MIN_PEAK = TEST_BUILD ? 1 : 80;     // REVERT with TEST_BUILD
+const RESET_ALERT_JUMP_MS = 30 * 60 * 1000;
+const RESET_ALERT_COLLAPSE = 0.4;
+const RESET_ALERT_GRACE_MS = 60 * 1000;
+const RESET_ALERT_STALE_MS = 12 * 60 * 60 * 1000;
+
+// Pure: one scope, one reading. Returns { watch, fire } - the watch to store
+// (null = none) and, when a used window just ended, the peak % to report.
+function resetWatchStep(watch, cur, now) {
+  const pct = cur && typeof cur.percent === "number" && !isNaN(cur.percent) ? cur.percent : null;
+  const r = cur && cur.resetsAt ? Number(cur.resetsAt) : null;
+  const curOver = r != null && now >= r + RESET_ALERT_GRACE_MS;   // what we hold is a finished window
+  const fresh = pct != null && !curOver ? { r, peak: pct } : null;
+
+  if (!watch || typeof watch.peak !== "number") return { watch: fresh, fire: null };
+
+  let over = false;
+  if (pct == null) {
+    over = !!watch.r && now >= watch.r + RESET_ALERT_GRACE_MS;
+    if (!over) return { watch, fire: null };          // no reading yet: keep waiting
+  } else if (curOver) {
+    over = true;
+  } else if (watch.r && r != null && r - watch.r >= RESET_ALERT_JUMP_MS && pct < watch.peak) {
+    over = true;
+  } else if (watch.peak > 0 && pct <= watch.peak * RESET_ALERT_COLLAPSE) {
+    over = true;
+  }
+
+  if (!over) {
+    return { watch: { r: r != null ? r : watch.r, peak: Math.max(watch.peak, pct) }, fire: null };
+  }
+  const late = watch.r ? now - watch.r : 0;
+  const fire = watch.peak >= RESET_ALERT_MIN_PEAK && late <= RESET_ALERT_STALE_MS ? watch.peak : null;
+  return { watch: fresh, fire };
+}
+
+async function maybeNotifyReset(usage) {
+  const { [STORAGE_KEYS.resetWatch]: stored } = await chrome.storage.local.get(STORAGE_KEYS.resetWatch);
+  const watch = stored && typeof stored === "object" ? stored : {};
+  const now = Date.now();
+
+  const readings = { session: usage.session || null };
+  const byFamily = usage.weeklyByFamily || {};
+  for (const family of Object.keys(byFamily)) readings[`weekly_${family}`] = byFamily[family];
+  // A scope we were watching that is no longer reported still has to be stepped.
+  for (const k of Object.keys(watch)) if (!(k in readings)) readings[k] = null;
+
+  const next = {};
+  const fires = [];
+  for (const k of Object.keys(readings)) {
+    const step = resetWatchStep(watch[k], readings[k], now);
+    if (step.watch) next[k] = step.watch;
+    if (step.fire != null) fires.push({ key: k, peak: step.fire });
+  }
+  // Stored BEFORE notifying: a failed notification must not repeat every poll.
+  await chrome.storage.local.set({ [STORAGE_KEYS.resetWatch]: next });
+
+  if (!fires.length) return;
+  const settings = await getSettings();
+  if (!settings.notificationsEnabled || settings.resetAlerts === false) return;
+  for (const f of fires) await fireResetNotification(f.key, f.peak);
+}
+
+async function fireResetNotification(key, peak) {
+  await i18nReady();
+  const family = key.startsWith("weekly_") ? key.slice(7) : null;
+  const fam = family && family !== "generic" ? capitalize(family) : null;
+  const vars = { percent: Math.round(peak), family: fam, familyLower: fam ? fam.toLowerCase() : "" };
+  let title, message;
+  if (key === "session") {
+    title = tx("bg.reset.session.title", vars, "Claude · Session limit reset");
+    message = tx("bg.reset.session.msg", vars, "Your session limit has reset. You had used {percent}% of it.");
+  } else if (fam) {
+    title = tx("bg.reset.weeklyFamily.title", vars, "Claude · Weekly {family} limit reset");
+    message = tx("bg.reset.weeklyFamily.msg", vars, "Your weekly {familyLower} limit has reset. You had used {percent}% of it.");
+  } else {
+    title = tx("bg.reset.weekly.title", vars, "Claude · Weekly limit reset");
+    message = tx("bg.reset.weekly.msg", vars, "Your weekly limit has reset. You had used {percent}% of it.");
+  }
+  await createNotification(`claude-usage-reset-${key}-${Date.now()}`, {
+    type: "basic",
+    iconUrl: chrome.runtime.getURL("icons/icon128.png"),
+    title,
+    message,
+    priority: 2
+  });
+}
+
 /* v1.2.9 — the whole read of a /usage body, in one pure function.
 
    Pulled out of applyUsage() so pollUsage() can ask "did this response actually
@@ -1370,6 +1491,8 @@ function looksUnmetered(data) {
     // v1.4.7: a switched-off extra_usage block ({is_enabled:false, nulls}) is
     // not usage — it must not turn an empty Free response into "unrecognised".
     if (k === "extra_usage" && !parseExtraUsage(data)) continue;
+    // v1.5.7: same for a switched-off `spend` block.
+    if (k === "spend" && !parseSpend(v)) continue;
     if (typeof v === "object" && Object.keys(v).length === 0) continue;
     return false;   // something substantive is present — not an empty account
   }
@@ -1384,7 +1507,8 @@ async function applyUnmetered(orgId) {
     await saveLastFired({});
     await chrome.storage.local.set({
       [STORAGE_KEYS.history]: null,
-      [STORAGE_KEYS.forecastNotified]: null
+      [STORAGE_KEYS.forecastNotified]: null,
+      [STORAGE_KEYS.resetWatch]: null
     });
   }
   // v1.4.6: the snapshot now lives per org (sse_usage_by_org), not inside
@@ -1414,6 +1538,7 @@ async function applyUnmetered(orgId) {
   usage.unmetered = true;      // the strip's cue to explain rather than show "—"
   usage.updatedAt = Date.now();
   await saveUsage(usage);
+  await maybeNotifyReset(usage);   // v1.5.7: on Free a window that ends just disappears here
   await broadcastUsage(usage);
 }
 
@@ -1444,7 +1569,8 @@ async function applyUsage(data, orgId) {
     await saveLastFired({});
     await chrome.storage.local.set({
       [STORAGE_KEYS.history]: null,
-      [STORAGE_KEYS.forecastNotified]: null
+      [STORAGE_KEYS.forecastNotified]: null,
+      [STORAGE_KEYS.resetWatch]: null
     });
   }
   if (orgId) usage.orgId = orgId;
@@ -1492,6 +1618,7 @@ async function applyUsage(data, orgId) {
   await saveUsage(usage);
   await maybeNotify(usage);
   await maybeNotifyForecast(usage);
+  await maybeNotifyReset(usage);
   await broadcastUsage(usage);
 }
 
@@ -1516,40 +1643,83 @@ async function applyUsage(data, orgId) {
    works" rather than "silently vanished". */
 function parseExtraUsage(data) {
   if (!data || typeof data !== "object") return null;
+  // v1.5.7: the newer `spend` object first; `extra_usage` stays as the fallback.
+  const fromSpend = parseSpend(data.spend);
+  if (fromSpend) return fromSpend;
   const node = data.extra_usage || data.extraUsage || data.overage || null;
   if (!node || typeof node !== "object") return null;
   const enabled = typeof node.is_enabled === "boolean" ? node.is_enabled
     : (typeof node.enabled === "boolean" ? node.enabled : null);
   if (enabled === false) return null;
-  const num = (v) => {
-    if (typeof v === "number" && isFinite(v)) return v;
-    if (typeof v === "string" && v.trim() !== "" && isFinite(Number(v))) return Number(v);
-    return null;
-  };
-  const first = (...vals) => { for (const v of vals) { const n = num(v); if (n != null) return n; } return null; };
-  const usedMinor  = first(node.used_credits, node.usedCredits, node.used);
-  const limitMinor = first(node.monthly_limit, node.monthlyLimit, node.limit);
+  const usedMinor  = extraFirst(node.used_credits, node.usedCredits, node.used);
+  const limitMinor = extraFirst(node.monthly_limit, node.monthlyLimit, node.limit);
   // Nothing to show unless the account says it's on or reports a figure.
   if (enabled !== true && usedMinor == null && limitMinor == null) return null;
+  return buildExtra(usedMinor, limitMinor, extraNum(node.utilization), node.currency, pickReset(node), "extra_usage");
+}
 
+function extraNum(v) {
+  if (typeof v === "number" && isFinite(v)) return v;
+  if (typeof v === "string" && v.trim() !== "" && isFinite(Number(v))) return Number(v);
+  return null;
+}
+function extraFirst(...vals) {
+  for (const v of vals) { const n = extraNum(v); if (n != null) return n; }
+  return null;
+}
+// used / limit arrive in MINOR units (cents); divided by 100 here, once.
+function buildExtra(usedMinor, limitMinor, pctHint, currency, resetsAt, apiField) {
   const used  = Math.max(0, (usedMinor || 0) / 100);
   const limit = limitMinor != null && limitMinor > 0 ? limitMinor / 100 : null;
   let percent = null;
   if (limit != null) {
-    let p = num(node.utilization);
-    if (p == null) p = (used / limit) * 100;
+    const p = pctHint != null ? pctHint : (used / limit) * 100;
     percent = Math.max(0, Math.round(p));
   }
-  const cur = typeof node.currency === "string" && /^[a-z]{3}$/i.test(node.currency)
-    ? node.currency.toUpperCase() : "USD";
-  return {
-    used,
-    limit,
-    percent,
-    currency: cur,
-    resetsAt: pickReset(node) || null,
-    apiField: "extra_usage"
-  };
+  const cur = typeof currency === "string" && /^[a-z]{3}$/i.test(currency)
+    ? currency.toUpperCase() : "USD";
+  return { used, limit, percent, currency: cur, resetsAt: resetsAt || null, apiField };
+}
+
+/* v1.5.7 - the newer shape of the same thing. /usage can carry
+
+     spend: { enabled: true,
+              used:  { amount_minor: 1240 },
+              limit: { amount_minor: 5000 },        // monthly limit, or
+              cap:   { money: { amount_minor: 5000 } } }
+
+   beside (and, by the look of it, eventually instead of) `extra_usage`. Read
+   first so the Extra segment survives `extra_usage` being dropped. Amounts
+   are minor units again. The percentage is always derived from used / limit:
+   no percentage field has been seen in this shape, and guessing its scale
+   (0-1 or 0-100) is how a meter ends up reading 1%.
+   Returns null unless `spend.enabled` is true, so a switched-off or absent
+   `spend` falls through to the `extra_usage` read above.
+   NOT read: spend.balance - it is not the prepaid credit balance. */
+function spendMinor(v) {
+  if (v && typeof v === "object") {
+    return extraFirst(v.amount_minor, v.amountMinor, v.money && v.money.amount_minor, v.money && v.money.amountMinor);
+  }
+  return extraNum(v);
+}
+function spendCurrency(...nodes) {
+  for (const n of nodes) {
+    if (!n || typeof n !== "object") continue;
+    const c = n.currency || n.currency_code || (n.money && (n.money.currency || n.money.currency_code));
+    if (typeof c === "string" && c) return c;
+  }
+  return null;
+}
+function parseSpend(spend) {
+  if (!spend || typeof spend !== "object") return null;
+  const enabled = typeof spend.enabled === "boolean" ? spend.enabled
+    : (typeof spend.is_enabled === "boolean" ? spend.is_enabled : null);
+  if (enabled !== true) return null;
+  const usedMinor = spendMinor(spend.used);
+  let limitMinor = spendMinor(spend.limit);
+  if (limitMinor == null) limitMinor = spendMinor(spend.cap);
+  return buildExtra(usedMinor, limitMinor, null,
+    spendCurrency(spend, spend.used, spend.limit, spend.cap), pickReset(spend), "spend");
 }
 
 // v1.2.6: locate the Fable weekly bucket regardless of the exact suffix the
@@ -1887,6 +2057,7 @@ async function applyMessageLimit(payload) {
 
   await saveUsage(usage);
   await maybeNotify(usage);
+  await maybeNotifyReset(usage);   // v1.5.7: a lockout's 100% is the peak to remember
   await broadcastUsage(usage);
   if (needsPoll) pollCtx(CTX);   // queued (v1.5.4): settles the tier, then promotes the snapshot
 }
@@ -3160,6 +3331,7 @@ function handleMessage(msg, _sender, sendResponse) {
         },
         [STORAGE_KEYS.history]: null,
         [STORAGE_KEYS.forecastNotified]: null,
+        [STORAGE_KEYS.resetWatch]: null,
         [STORAGE_KEYS.lastFiredThresholds]: {},
         [STORAGE_KEYS.orgCache]: null,
         [STORAGE_KEYS.lastError]: null,

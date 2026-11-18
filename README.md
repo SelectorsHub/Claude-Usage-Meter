@@ -4,6 +4,8 @@ A Chrome extension (Manifest V3) that tracks your Claude.ai usage with:
 
 - **In-composer strip** — a small pill embedded inside the chat composer (just under the project chip), showing session %, reset time, and messages-left when known.
 - **Toolbar popup** — Session (5-hour) + Weekly card auto-labelled with whichever Claude model you're actively using. Clicking the toolbar icon immediately fetches fresh data.
+- **"Your limit has reset" alert** (v1.5.7): one desktop notification when a Session or Weekly limit you had used to 80% or more resets, so you know Claude is usable again without checking. Not sent for lightly used windows, never repeated, and skipped when the reset is found more than 12 hours late. Switch: **Settings → Polling & notifications → "Tell me when a limit I nearly used up has reset"** (`resetAlerts`, default on); it also obeys the main "Desktop notifications" switch. State is kept per account (`org:<orgId>:reset_watch`).
+- **Extra usage reads the newer `spend` format** (v1.5.7): `/usage` can report extra usage as `spend: { enabled, used: { amount_minor }, limit: { amount_minor } }` (or `cap.money.amount_minor`). It is read first, with `extra_usage` as the fallback, so the Extra segment keeps working if the old field goes away.
 - **13 languages** (v1.5.5): English, Chinese (Simplified), Chinese (Traditional), French, German, Hindi, Indonesian, Italian, Japanese, Korean, Portuguese (Brazil), Spanish (Latin America) and Spanish (Spain). By default the extension follows Claude's own interface language (claude.ai's `<html lang>`, remembered as `claude_ui_lang` for the popup, options page and notifications), then the browser language, then English; Settings → Language overrides it (`settings.language`). Strings live in `i18n/strings/<lang>.js`, the runtime in `i18n/i18n.js`; store summaries in `_locales/`. The chat-search box no longer depends on Claude's sidebar heading being in English.
 - **Second account in incognito / private windows** (v1.5.4): an incognito window signed in to a different Claude account now shows that account's limits, not the normal window's. Usage is stored per account; see "Several accounts" below. Based on a community PR.
 - **No Share prompts** (v1.5.3): the Share button that appeared in the strip after rating, and the Share card, are gone. Sharing lives in the gear menu ("Share my usage card") and the toolbar popup.
@@ -18,7 +20,7 @@ A Chrome extension (Manifest V3) that tracks your Claude.ai usage with:
 
 ## Several accounts: normal window + incognito / private / containers (v1.5.4)
 
-State is stored **per Claude account**, in the single `chrome.storage.local`, under the account's org id (`org:<orgId>:usage_state`, `…:usage_history`, `…:last_fired_thresholds`, `…:session_lock`, `…:forecast_notified`, `…:usage_raw`). It does not matter which window you are in: the same account seen from a normal window and from an incognito window reads and updates the same entry, and two different accounts never share one. Hopping A -> B -> A therefore keeps A's history, fired notification thresholds and lockout. Which account a window is on is read from its `lastActiveOrg` cookie, in that window's own cookie store. Pre-1.5.4 data is migrated under its org the first time that org is seen.
+State is stored **per Claude account**, in the single `chrome.storage.local`, under the account's org id (`org:<orgId>:usage_state`, `…:usage_history`, `…:last_fired_thresholds`, `…:session_lock`, `…:forecast_notified`, `…:reset_watch`, `…:usage_raw`). It does not matter which window you are in: the same account seen from a normal window and from an incognito window reads and updates the same entry, and two different accounts never share one. Hopping A -> B -> A therefore keeps A's history, fired notification thresholds and lockout. Which account a window is on is read from its `lastActiveOrg` cookie, in that window's own cookie store. Pre-1.5.4 data is migrated under its org the first time that org is seen.
 
 Window-level facts (last error, org-discovery cache, current model) are kept per window; settings, the notify-error flag and the Free-plan SSE snapshots (already keyed by org) are shared.
 
@@ -47,6 +49,8 @@ The background worker can only send the normal window's cookies, so for any othe
   "extra_usage":    { "is_enabled": true, "monthly_limit": 5000, "used_credits": 1240, "utilization": 24.8 }
 }
 ```
+
+Extra usage may instead (or also) arrive as `"spend": { "enabled": true, "used": { "amount_minor": 1240 }, "limit": { "amount_minor": 5000 } }`; when it does, that is what is shown.
 
 Cookies are sent automatically because `manifest.json` declares `host_permissions` for `claude.ai`.
 
